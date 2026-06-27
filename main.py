@@ -471,6 +471,32 @@ def jupiter_get_quote(from_mint, to_mint, amount_lamports):
         log("Jupiter quote error: "+str(ex), "ERROR")
     return None
 
+def raydium_get_quote(from_mint, to_mint, amount):
+    """Get swap quote from Raydium Trade API - confirmed real endpoint"""
+    try:
+        r = requests.get(
+            "https://transaction-v1.raydium.io/compute/swap-base-in",
+            params={
+                "inputMint":   from_mint,
+                "outputMint":  to_mint,
+                "amount":      str(amount),
+                "slippageBps": "50",
+                "txVersion":   "V0",
+            },
+            timeout=10
+        )
+        if r.status_code != 200:
+            log("Raydium quote status: "+str(r.status_code), "WARN")
+            return None
+        data = r.json()
+        if not data.get("success"):
+            log("Raydium quote failed: "+str(data.get("msg","")), "WARN")
+            return None
+        return data.get("data", {})
+    except Exception as ex:
+        log("Raydium quote error: "+str(ex)[:80], "ERROR")
+    return None
+
 def jupiter_swap(from_token, to_token, amount_usd, price):
     """Execute swap via Jupiter — paper trade if PAPER_TRADING=true, live swap if false"""
     from_mint     = SOL_TOKENS.get(from_token, SOL_TOKENS["USDC"])
@@ -479,14 +505,22 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
     side          = "SOL-BUY" if from_token == "USDC" else "SOL-SELL"
     lamports      = int(amount_usd * 1e6)  # USDC has 6 decimals
 
-    # Get quote first regardless of paper/live
-    quote = jupiter_get_quote(from_mint, to_mint, lamports)
+    # Get quote — try Raydium first (confirmed works from Render), Jupiter as fallback
+    quote = raydium_get_quote(from_mint, to_mint, lamports)
+    router = "Raydium"
     if quote:
-        out_amount = int(quote.get("outAmount", 0))
-        log("Jupiter quote: $"+str(amount_usd)+" "+from_token+" → "+str(out_amount)+" "+to_token+" lamports")
+        out_amount = int(quote.get("outputAmount", quote.get("outAmount", 0)))
+        log("Raydium quote: $"+str(amount_usd)+" "+from_token+" → "+str(out_amount)+" "+to_token+" units")
     else:
-        log("Jupiter quote failed for "+from_token+"→"+to_token, "WARN")
-        return False
+        log("Raydium quote failed, trying Jupiter...", "WARN")
+        quote = jupiter_get_quote(from_mint, to_mint, lamports)
+        router = "Jupiter"
+        if quote:
+            out_amount = int(quote.get("outAmount", 0))
+            log("Jupiter quote: $"+str(amount_usd)+" "+from_token+" → "+str(out_amount)+" "+to_token+" units")
+        else:
+            log("Both Raydium and Jupiter quotes failed for "+from_token+"→"+to_token, "WARN")
+            return False
 
     if state["paper_trading"]:
         log("[PAPER] SOL swap: "+str(amount_usd)+" "+from_token+" → "+str(amount_tokens)+" "+to_token+" @ $"+str(price))
@@ -517,26 +551,32 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
 
             keypair = Keypair.from_bytes(key_bytes)
 
-            # Get swap transaction from Jupiter
+            # Get swap transaction from Raydium
             swap_payload = {
-                "quoteResponse": quote,
-                "userPublicKey":  wallet,
-                "wrapAndUnwrapSol": True,
-                "dynamicComputeUnitLimit": True,
-                "prioritizationFeeLamports": 1000,
+                "computeUnitPriceMicroLamports": "1000",
+                "swapResponse": quote,
+                "txVersion":    "V0",
+                "wallet":       wallet,
+                "wrapSol":      True,
+                "unwrapSol":    True,
             }
             r = requests.post(
-                JUPITER_API+"/swap",
+                "https://transaction-v1.raydium.io/transaction/swap-base-in",
                 json=swap_payload,
                 headers={"Content-Type": "application/json"},
                 timeout=15
             )
             if r.status_code != 200:
-                log("Jupiter swap API error: "+str(r.status_code)+" "+r.text[:100], "WARN")
+                log("Raydium swap TX error: "+str(r.status_code)+" "+r.text[:100], "WARN")
                 return False
 
-            swap_data    = r.json()
-            swap_tx_b64  = swap_data.get("swapTransaction","")
+            swap_data   = r.json()
+            if not swap_data.get("success"):
+                log("Raydium swap TX failed: "+str(swap_data.get("msg",""))[:100], "WARN")
+                return False
+
+            txs = swap_data.get("data",[])
+            swap_tx_b64 = txs[0].get("transaction","") if txs else ""
             if not swap_tx_b64:
                 log("No swap transaction returned from Jupiter", "WARN")
                 return False
