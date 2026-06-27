@@ -413,12 +413,16 @@ JUPITER_API = "https://quote-api.jup.ag/v6"
 
 # Solana token mints
 SOL_TOKENS = {
-    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
-    "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
-    "SOL":  "So11111111111111111111111111111111111111112",
-    "BTC":  "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
-    "ETH":  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
-    "BNB":  "9gP2kCy3wA1ctvYWQk75guqXuzoJGLIDs5oPHkHGs89",
+    "USDC":  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "USDT":  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "SOL":   "So11111111111111111111111111111111111111112",
+    "BTC":   "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
+    "ETH":   "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+    "BNB":   "9gP2kCy3wA1ctvYWQk75guqXuzoJGLIDs5oPHkHGs89",
+    "JUP":   "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+    "BONK":  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "WIF":   "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
+    "MATIC": "Gz7VkD4MacbEB6yC5XD3HcumEiYx2EtDYYrfikGsvopG",
 }
 
 def sol_get_balance():
@@ -501,58 +505,151 @@ def get_jupiter_price(token):
         return float(data.get("data",{}).get(mint,{}).get("price", 0))
     except: return 0.0
 
+# ── Real Solana DEX price feeds ───────────────────────────────────────────────
+SOL_DEX_POOLS = {
+    "SOL/USDC": {"Raydium":"58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS3grPdTHE","Orca":"EGZ7tiLeH62TPV1gL8WwbXGzEPa9zmcpVnnkPKKnrE2U"},
+    "BTC/USDC": {"Raydium":"6kbC5epG18oomfvwbEc2JHLZSdXAKBmEN3JBB8VTmzoB","Orca":"2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ"},
+    "ETH/USDC": {"Raydium":"9Lyhks5bQQxb9EyyX55NtgKQzpM4WK7bni5KkWpHGHGP","Orca":"2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ"},
+}
+
+def get_dex_price_via_jupiter(token, dex_name):
+    """Get price from specific DEX by routing through Jupiter with dex filter"""
+    try:
+        params = {
+            "inputMint":  SOL_TOKENS.get("USDC","EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"),
+            "outputMint": SOL_TOKENS.get(token, SOL_TOKENS.get("SOL","")),
+            "amount":     "1000000",
+            "slippageBps":"10",
+            "dexes":      dex_name,
+        }
+        r = requests.get(JUPITER_API+"/quote", params=params, timeout=8)
+        data = r.json()
+        out = int(data.get("outAmount", 0))
+        if out > 0:
+            decimals = 9 if token == "SOL" else 8
+            tokens_per_usdc = out / (10**decimals)
+            return 1.0 / tokens_per_usdc if tokens_per_usdc > 0 else 0.0
+        return 0.0
+    except:
+        return 0.0
+
+def get_evm_dex_price(chain, pair):
+    """Get on-chain DEX price via 0x API for EVM chains"""
+    try:
+        tokens_map = TOKENS.get(chain, {})
+        token = pair.split("/")[0]
+        sell_token = tokens_map.get("USDT","")
+        buy_token  = tokens_map.get("W"+token, tokens_map.get(token,""))
+        if not sell_token or not buy_token: return 0.0
+        r = requests.get("https://api.0x.org/swap/v1/price", params={
+            "sellToken":  sell_token,
+            "buyToken":   buy_token,
+            "sellAmount": "1000000",
+        }, headers={"0x-api-key": os.environ.get("ZEROX_API_KEY","")}, timeout=8)
+        data = r.json()
+        price = float(data.get("price", 0))
+        return 1.0/price if price > 0 else 0.0
+    except:
+        return 0.0
+
 def scan_arbitrage():
     opps = []
-    sources = [
-        {"name":"Kraken",    "fn": get_price_kraken},
-        {"name":"CoinGecko", "fn": get_price_coingecko},
-        {"name":"Jupiter",   "fn": lambda p: get_jupiter_price(p.split("/")[0])},
-    ]
-    for pair in ARB_PAIRS:
-        prices = {}
-        for src in sources:
-            try:
-                p = src["fn"](pair)
-                if p > 0: prices[src["name"]] = p
-            except: pass
-        if len(prices) >= 2:
-            vals = list(prices.items())
-            for i in range(len(vals)):
-                for j in range(i+1, len(vals)):
-                    n1,p1 = vals[i]
-                    n2,p2 = vals[j]
-                    spread = abs(p1-p2)/min(p1,p2)*100
-                    if spread > 0.1:
-                        buy_from   = n1 if p1 < p2 else n2
-                        sell_on    = n2 if p1 < p2 else n1
-                        buy_price  = min(p1,p2)
-                        sell_price = max(p1,p2)
-                        chain      = state.get("chain","ethereum")
-                        est_gas    = 0.01 if chain=="solana" else 0.50 if chain in("base","arbitrum","polygon") else 5.0
-                        size       = min(state.get("balance",0)*cfg["risk_pct"]/100, cfg["max_pos"])
-                        est_profit = round((sell_price-buy_price)*(size/buy_price if buy_price>0 else 0)-est_gas, 2)
-                        opps.append({
-                            "pair":        pair,
-                            "buy_from":    buy_from,
-                            "sell_on":     sell_on,
-                            "buy_price":   round(buy_price,4),
-                            "sell_price":  round(sell_price,4),
-                            "spread_pct":  round(spread,3),
-                            "est_gas_usd": est_gas,
-                            "est_profit_usd": est_profit,
-                            "executable":  spread >= cfg["min_arb_spread"] and est_profit > 0,
-                        })
+    chain = state.get("chain", "ethereum")
+
+    if chain == "solana":
+        sol_pairs = ["SOL/USDC", "BTC/USDC", "ETH/USDC"]
+        dex_names = ["Raydium", "Orca", "Meteora", "Lifinity"]
+        for pair in sol_pairs:
+            token = pair.split("/")[0]
+            prices = {}
+            for dex in dex_names:
+                p = get_dex_price_via_jupiter(token, dex)
+                if p > 0:
+                    prices[dex] = p
+            if prices:
+                log("SOL DEX prices "+pair+": "+str({k:round(v,4) for k,v in prices.items()}))
+            if len(prices) >= 2:
+                vals = list(prices.items())
+                for i in range(len(vals)):
+                    for j in range(i+1, len(vals)):
+                        n1,p1 = vals[i]
+                        n2,p2 = vals[j]
+                        if p1<=0 or p2<=0: continue
+                        spread = abs(p1-p2)/min(p1,p2)*100
+                        if spread > 0.05:
+                            buy_from   = n1 if p1 < p2 else n2
+                            sell_on    = n2 if p1 < p2 else n1
+                            buy_price  = min(p1,p2)
+                            sell_price = max(p1,p2)
+                            est_gas    = 0.002
+                            bal        = state.get("sol_balance", 0)
+                            size       = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
+                            gross      = (sell_price-buy_price)*(size/buy_price) if buy_price>0 else 0
+                            est_profit = round(gross - est_gas, 4)
+                            opps.append({
+                                "pair":           pair,
+                                "buy_from":       buy_from,
+                                "sell_on":        sell_on,
+                                "buy_price":      round(buy_price,4),
+                                "sell_price":     round(sell_price,4),
+                                "spread_pct":     round(spread,4),
+                                "est_gas_usd":    est_gas,
+                                "est_profit_usd": est_profit,
+                                "chain":          "solana",
+                                "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 1,
+                            })
+    else:
+        evm_pairs = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
+        for pair in evm_pairs:
+            prices = {}
+            p_kraken = get_price_kraken(pair)
+            p_cg     = get_price_coingecko(pair)
+            p_dex    = get_evm_dex_price(chain, pair)
+            if p_kraken > 0: prices["Kraken"]  = p_kraken
+            if p_cg     > 0: prices["CoinGecko"] = p_cg
+            if p_dex    > 0: prices["DEX"]      = p_dex
+            if len(prices) >= 2:
+                vals = list(prices.items())
+                for i in range(len(vals)):
+                    for j in range(i+1, len(vals)):
+                        n1,p1 = vals[i]
+                        n2,p2 = vals[j]
+                        if p1<=0 or p2<=0: continue
+                        spread = abs(p1-p2)/min(p1,p2)*100
+                        if spread > 0.1:
+                            buy_from   = n1 if p1 < p2 else n2
+                            sell_on    = n2 if p1 < p2 else n1
+                            buy_price  = min(p1,p2)
+                            sell_price = max(p1,p2)
+                            est_gas    = 0.50 if chain in("base","arbitrum","polygon") else 5.0
+                            bal        = state.get("balance",0)
+                            size       = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
+                            est_profit = round((sell_price-buy_price)*(size/buy_price if buy_price>0 else 0)-est_gas, 2)
+                            opps.append({
+                                "pair":           pair,
+                                "buy_from":       buy_from,
+                                "sell_on":        sell_on,
+                                "buy_price":      round(buy_price,4),
+                                "sell_price":     round(sell_price,4),
+                                "spread_pct":     round(spread,3),
+                                "est_gas_usd":    est_gas,
+                                "est_profit_usd": est_profit,
+                                "chain":          chain,
+                                "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0,
+                            })
+
     state["arb_opps"] = sorted(opps, key=lambda x: x["spread_pct"], reverse=True)[:10]
     return state["arb_opps"]
 
 def execute_arbitrage(opp):
     spread     = opp["spread_pct"]
     est_profit = opp["est_profit_usd"]
-    chain      = state.get("chain","ethereum")
+    chain      = opp.get("chain", state.get("chain","ethereum"))
     pair       = opp["pair"]
     price      = opp["buy_price"]
+    buy_from   = opp["buy_from"]
+    sell_on    = opp["sell_on"]
 
-    # Safety guards
     if spread < cfg["min_arb_spread"]:
         log("ARB skipped — spread "+str(spread)+"% < min "+str(cfg["min_arb_spread"])+"%","WARN"); return False
     if est_profit <= 0:
@@ -565,22 +662,26 @@ def execute_arbitrage(opp):
     if size < 1:
         log("ARB skipped — insufficient balance $"+str(round(bal,2)),"WARN"); return False
 
-    amt = round(size/price, 6)
+    token = pair.split("/")[0]
+    amt   = round(size/price, 6)
 
     if state["paper_trading"]:
-        log("[PAPER] ARB: BUY "+str(amt)+" "+pair.split("/")[0]+" @ $"+str(price)+" on "+opp["buy_from"]+" | est: $"+str(est_profit))
-        record_trade("[PAPER] ARB-BUY", price, amt, round(est_profit,2))
+        log("[PAPER] ARB: "+token+" buy on "+buy_from+" @ $"+str(price)+" sell on "+sell_on+" @ $"+str(opp["sell_price"])+" spread "+str(spread)+"% est profit $"+str(est_profit))
+        record_trade("[PAPER] ARB", price, amt, round(est_profit,2))
         state["pnl"] += est_profit * 0.7
         return True
     else:
         if chain == "solana":
-            token = pair.split("/")[0]
-            return jupiter_swap("USDC", token, size, price)
+            log("Executing Solana ARB: BUY on "+buy_from+" SELL on "+sell_on)
+            result = jupiter_swap("USDC", token, size, price)
+            if result:
+                record_trade("ARB via "+buy_from+"->"+sell_on, price, amt, round(est_profit,2))
+            return result
         else:
             result = place_order(pair, "buy", amt)
             if result:
-                record_trade("ARB-BUY", price, amt, round(est_profit,2))
-                log("ARB executed: BUY "+str(amt)+" "+pair.split("/")[0]+" @ $"+str(price))
+                record_trade("ARB via "+buy_from+"->"+sell_on, price, amt, round(est_profit,2))
+                log("EVM ARB executed @ $"+str(price))
                 return True
     return False
 
