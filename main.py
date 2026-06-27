@@ -18,9 +18,12 @@ cfg = {
     "api_key":      os.environ.get("API_KEY", ""),
     "api_secret":   os.environ.get("API_SECRET", ""),
     "exchange":     os.environ.get("EXCHANGE", "binance"),
-    # DEX
+    # DEX/EVM
     "wallet":       os.environ.get("WALLET_ADDRESS", ""),
     "private_key":  os.environ.get("PRIVATE_KEY", ""),
+    # Solana
+    "sol_wallet":   os.environ.get("SOL_WALLET_ADDRESS", ""),
+    "sol_key":      os.environ.get("SOL_PRIVATE_KEY", ""),
     # Trading
     "pair":         os.environ.get("TRADING_PAIR", "BTC/USDT"),
     "risk_pct":     float(os.environ.get("RISK_PCT", "2")),
@@ -29,25 +32,30 @@ cfg = {
     "max_pos":      float(os.environ.get("MAX_POSITION_USD", "500")),
     "max_loss":     float(os.environ.get("MAX_DAILY_LOSS_USD", "200")),
     "source_wallet":os.environ.get("SOURCE_WALLET", ""),
+    # Safety
+    "min_arb_spread":  float(os.environ.get("MIN_ARB_SPREAD", "0.5")),
+    "paper_trading":   os.environ.get("PAPER_TRADING", "true").lower() == "true",
 }
 
 # ── Bot State ─────────────────────────────────────────────────────────────────
 state = {
-    "running":    False,
-    "strategy":   None,
-    "mode":       None,  # "cex" or "dex"
-    "exchange":   cfg["exchange"],
-    "chain":      "ethereum",
-    "pair":       cfg["pair"],
-    "price":      0.0,
-    "balance":    0.0,
-    "positions":  [],
-    "trades":     [],
-    "pnl":        0.0,
-    "daily_loss": 0.0,
-    "log":        [],
-    "error":      None,
-    "arb_opps":   [],
+    "running":       False,
+    "strategy":      None,
+    "mode":          None,
+    "exchange":      cfg["exchange"],
+    "chain":         "ethereum",
+    "pair":          cfg["pair"],
+    "price":         0.0,
+    "balance":       0.0,
+    "sol_balance":   0.0,
+    "positions":     [],
+    "trades":        [],
+    "pnl":           0.0,
+    "daily_loss":    0.0,
+    "log":           [],
+    "error":         None,
+    "arb_opps":      [],
+    "paper_trading": cfg["paper_trading"],
 }
 
 def log(msg, level="INFO"):
@@ -371,16 +379,19 @@ def start_background_loops():
             time.sleep(5)
 
     def balance_loop():
-        time.sleep(5)  # wait for mode to be set
+        time.sleep(3)
+        if cfg["wallet"]:
+            state["mode"] = "dex"
         while True:
             try:
-                mode = state.get("mode")
-                if mode == "dex" or (not mode and cfg["wallet"]):
+                if cfg["wallet"]:
                     dex_get_balance()
-                elif mode == "cex" or (not mode and cfg["api_key"]):
+                elif cfg["api_key"]:
                     cex_get_balance()
-            except:
-                pass
+                if cfg["sol_wallet"]:
+                    sol_get_balance()
+            except Exception as ex:
+                log("Balance loop error: "+str(ex), "ERROR")
             time.sleep(20)
 
     def arb_loop():
@@ -396,47 +407,184 @@ def start_background_loops():
     threading.Thread(target=arb_loop, daemon=True).start()
     log("Background price feed, balance and arb scanner started")
 
-# ── Arbitrage ─────────────────────────────────────────────────────────────────
-ARB_PAIRS = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
-ARB_SOURCES = [
-    {"name":"Kraken",    "fn": lambda p: get_price_kraken(p)},
-    {"name":"CoinGecko", "fn": lambda p: get_price_coingecko(p)},
-]
+# ── Solana ────────────────────────────────────────────────────────────────────
+SOL_RPC = "https://api.mainnet-beta.solana.com"
+JUPITER_API = "https://quote-api.jup.ag/v6"
+
+# Solana token mints
+SOL_TOKENS = {
+    "USDC": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "USDT": "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
+    "SOL":  "So11111111111111111111111111111111111111112",
+    "BTC":  "9n4nbM75f5Ui33ZbPYXn59EwSgE8CGsHtAeTH5YFeJ9E",
+    "ETH":  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+    "BNB":  "9gP2kCy3wA1ctvYWQk75guqXuzoJGLIDs5oPHkHGs89",
+}
+
+def sol_get_balance():
+    try:
+        wallet = cfg["sol_wallet"]
+        if not wallet:
+            return 0.0
+        # Get SOL balance
+        payload = {"jsonrpc":"2.0","id":1,"method":"getBalance","params":[wallet]}
+        r = requests.post(SOL_RPC, json=payload, timeout=8)
+        data = r.json()
+        sol_amt = data.get("result",{}).get("value",0) / 1e9
+        sol_price = get_price_kraken("SOL/USDT") or get_price_coingecko("SOL/USDT") or 150
+        # Get USDC balance via token account
+        usdc_payload = {
+            "jsonrpc":"2.0","id":1,"method":"getTokenAccountsByOwner",
+            "params":[wallet,{"mint":SOL_TOKENS["USDC"]},{"encoding":"jsonParsed"}]
+        }
+        r2 = requests.post(SOL_RPC, json=usdc_payload, timeout=8)
+        data2 = r2.json()
+        usdc = 0.0
+        accounts = data2.get("result",{}).get("value",[])
+        if accounts:
+            usdc = float(accounts[0].get("account",{}).get("data",{}).get("parsed",{}).get("info",{}).get("tokenAmount",{}).get("uiAmount",0) or 0)
+        total_usd = round(sol_amt * sol_price + usdc, 2)
+        state["sol_balance"] = total_usd
+        log("Solana balance: "+str(round(sol_amt,4))+" SOL + $"+str(round(usdc,2))+" USDC = $"+str(total_usd))
+        return total_usd
+    except Exception as ex:
+        log("Solana balance error: "+str(ex), "ERROR")
+    return 0.0
+
+def jupiter_get_quote(from_mint, to_mint, amount_lamports):
+    """Get best swap quote from Jupiter aggregator"""
+    try:
+        r = requests.get(JUPITER_API+"/quote", params={
+            "inputMint": from_mint,
+            "outputMint": to_mint,
+            "amount": str(amount_lamports),
+            "slippageBps": "50",
+        }, timeout=8)
+        data = r.json()
+        return data
+    except Exception as ex:
+        log("Jupiter quote error: "+str(ex), "ERROR")
+    return None
+
+def jupiter_swap(from_token, to_token, amount_usd, price):
+    """Execute swap via Jupiter — paper trade if PAPER_TRADING=true"""
+    token_name = to_token if from_token == "USDC" else from_token
+    amount_tokens = round(amount_usd / price, 6)
+    side = "SOL-BUY" if from_token == "USDC" else "SOL-SELL"
+
+    # Get quote first
+    from_mint = SOL_TOKENS.get(from_token, SOL_TOKENS["USDC"])
+    to_mint   = SOL_TOKENS.get(to_token, SOL_TOKENS["SOL"])
+    lamports  = int(amount_usd * 1e6)
+    quote     = jupiter_get_quote(from_mint, to_mint, lamports)
+
+    if quote:
+        out_amount = int(quote.get("outAmount", 0))
+        log("Jupiter quote: "+str(amount_usd)+" "+from_token+" → "+str(out_amount/1e9)+" "+to_token+" via "+str(len(quote.get("routePlan",[])))+" hops")
+
+    if state["paper_trading"]:
+        log("[PAPER] SOL swap: "+str(amount_usd)+" "+from_token+" → "+str(amount_tokens)+" "+to_token+" @ $"+str(price)+" via Jupiter")
+        trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side,"price":price,"amount":amount_tokens,"router":"Jupiter","chain":"solana"}
+        state["trades"].append(trade)
+        state["positions"].append({"price":price,"amount":amount_tokens,"side":"buy","router":"Jupiter","chain":"solana","strategy":"SOL"})
+        return True
+    else:
+        log("Live Solana swap — requires solana-py and signed transaction")
+        # In production: use solana-py to sign and send the Jupiter swap transaction
+        return False
+def get_jupiter_price(token):
+    try:
+        mint = SOL_TOKENS.get(token)
+        if not mint: return 0.0
+        r = requests.get("https://price.jup.ag/v4/price", params={"ids": mint}, timeout=5)
+        data = r.json()
+        return float(data.get("data",{}).get(mint,{}).get("price", 0))
+    except: return 0.0
 
 def scan_arbitrage():
     opps = []
+    sources = [
+        {"name":"Kraken",    "fn": get_price_kraken},
+        {"name":"CoinGecko", "fn": get_price_coingecko},
+        {"name":"Jupiter",   "fn": lambda p: get_jupiter_price(p.split("/")[0])},
+    ]
     for pair in ARB_PAIRS:
         prices = {}
-        for src in ARB_SOURCES:
+        for src in sources:
             try:
                 p = src["fn"](pair)
-                if p > 0:
-                    prices[src["name"]] = p
-            except:
-                pass
+                if p > 0: prices[src["name"]] = p
+            except: pass
         if len(prices) >= 2:
             vals = list(prices.items())
             for i in range(len(vals)):
                 for j in range(i+1, len(vals)):
-                    n1, p1 = vals[i]
-                    n2, p2 = vals[j]
+                    n1,p1 = vals[i]
+                    n2,p2 = vals[j]
                     spread = abs(p1-p2)/min(p1,p2)*100
-                    if spread > 0.3:
-                        buy_from  = n1 if p1 < p2 else n2
-                        sell_on   = n2 if p1 < p2 else n1
-                        buy_price = min(p1,p2)
-                        sell_price= max(p1,p2)
+                    if spread > 0.1:
+                        buy_from   = n1 if p1 < p2 else n2
+                        sell_on    = n2 if p1 < p2 else n1
+                        buy_price  = min(p1,p2)
+                        sell_price = max(p1,p2)
+                        chain      = state.get("chain","ethereum")
+                        est_gas    = 0.01 if chain=="solana" else 0.50 if chain in("base","arbitrum","polygon") else 5.0
+                        size       = min(state.get("balance",0)*cfg["risk_pct"]/100, cfg["max_pos"])
+                        est_profit = round((sell_price-buy_price)*(size/buy_price if buy_price>0 else 0)-est_gas, 2)
                         opps.append({
-                            "pair": pair,
-                            "buy_from": buy_from,
-                            "sell_on": sell_on,
-                            "buy_price": round(buy_price,4),
-                            "sell_price": round(sell_price,4),
-                            "spread_pct": round(spread,3),
-                            "est_profit_usd": round((sell_price-buy_price) * (cfg["max_pos"]/buy_price), 2),
+                            "pair":        pair,
+                            "buy_from":    buy_from,
+                            "sell_on":     sell_on,
+                            "buy_price":   round(buy_price,4),
+                            "sell_price":  round(sell_price,4),
+                            "spread_pct":  round(spread,3),
+                            "est_gas_usd": est_gas,
+                            "est_profit_usd": est_profit,
+                            "executable":  spread >= cfg["min_arb_spread"] and est_profit > 0,
                         })
     state["arb_opps"] = sorted(opps, key=lambda x: x["spread_pct"], reverse=True)[:10]
     return state["arb_opps"]
+
+def execute_arbitrage(opp):
+    spread     = opp["spread_pct"]
+    est_profit = opp["est_profit_usd"]
+    chain      = state.get("chain","ethereum")
+    pair       = opp["pair"]
+    price      = opp["buy_price"]
+
+    # Safety guards
+    if spread < cfg["min_arb_spread"]:
+        log("ARB skipped — spread "+str(spread)+"% < min "+str(cfg["min_arb_spread"])+"%","WARN"); return False
+    if est_profit <= 0:
+        log("ARB skipped — profit negative after gas","WARN"); return False
+    if state["daily_loss"] >= cfg["max_loss"]:
+        log("ARB skipped — daily loss limit hit","WARN"); return False
+
+    bal  = state["sol_balance"] if chain=="solana" else state["balance"]
+    size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
+    if size < 1:
+        log("ARB skipped — insufficient balance $"+str(round(bal,2)),"WARN"); return False
+
+    amt = round(size/price, 6)
+
+    if state["paper_trading"]:
+        log("[PAPER] ARB: BUY "+str(amt)+" "+pair.split("/")[0]+" @ $"+str(price)+" on "+opp["buy_from"]+" | est: $"+str(est_profit))
+        record_trade("[PAPER] ARB-BUY", price, amt, round(est_profit,2))
+        state["pnl"] += est_profit * 0.7
+        return True
+    else:
+        if chain == "solana":
+            token = pair.split("/")[0]
+            return jupiter_swap("USDC", token, size, price)
+        else:
+            result = place_order(pair, "buy", amt)
+            if result:
+                record_trade("ARB-BUY", price, amt, round(est_profit,2))
+                log("ARB executed: BUY "+str(amt)+" "+pair.split("/")[0]+" @ $"+str(price))
+                return True
+    return False
+
+ARB_PAIRS = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
 
 # ── Strategies ────────────────────────────────────────────────────────────────
 def get_balance():
@@ -583,21 +731,16 @@ def run_copy():
         time.sleep(60)
 
 def run_arbitrage():
-    log("Arbitrage scanner started")
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
+    log("Arbitrage started ["+mode+" MODE] — min spread: "+str(cfg["min_arb_spread"])+"%")
     while state["running"] and state["strategy"]=="arb":
         opps = scan_arbitrage()
-        if opps:
-            best = opps[0]
-            log("ARB opportunity: "+best["pair"]+" buy on "+best["buy_from"]+" sell on "+best["sell_on"]+" spread "+str(best["spread_pct"])+"%")
-            if best["spread_pct"] > 0.5 and state["mode"]=="dex":
-                bal=get_balance()
-                size=min(bal*cfg["risk_pct"]/100,cfg["max_pos"])
-                if size>1:
-                    price=best["buy_price"]
-                    amt=round(size/price,6)
-                    log("Executing ARB trade: "+str(amt)+" "+best["pair"].split("/")[0])
-                    record_trade("ARB-BUY",price,amt,round(best["est_profit_usd"],2))
-                    state["pnl"]+=best["est_profit_usd"]*0.7
+        for opp in opps:
+            if not state["running"]: break
+            if opp["executable"]:
+                log("ARB opportunity: "+opp["pair"]+" spread "+str(opp["spread_pct"])+"% est profit $"+str(opp["est_profit_usd"]))
+                execute_arbitrage(opp)
+                time.sleep(5)  # small delay between trades
         time.sleep(30)
 
 STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage}
@@ -677,9 +820,11 @@ td{padding:8px 0;border-bottom:1px solid #0f0f0f;color:#888}
 
   <div class="stats">
     <div class="stat"><div class="sl">Price (Kraken)</div><div class="sv" id="s-price">—</div></div>
-    <div class="stat"><div class="sl">Balance (USDT)</div><div class="sv" id="s-balance">—</div></div>
+    <div class="stat"><div class="sl">EVM Balance</div><div class="sv" id="s-balance">—</div></div>
+    <div class="stat"><div class="sl">SOL Balance</div><div class="sv" id="s-sol-balance">—</div></div>
     <div class="stat"><div class="sl">Total P&L</div><div class="sv" id="s-pnl">$0.00</div></div>
     <div class="stat"><div class="sl">Open Positions</div><div class="sv" id="s-pos">0</div></div>
+    <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
   </div>
 
   <div class="card">
@@ -703,7 +848,7 @@ td{padding:8px 0;border-bottom:1px solid #0f0f0f;color:#888}
     </div>
 
     <div id="dex-panel" style="display:none">
-      <div class="dex-info">Trade on-chain using your wallet. No API keys needed. Uses Uniswap + 1inch for best prices. Set WALLET_ADDRESS and PRIVATE_KEY in Render environment variables.</div>
+      <div class="dex-info">Trade on-chain using your wallet. No API keys needed. Uses Uniswap + 1inch for EVM chains, Jupiter for Solana. Set WALLET_ADDRESS (EVM) or SOL_WALLET_ADDRESS (Solana) in Render environment variables.</div>
       <div class="section-label">Chain</div>
       <div class="btn-row">
         <button class="btn" id="c-ethereum" onclick="selectChain('ethereum')">Ethereum</button>
@@ -711,6 +856,10 @@ td{padding:8px 0;border-bottom:1px solid #0f0f0f;color:#888}
         <button class="btn" id="c-base"     onclick="selectChain('base')">Base</button>
         <button class="btn" id="c-arbitrum" onclick="selectChain('arbitrum')">Arbitrum</button>
         <button class="btn" id="c-polygon"  onclick="selectChain('polygon')">Polygon</button>
+        <button class="btn" id="c-solana"   onclick="selectChain('solana')">Solana ⚡</button>
+      </div>
+      <div style="background:#00ff9d11;border:1px solid #00ff9d22;border-radius:8px;padding:10px 14px;margin-bottom:4px;font-size:12px;color:#00ff9d">
+        ⚡ <strong>Solana</strong> — gas &lt;$0.01 per trade, routed via Jupiter aggregator for best prices
       </div>
     </div>
 
@@ -732,9 +881,10 @@ td{padding:8px 0;border-bottom:1px solid #0f0f0f;color:#888}
       <button class="btn" id="p-MATIC/USDT" onclick="selectPair('MATIC/USDT')">MATIC/USDT</button>
     </div>
 
-    <div style="display:flex;gap:10px;margin-top:8px">
+    <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
       <button class="btn-start" id="start-btn" onclick="startBot()" disabled>Select options above</button>
       <button class="btn-stop" onclick="stopBot()">Stop Bot</button>
+      <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:#ffd43b18;color:#ffd43b;border-color:#ffd43b44;padding:13px 20px">📋 Paper Trading: ON</button>
     </div>
   </div>
 
@@ -825,6 +975,16 @@ function pnlHtml(v) {
   return "<span style='color:"+(v>=0?"#00ff9d":"#ff6b6b")+"'>"+(v>=0?"+":"")+"$"+Math.abs(v).toFixed(2)+"</span>";
 }
 
+function togglePaper() {
+  fetch("/toggle_paper").then(r=>r.json()).then(d=>{
+    var btn = document.getElementById("paper-btn");
+    btn.textContent = "📋 Paper Trading: "+(d.paper_trading?"ON":"OFF");
+    btn.style.color = d.paper_trading?"#ffd43b":"#ff6b6b";
+    btn.style.borderColor = d.paper_trading?"#ffd43b44":"#ff6b6b44";
+    btn.style.background = d.paper_trading?"#ffd43b18":"#ff6b6b18";
+  });
+}
+
 function refresh() {
   fetch("/state").then(r=>r.json()).then(d=>{
     var on=d.running;
@@ -832,10 +992,20 @@ function refresh() {
     document.getElementById("status-text").textContent=on?"Running — "+(d.strategy||"").toUpperCase()+" on "+d.pair+" ("+(d.mode||"").toUpperCase()+")":"Stopped";
     document.getElementById("s-price").textContent=d.price>0?"$"+d.price.toFixed(4):"—";
     document.getElementById("s-balance").textContent=d.balance>0?"$"+d.balance.toFixed(2):"—";
+    document.getElementById("s-sol-balance").textContent=d.sol_balance>0?"$"+d.sol_balance.toFixed(2):"—";
+    document.getElementById("s-mode").textContent=d.paper_trading?"📋 PAPER":"🔴 LIVE";
+    document.getElementById("s-mode").style.color=d.paper_trading?"#ffd43b":"#ff6b6b";
     var pe=document.getElementById("s-pnl");
     pe.textContent=(d.pnl>=0?"+":"")+"$"+Math.abs(d.pnl||0).toFixed(2);
     pe.className="sv"+(d.pnl>0?" g":d.pnl<0?" r":"");
     document.getElementById("s-pos").textContent=(d.positions||[]).length;
+
+    // Update paper button
+    var pb=document.getElementById("paper-btn");
+    if(pb){
+      pb.textContent="📋 Paper Trading: "+(d.paper_trading?"ON":"OFF");
+      pb.style.color=d.paper_trading?"#ffd43b":"#ff6b6b";
+    }
 
     var tbody=document.getElementById("trades-body");
     var trades=(d.trades||[]).slice().reverse().slice(0,20);
@@ -845,7 +1015,7 @@ function refresh() {
     var arb=d.arb_opps||[];
     if(arb.length) {
       document.getElementById("arb-list").innerHTML=arb.map(o=>
-        "<div class='arb-row'><div><strong style='color:#eee'>"+o.pair+"</strong><br><span style='color:#555;font-size:11px'>Buy on "+o.buy_from+" @ $"+o.buy_price+" → Sell on "+o.sell_on+" @ $"+o.sell_price+"</span></div><div style='text-align:right'><div class='arb-spread'>"+o.spread_pct+"%</div><div style='color:#555;font-size:11px'>est. $"+o.est_profit_usd+"</div></div></div>"
+        "<div class='arb-row'><div><strong style='color:#eee'>"+o.pair+"</strong> <span style='font-size:11px;color:"+(o.executable?"#00ff9d":"#555")+"'>"+(o.executable?"● EXECUTABLE":"● watching")+"</span><br><span style='color:#555;font-size:11px'>Buy on "+o.buy_from+" @ $"+o.buy_price+" → Sell on "+o.sell_on+" @ $"+o.sell_price+" | gas ~$"+o.est_gas_usd+"</span></div><div style='text-align:right'><div class='arb-spread'>"+o.spread_pct+"%</div><div style='color:"+(o.est_profit_usd>0?"#00ff9d":"#ff6b6b")+";font-size:11px'>est $"+o.est_profit_usd+"</div></div></div>"
       ).join("");
     }
 
