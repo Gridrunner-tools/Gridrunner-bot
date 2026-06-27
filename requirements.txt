@@ -4,3 +4,4 @@ ccxt
 python-telegram-bot
 solders
 solana
+spl
