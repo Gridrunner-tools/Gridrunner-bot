@@ -600,7 +600,7 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
 
             # Raydium transaction endpoint expects the compute response directly
             swap_payload = {
-                "computeUnitPriceMicroLamports": "1000",
+                "computeUnitPriceMicroLamports": "10000",
                 "swapResponse": quote,
                 "txVersion":    "V0",
                 "wallet":       wallet,
@@ -646,13 +646,13 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
             signature   = keypair.sign_message(solders_message.to_bytes_versioned(raw_tx_obj.message))
             signed_tx   = VersionedTransaction.populate(raw_tx_obj.message, [signature])
 
-            # Send via Solana RPC
+            # Send via Solana RPC — skip preflight to avoid stale blockhash rejection
             send_payload = {
                 "jsonrpc": "2.0", "id": 1,
                 "method": "sendTransaction",
                 "params": [
                     b64.b64encode(bytes(signed_tx)).decode(),
-                    {"encoding": "base64", "skipPreflight": False, "preflightCommitment": "confirmed"}
+                    {"encoding": "base64", "skipPreflight": True, "preflightCommitment": "confirmed", "maxRetries": 3}
                 ]
             }
             r2 = requests.post(SOL_RPC, json=send_payload, timeout=15)
