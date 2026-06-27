@@ -810,83 +810,47 @@ def scan_arbitrage():
             "SOL":  "So11111111111111111111111111111111111111112",
             "ETH":  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
             "JUP":  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-            "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-        }
-        USDC_MINT = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-
-        TOKEN_DECIMALS = {"SOL": 9, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6, "USDC": 6}
-
-        # Jupiter DEX labels — confirmed from Jupiter docs
-        # onlyDirectRoutes=true ensures single-hop so price is from that DEX only
-        # Exact DEX label strings from Jupiter /program-id-to-label endpoint
-        # Confirmed from Jupiter docs: dexes=Raydium,Orca+V2,Meteora+DLMM
-        DEX_LABELS = {
-            "Raydium":  "Raydium",
-            "Orca":     "Orca+V2",
-            "Meteora":  "Meteora+DLMM",
         }
 
-        def jupiter_quote_for_dex(token, dex_label, usdc_amount=1.0):
+        def get_dexpaprika_prices(token):
             """
-            Get a quote from Jupiter forcing only one specific DEX.
-            URL: https://quote-api.jup.ag/v6/quote (confirmed working public endpoint)
-            dex_label must be URL-encoded DEX name e.g. "Raydium", "Orca+V2", "Meteora+DLMM"
-            Returns price in USD per token, or 0.0 on failure.
+            Get per-DEX prices via DexPaprika — confirmed accessible from Render.
+            Returns {dex_name: price_usd} for Raydium, Orca, Meteora.
             """
             try:
-                token_mint = TOKEN_MINTS.get(token, "")
-                if not token_mint: return 0.0
-                token_dec = TOKEN_DECIMALS.get(token, 9)
-                lamports  = int(usdc_amount * 1e6)  # 1 USDC = 1,000,000 lamports
-
-                headers = {}
-                if JUPITER_API_KEY:
-                    headers["Authorization"] = "Bearer "+JUPITER_API_KEY
-
-                # Rate limiting — 1.5s minimum between any Jupiter calls
-                time.sleep(1.5)
-
+                mint = TOKEN_MINTS.get(token, "")
+                if not mint: return {}
                 r = requests.get(
-                    "https://quote-api.jup.ag/v6/quote",
-                    params={
-                        "inputMint":                  USDC_MINT,
-                        "outputMint":                 token_mint,
-                        "amount":                     str(lamports),
-                        "slippageBps":                "10",
-                        "dexes":                      dex_label,
-                        "onlyDirectRoutes":           "true",
-                        "restrictIntermediateTokens": "true",
-                    },
-                    headers=headers,
-                    timeout=12
+                    "https://api.dexpaprika.com/networks/solana/tokens/"+mint+"/pools",
+                    params={"page": 0, "limit": 50, "sort": "desc", "order_by": "volume_usd"},
+                    timeout=10
                 )
-
                 if r.status_code == 429:
-                    wait = int(r.headers.get("Retry-After", 10))
-                    log("Jupiter 429 ("+dex_label+") — backing off "+str(wait)+"s", "WARN")
-                    time.sleep(wait)
-                    return 0.0
+                    log("DexPaprika 429 for "+token+" — skipping", "WARN")
+                    return {}
                 if r.status_code != 200:
-                    log("Jupiter quote "+dex_label+" HTTP "+str(r.status_code), "WARN")
-                    return 0.0
-
-                data = r.json()
-                if "error" in data or "errorCode" in data:
-                    # Common: "COULD_NOT_FIND_ANY_ROUTE" means DEX has no pool for this pair
-                    err = data.get("error", data.get("errorCode","unknown"))
-                    log("Jupiter "+dex_label+" no route: "+str(err)[:50], "WARN")
-                    return 0.0
-
-                out_lamports = int(data.get("outAmount", 0))
-                if out_lamports <= 0: return 0.0
-
-                tokens_per_usdc = out_lamports / (10 ** token_dec)
-                price_usd = usdc_amount / tokens_per_usdc if tokens_per_usdc > 0 else 0.0
-                return price_usd
-
+                    log("DexPaprika status "+str(r.status_code)+" for "+token, "WARN")
+                    return {}
+                pools = r.json().get("pools", [])
+                dex_prices = {}
+                for pool in pools:
+                    dex_id = pool.get("dex_id", "").lower()
+                    price  = float(pool.get("price_usd", 0) or 0)
+                    tokens_in_pool = [t.get("symbol","") for t in pool.get("tokens",[])]
+                    if "USDC" not in tokens_in_pool or price <= 0:
+                        continue
+                    if dex_id in ("raydium","raydium_clmm") and "Raydium" not in dex_prices:
+                        dex_prices["Raydium"] = price
+                    elif dex_id == "orca" and "Orca" not in dex_prices:
+                        dex_prices["Orca"] = price
+                    elif dex_id == "meteora" and "Meteora" not in dex_prices:
+                        dex_prices["Meteora"] = price
+                    if len(dex_prices) >= 3:
+                        break
+                return dex_prices
             except Exception as ex:
-                log("Jupiter quote "+dex_label+": "+str(ex)[:60], "WARN")
-                return 0.0
+                log("DexPaprika error for "+token+": "+str(ex)[:60], "WARN")
+                return {}
 
         try:
             usdc_bal = state.get("sol_usdc", 0)
@@ -894,23 +858,15 @@ def scan_arbitrage():
 
             for pair in sol_pairs:
                 token  = pair.split("/")[0]
-                prices = {}
-
-                # Query each DEX separately via Jupiter's dexes filter
-                for dex_name, dex_label in DEX_LABELS.items():
-                    p = jupiter_quote_for_dex(token, dex_label, usdc_amount=1.0)
-                    if p > 0:
-                        prices[dex_name] = p
-                    time.sleep(0.5)  # 500ms between calls — well within rate limits
+                prices = get_dexpaprika_prices(token)
 
                 if prices:
                     log("SOL ARB scan "+pair+": "+str({k:round(v,6) for k,v in prices.items()}))
                 else:
-                    log("SOL ARB scan "+pair+": no DEX quotes returned","WARN")
+                    log("SOL ARB scan "+pair+": no prices","WARN")
 
                 if len(prices) >= 2:
-                    # Two tx fees on Solana ~$0.002 each
-                    est_gas = 0.004
+                    est_gas = 0.004  # two Solana transactions
                     vals = list(prices.items())
                     for i in range(len(vals)):
                         for j in range(i+1, len(vals)):
@@ -918,14 +874,13 @@ def scan_arbitrage():
                             n2,p2 = vals[j]
                             if p1<=0 or p2<=0: continue
                             spread = abs(p1-p2)/min(p1,p2)*100
-                            # Minimum spread must exceed 2 legs × Raydium fee (~0.25% each) + slippage
                             if spread < 1.5: continue
                             buy_from   = n1 if p1 < p2 else n2
                             sell_on    = n2 if p1 < p2 else n1
                             buy_price  = min(p1,p2)
                             sell_price = max(p1,p2)
-                            # Realistic profit after fees (0.25% per DEX) and gas
-                            net_spread = spread - 0.6
+                            # Deduct 0.75% per leg for DEX fees + slippage
+                            net_spread = spread - 1.5
                             gross      = (net_spread/100) * size if size > 0 else 0
                             est_profit = round(gross - est_gas, 6)
                             opps.append({
@@ -946,7 +901,7 @@ def scan_arbitrage():
                                 ),
                             })
 
-                time.sleep(1)  # 1s between pairs
+                time.sleep(3)  # 3s between tokens — DexPaprika allows 60 req/min
 
         except Exception as ex:
             log("SOL ARB scan error: "+str(ex), "WARN")
