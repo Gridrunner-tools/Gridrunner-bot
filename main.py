@@ -542,12 +542,18 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
                 log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set — cannot execute live swap", "WARN")
                 return False
 
-            # Decode private key (base58 or bytes array)
+            # Decode private key - Phantom exports as base58 string
             try:
                 import base58
                 key_bytes = base58.b58decode(private_key)
-            except:
-                key_bytes = bytes(json.loads(private_key))
+                log("Private key decoded via base58 — "+str(len(key_bytes))+" bytes")
+            except Exception as b58_err:
+                log("base58 decode failed: "+str(b58_err)[:60]+", trying JSON array", "WARN")
+                try:
+                    key_bytes = bytes(json.loads(private_key))
+                except Exception as json_err:
+                    log("Private key decode failed — not base58 or JSON array: "+str(json_err)[:80], "WARN")
+                    return False
 
             keypair = Keypair.from_bytes(key_bytes)
 
