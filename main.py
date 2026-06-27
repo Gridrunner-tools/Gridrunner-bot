@@ -589,99 +589,13 @@ def scan_arbitrage():
         sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC", "BONK/USDC"]
 
         def get_raydium_pool_price(token_symbol):
-            """Get price from Raydium v3 API"""
-            try:
-                # Use Raydium v3 API swap quote endpoint
-                sol_mint  = "So11111111111111111111111111111111111111112"
-                usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
-                token_mints = {
-                    "SOL": sol_mint,
-                    "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
-                    "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-                    "ETH": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
-                }
-                in_mint = token_mints.get(token_symbol, sol_mint)
-                r = requests.get(
-                    "https://api-v3.raydium.io/mint/price",
-                    params={"mints": in_mint+","+usdc_mint},
-                    timeout=10
-                )
-                if r.status_code != 200:
-                    log("Raydium v3 API status: "+str(r.status_code),"WARN")
-                    return 0.0
-                data = r.json()
-                if not data.get("success"):
-                    log("Raydium v3 API: "+str(data.get("msg","")),"WARN")
-                    return 0.0
-                prices = data.get("data", {})
-                raw = prices.get(in_mint)
-                if raw is None:
-                    log("Raydium: no price for "+token_symbol+" mint "+in_mint[:8]+"...","WARN")
-                    return 0.0
-                token_price = float(raw)
-                return token_price
-            except Exception as ex:
-                log("Raydium API error: "+str(ex)[:60], "WARN")
-                return 0.0
+            return get_gt_price("Raydium", token_symbol)
 
         def get_orca_pool_price(token_symbol):
-            """Get Orca pool price via GeckoTerminal API"""
-            try:
-                orca_pools = {
-                    "SOL":  "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",
-                    "ETH":  "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q",
-                    "JUP":  "DVa7Qmb5ct9RCpaU7UTpSaf3GVMYz17vNVU67JrdkNsV",
-                    "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",
-                }
-                pool_id = orca_pools.get(token_symbol,"")
-                if not pool_id: return 0.0
-                r = requests.get(
-                    "https://api.geckoterminal.com/api/v2/networks/solana/pools/"+pool_id,
-                    headers={"Accept": "application/json;version=20230302"},
-                    timeout=10
-                )
-                if r.status_code != 200:
-                    log("GeckoTerminal Orca status: "+str(r.status_code)+" for "+token_symbol,"WARN")
-                    return 0.0
-                data = r.json()
-                attrs = data.get("data",{}).get("attributes",{})
-                price = float(attrs.get("base_token_price_usd", 0))
-                if price > 0:
-                    log("Orca(GT) "+token_symbol+"/USDC: $"+str(round(price,4)))
-                return price
-            except Exception as ex:
-                log("Orca GeckoTerminal error: "+str(ex)[:60], "WARN")
-                return 0.0
+            return get_gt_price("Orca", token_symbol)
 
         def get_meteora_pool_price(token_symbol):
-            """Get Meteora pool price via GeckoTerminal API"""
-            try:
-                # GeckoTerminal pool IDs for top Meteora pools
-                meteora_pools = {
-                    "SOL":  "BSo8Z91m4jr7RxNB6ye8cBnLBGFBoBnj4rE76DhPgMvr",
-                    "ETH":  "HxVkHFNMEMBPgCCFrRTGJYVLCjBFnrNNNjEjHcKNwMC",
-                    "JUP":  "FoSDw2L5DmTuQTFe55gWPDXf88euaxAEKFre74CnvQbX",
-                    "BONK": "DLarBEnCMBKjcj7mUMChbBEyYHB6jAExSnFjEcBpBFhb",
-                }
-                pool_id = meteora_pools.get(token_symbol,"")
-                if not pool_id: return 0.0
-                r = requests.get(
-                    "https://api.geckoterminal.com/api/v2/networks/solana/pools/"+pool_id,
-                    headers={"Accept": "application/json;version=20230302"},
-                    timeout=10
-                )
-                if r.status_code != 200:
-                    log("GeckoTerminal Meteora status: "+str(r.status_code)+" for "+token_symbol,"WARN")
-                    return 0.0
-                data = r.json()
-                attrs = data.get("data",{}).get("attributes",{})
-                price = float(attrs.get("base_token_price_usd", 0))
-                if price > 0:
-                    log("Meteora(GT) "+token_symbol+"/USDC: $"+str(round(price,4)))
-                return price
-            except Exception as ex:
-                log("Meteora GeckoTerminal error: "+str(ex)[:60], "WARN")
-                return 0.0
+            return get_gt_price("Meteora", token_symbol)
 
         try:
             for pair in sol_pairs:
