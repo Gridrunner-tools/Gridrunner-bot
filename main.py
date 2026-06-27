@@ -507,12 +507,13 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
     # Calculate input amount in correct decimals for the from_token
     TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6}
     from_decimals = TOKEN_DECIMALS.get(from_token, 6)
-    if from_token == "USDC" or from_token == "USDT":
-        # amount_usd IS the token amount for stablecoins
+    if from_token in ("USDC", "USDT"):
+        # amount_usd is a dollar value — convert to token units
         lamports = int(amount_usd * (10 ** from_decimals))
     else:
-        # For non-stables, amount_usd is actually token quantity passed in
+        # amount_usd is a token quantity (e.g. 714000 BONK) — convert to lamports
         lamports = int(amount_usd * (10 ** from_decimals))
+    log("Swap input: "+str(amount_usd)+" "+from_token+" = "+str(lamports)+" lamports ("+str(from_decimals)+" decimals)")
 
     # Get quote — try Raydium first (confirmed works from Render), Jupiter as fallback
     quote = raydium_get_quote(from_mint, to_mint, lamports)
@@ -945,9 +946,8 @@ def execute_arbitrage(opp):
             # Leg 2: Sell token back to USDC at higher price
             sell_price   = opp["sell_price"]
             token_amount = round(size / price, 6)
-            sell_usd     = round(token_amount * sell_price, 4)
             log("Executing Solana ARB: SELL "+str(token_amount)+" "+token+" on "+sell_on+" @ $"+str(sell_price))
-            sell_result = jupiter_swap(token, "USDC", sell_usd, sell_price)
+            sell_result = jupiter_swap(token, "USDC", token_amount, sell_price)
             if sell_result:
                 actual_profit = round((sell_price - price) * token_amount - opp["est_gas_usd"], 6)
                 state["pnl"] += actual_profit
