@@ -586,41 +586,105 @@ def scan_arbitrage():
 
     if chain == "solana":
         sol_pairs = ["SOL/USDC", "BTC/USDC", "ETH/USDC"]
-        usdc_mint = SOL_TOKENS.get("USDC","EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
-        token_mints = [SOL_TOKENS.get(p.split("/")[0],"") for p in sol_pairs]
-        token_mints = [m for m in token_mints if m]
+
+        # ── Real on-chain DEX pool price reader ──────────────────────────────
+        # Raydium AMM pools store token amounts in vaultA and vaultB accounts
+        # Price = vaultA_amount / vaultB_amount (adjusted for decimals)
+        # We read these directly via Solana RPC getTokenAccountBalance
+
+        # Real Raydium SOL/USDC pool vault accounts
+        RAYDIUM_VAULTS = {
+            "SOL/USDC": {
+                "sol_vault":  "DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz",  # SOL vault
+                "usdc_vault": "HRk9CMrpq7Jn9sh7mzxE8CChMBrMyeGaNomhnRMdWv2T",  # USDC vault
+                "sol_dec": 9, "usdc_dec": 6,
+            },
+            "BTC/USDC": {
+                "sol_vault":  "GGSSNBxmxzFkr1vHQbNuwjPpHFHxBkBBQaurK6vwVbNy",
+                "usdc_vault": "Hjpbz8F1tFEL3QGFUiKNhfzBzjkBBEhzBDGcXFo6X8H",
+                "sol_dec": 6, "usdc_dec": 6,
+            },
+        }
+
+        # Real Orca Whirlpool SOL/USDC pool
+        ORCA_POOLS = {
+            "SOL/USDC": {
+                "vault_a": "2JTw1fE2wz1SymWUQ7UqpVtrTuKjcd6mWwYwUJUCh2rq",  # SOL
+                "vault_b": "EqhpAZLT1qjJVSYCuCi3sABMPFjqvnL1jtHBERkCY2aS",  # USDC
+                "dec_a": 9, "dec_b": 6,
+            },
+        }
+
+        # Meteora DLMM SOL/USDC pool vaults
+        METEORA_POOLS = {
+            "SOL/USDC": {
+                "vault_x": "BVNo8ftg2LkkssnWT4ZWdtoAgnG7BjeQkFvFfMTKLkd5",  # SOL
+                "vault_y": "6trTbLaJPSEMbdgNmGTB6A6TiS6qJNsYmJKDUFwVoRLB",  # USDC
+                "dec_x": 9, "dec_y": 6,
+            },
+        }
+
+        def get_token_account_balance(account_address):
+            """Read token balance from a Solana token account via RPC"""
+            try:
+                payload = {
+                    "jsonrpc": "2.0", "id": 1,
+                    "method": "getTokenAccountBalance",
+                    "params": [account_address]
+                }
+                r = requests.post(SOL_RPC, json=payload, timeout=8)
+                data = r.json()
+                amount = data.get("result",{}).get("value",{}).get("uiAmount", 0)
+                return float(amount or 0)
+            except:
+                return 0.0
+
+        def calc_pool_price(base_amount, quote_amount):
+            """Price of base token in quote terms"""
+            if base_amount <= 0 or quote_amount <= 0:
+                return 0.0
+            return quote_amount / base_amount
 
         try:
-            # One call gets all prices - no rate limiting
-            r = requests.get(
-                "https://price.jup.ag/v2/price",
-                params={"ids": ",".join(token_mints), "vsToken": usdc_mint, "showExtraInfo": "true"},
-                timeout=10
-            )
-            log("Jupiter Price v2 status: "+str(r.status_code))
-            all_data = r.json().get("data", {}) if r.status_code==200 else {}
-            log("Jupiter Price v2 tokens returned: "+str(len(all_data)))
-
             for pair in sol_pairs:
-                token      = pair.split("/")[0]
-                token_mint = SOL_TOKENS.get(token,"")
-                prices     = {}
-                info       = all_data.get(token_mint, {})
-                extra      = info.get("extraInfo", {})
-                quoted     = extra.get("quotedPrice", {})
+                prices = {}
 
-                mid   = float(info.get("price", 0))
-                buy   = float(quoted.get("buyPrice", 0))
-                sell  = float(quoted.get("sellPrice", 0))
-                kraken = get_price_kraken(pair.replace("USDC","USDT"))
+                # ── Raydium price ──
+                if pair in RAYDIUM_VAULTS:
+                    v = RAYDIUM_VAULTS[pair]
+                    sol_bal  = get_token_account_balance(v["sol_vault"])
+                    usdc_bal = get_token_account_balance(v["usdc_vault"])
+                    p = calc_pool_price(sol_bal, usdc_bal)
+                    if p > 0:
+                        prices["Raydium"] = p
+                        log("Raydium "+pair+": sol="+str(round(sol_bal,4))+" usdc="+str(round(usdc_bal,2))+" price=$"+str(round(p,4)))
 
-                if mid   > 0: prices["Jupiter-Mid"]  = mid
-                if buy   > 0: prices["Jupiter-Buy"]  = buy
-                if sell  > 0: prices["Jupiter-Sell"] = sell
-                if kraken> 0: prices["Kraken"]        = kraken
+                # ── Orca price ──
+                if pair in ORCA_POOLS:
+                    v = ORCA_POOLS[pair]
+                    sol_bal  = get_token_account_balance(v["vault_a"])
+                    usdc_bal = get_token_account_balance(v["vault_b"])
+                    p = calc_pool_price(sol_bal, usdc_bal)
+                    if p > 0:
+                        prices["Orca"] = p
+                        log("Orca "+pair+": sol="+str(round(sol_bal,4))+" usdc="+str(round(usdc_bal,2))+" price=$"+str(round(p,4)))
 
-                log("SOL ARB scan "+pair+": "+str({k:round(v,4) for k,v in prices.items()}) if prices else "SOL ARB scan "+pair+": no prices")
+                # ── Meteora price ──
+                if pair in METEORA_POOLS:
+                    v = METEORA_POOLS[pair]
+                    sol_bal  = get_token_account_balance(v["vault_x"])
+                    usdc_bal = get_token_account_balance(v["vault_y"])
+                    p = calc_pool_price(sol_bal, usdc_bal)
+                    if p > 0:
+                        prices["Meteora"] = p
+                        log("Meteora "+pair+": sol="+str(round(sol_bal,4))+" usdc="+str(round(usdc_bal,2))+" price=$"+str(round(p,4)))
 
+                if prices:
+                    log("SOL ARB scan "+pair+": "+str({k:round(v,4) for k,v in prices.items()}))
+                else:
+                    log("SOL ARB scan "+pair+": no pool prices returned","WARN")
+
+                # Compare prices and find arb opportunities
                 if len(prices) >= 2:
                     vals = list(prices.items())
                     for i in range(len(vals)):
@@ -652,7 +716,7 @@ def scan_arbitrage():
                                     "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 1,
                                 })
         except Exception as ex:
-            log("SOL ARB error: "+str(ex), "WARN")
+            log("SOL ARB pool error: "+str(ex), "WARN")
 
     else:
         evm_pairs = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
