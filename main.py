@@ -421,6 +421,7 @@ SOL_TOKENS = {
     "BNB":   "9gP2kCy3wA1ctvYWQk75guqXuzoJGLIDs5oPHkHGs89",
     "JUP":   "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
     "BONK":  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
+    "BONK":  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
     "WIF":   "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
     "MATIC": "Gz7VkD4MacbEB6yC5XD3HcumEiYx2EtDYYrfikGsvopG",
 }
@@ -508,7 +509,7 @@ def get_jupiter_price(token):
 # ── Real Solana DEX price feeds ───────────────────────────────────────────────
 SOL_DEX_POOLS = {
     "SOL/USDC": {"Raydium":"58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS3grPdTHE","Orca":"EGZ7tiLeH62TPV1gL8WwbXGzEPa9zmcpVnnkPKKnrE2U"},
-    "BTC/USDC": {"Raydium":"6kbC5epG18oomfvwbEc2JHLZSdXAKBmEN3JBB8VTmzoB","Orca":"2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ"},
+    "JUP/USDC": {"Raydium":"6kbC5epG18oomfvwbEc2JHLZSdXAKBmEN3JBB8VTmzoB","Orca":"2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ"},
     "ETH/USDC": {"Raydium":"9Lyhks5bQQxb9EyyX55NtgKQzpM4WK7bni5KkWpHGHGP","Orca":"2LecshUwdy9xi7meFgHtFJQNSKk4KdTrcpvaB56dP2NQ"},
 }
 
@@ -585,7 +586,7 @@ def scan_arbitrage():
     chain = state.get("chain", "ethereum")
 
     if chain == "solana":
-        sol_pairs = ["SOL/USDC", "BTC/USDC", "ETH/USDC"]
+        sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC", "BONK/USDC"]
 
         def get_raydium_pool_price(token_symbol):
             """Get price from Raydium v3 API"""
@@ -595,7 +596,8 @@ def scan_arbitrage():
                 usdc_mint = "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
                 token_mints = {
                     "SOL": sol_mint,
-                    "BTC": "EZakNDRfiCueEiwQmy12MUeH9u4YpDnC1QLSHqUCRJMJ",
+                    "JUP": "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+                    "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
                     "ETH": "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
                 }
                 in_mint = token_mints.get(token_symbol, sol_mint)
@@ -612,69 +614,73 @@ def scan_arbitrage():
                     log("Raydium v3 API: "+str(data.get("msg","")),"WARN")
                     return 0.0
                 prices = data.get("data", {})
-                token_price = float(prices.get(in_mint, 0))
+                raw = prices.get(in_mint)
+                if raw is None:
+                    log("Raydium: no price for "+token_symbol+" mint "+in_mint[:8]+"...","WARN")
+                    return 0.0
+                token_price = float(raw)
                 return token_price
             except Exception as ex:
                 log("Raydium API error: "+str(ex)[:60], "WARN")
                 return 0.0
 
         def get_orca_pool_price(token_symbol):
-            """Get price from Orca whirlpool API"""
+            """Get Orca pool price via GeckoTerminal API"""
             try:
-                # Orca whirlpool pool addresses for SOL/USDC and others
-                # These are the top pools by TVL
-                pool_ids = {
-                    "SOL": "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ",  # SOL/USDC Whirlpool
-                    "ETH": "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q",  # ETH/USDC Whirlpool
+                orca_pools = {
+                    "SOL":  "HJPjoWUrhoZzkNfRpHuieeFk9WcZWjwy6PBjZ81ngndJ",
+                    "ETH":  "FpCMFDFGYotvufJ7HrFHsWEiiQCGbkLCtwHiDnh7o28Q",
+                    "JUP":  "DVa7Qmb5ct9RCpaU7UTpSaf3GVMYz17vNVU67JrdkNsV",
+                    "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",
                 }
-                pool = pool_ids.get(token_symbol,"")
-                if not pool: return 0.0
+                pool_id = orca_pools.get(token_symbol,"")
+                if not pool_id: return 0.0
                 r = requests.get(
-                    "https://api.mainnet.orca.so/v1/whirlpool/"+pool,
+                    "https://api.geckoterminal.com/api/v2/networks/solana/pools/"+pool_id,
+                    headers={"Accept": "application/json;version=20230302"},
                     timeout=10
                 )
                 if r.status_code != 200:
-                    log("Orca API status: "+str(r.status_code)+" for "+token_symbol,"WARN")
+                    log("GeckoTerminal Orca status: "+str(r.status_code)+" for "+token_symbol,"WARN")
                     return 0.0
                 data = r.json()
-                price = float(data.get("price", 0))
+                attrs = data.get("data",{}).get("attributes",{})
+                price = float(attrs.get("base_token_price_usd", 0))
                 if price > 0:
-                    log("Orca "+token_symbol+"/USDC: $"+str(round(price,4)))
+                    log("Orca(GT) "+token_symbol+"/USDC: $"+str(round(price,4)))
                 return price
             except Exception as ex:
-                log("Orca API error: "+str(ex)[:60], "WARN")
+                log("Orca GeckoTerminal error: "+str(ex)[:60], "WARN")
                 return 0.0
 
         def get_meteora_pool_price(token_symbol):
-            """Get price from Meteora via search API"""
+            """Get Meteora pool price via GeckoTerminal API"""
             try:
-                search = token_symbol+"-USDC"
+                # GeckoTerminal pool IDs for top Meteora pools
+                meteora_pools = {
+                    "SOL":  "5rCf1DM8LjKTw4YqhnoLcngyZYeNnQqztScTogYHAS6",
+                    "ETH":  "HxVkHFNMEMBPgCCFrRTGJYVLCjBFnrNNNjEjHcKNwMC",
+                    "JUP":  "FoSDw2L5DmTuQTFe55gWPDXf88euaxAEKFre74CnvQbX",
+                    "BONK": "DVa7Qmb5ct9RCpaU7UTpSaf3GVMYz17vNVU67JrdkNsV",
+                }
+                pool_id = meteora_pools.get(token_symbol,"")
+                if not pool_id: return 0.0
                 r = requests.get(
-                    "https://dlmm-api.meteora.ag/pair/all",
-                    params={"search_term": search, "limit": 10},
-                    timeout=15
+                    "https://api.geckoterminal.com/api/v2/networks/solana/pools/"+pool_id,
+                    headers={"Accept": "application/json;version=20230302"},
+                    timeout=10
                 )
                 if r.status_code != 200:
-                    log("Meteora API status: "+str(r.status_code),"WARN")
+                    log("GeckoTerminal Meteora status: "+str(r.status_code)+" for "+token_symbol,"WARN")
                     return 0.0
-                pools = r.json()
-                pool_list = pools if isinstance(pools, list) else pools.get("pairs", pools.get("data", []))
-                # Find highest TVL pool matching the pair
-                best_price = 0.0
-                best_tvl = 0.0
-                for p in pool_list[:20]:
-                    name = p.get("name","")
-                    if token_symbol.upper() in name and "USDC" in name:
-                        tvl = float(p.get("tvl", p.get("liquidity", 0)))
-                        price = float(p.get("current_price", 0))
-                        if price > 0 and tvl > best_tvl:
-                            best_price = price
-                            best_tvl = tvl
-                if best_price > 0:
-                    log("Meteora "+token_symbol+"/USDC: $"+str(round(best_price,4))+" TVL=$"+str(round(best_tvl,0)))
-                return best_price
+                data = r.json()
+                attrs = data.get("data",{}).get("attributes",{})
+                price = float(attrs.get("base_token_price_usd", 0))
+                if price > 0:
+                    log("Meteora(GT) "+token_symbol+"/USDC: $"+str(round(price,4)))
+                return price
             except Exception as ex:
-                log("Meteora API error: "+str(ex)[:60], "WARN")
+                log("Meteora GeckoTerminal error: "+str(ex)[:60], "WARN")
                 return 0.0
 
         try:
@@ -1119,6 +1125,8 @@ td{padding:8px 0;border-bottom:1px solid #0f0f0f;color:#888}
       <button class="btn" id="p-JUP/USDC"   onclick="selectPair('JUP/USDC')">JUP/USDC</button>
       <button class="btn" id="p-BONK/USDC"  onclick="selectPair('BONK/USDC')">BONK/USDC</button>
       <button class="btn" id="p-WIF/USDC"   onclick="selectPair('WIF/USDC')">WIF/USDC</button>
+      <button class="btn" id="p-BONK/USDC"  onclick="selectPair('BONK/USDC')">BONK/USDC</button>
+      <button class="btn" id="p-JUP/USDC"   onclick="selectPair('JUP/USDC')">JUP/USDC</button>
     </div>
 
     <div style="display:flex;gap:10px;margin-top:8px;flex-wrap:wrap">
