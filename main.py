@@ -408,7 +408,7 @@ def start_background_loops():
     log("Background price feed, balance and arb scanner started")
 
 # ── Solana ────────────────────────────────────────────────────────────────────
-SOL_RPC = "https://solana-mainnet.g.alchemy.com/v2/"+os.environ.get("ALCHEMY_KEY","") if os.environ.get("ALCHEMY_KEY") else "https://api.mainnet-beta.solana.com"
+SOL_RPC = "https://api.mainnet-beta.solana.com"
 JUPITER_API = "https://quote-api.jup.ag/v6"
 
 # Solana token mints
