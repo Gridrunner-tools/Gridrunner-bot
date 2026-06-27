@@ -542,20 +542,19 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
                 log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set — cannot execute live swap", "WARN")
                 return False
 
-            # Decode private key - Phantom exports as base58 string
+            # Decode private key using solders built-in (no base58 package needed)
+            # Phantom exports as base58 string - solders Keypair.from_base58_string handles this
             try:
-                import base58
-                key_bytes = base58.b58decode(private_key)
-                log("Private key decoded via base58 — "+str(len(key_bytes))+" bytes")
-            except Exception as b58_err:
-                log("base58 decode failed: "+str(b58_err)[:60]+", trying JSON array", "WARN")
+                keypair = Keypair.from_base58_string(private_key)
+                log("Private key decoded successfully")
+            except Exception as k_err:
+                log("Keypair from base58 failed: "+str(k_err)[:80]+", trying bytes array", "WARN")
                 try:
-                    key_bytes = bytes(json.loads(private_key))
-                except Exception as json_err:
-                    log("Private key decode failed — not base58 or JSON array: "+str(json_err)[:80], "WARN")
+                    keypair = Keypair.from_bytes(bytes(json.loads(private_key)))
+                    log("Private key decoded from JSON array")
+                except Exception as k_err2:
+                    log("Private key decode failed: "+str(k_err2)[:80], "WARN")
                     return False
-
-            keypair = Keypair.from_bytes(key_bytes)
 
             # Get swap transaction from Raydium
             swap_payload = {
