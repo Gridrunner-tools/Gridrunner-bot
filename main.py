@@ -212,11 +212,11 @@ def cex_place_order(pair, side, amount):
 
 # ── DEX Trading ───────────────────────────────────────────────────────────────
 CHAIN_CONFIG = {
-    "ethereum": {"rpc":"https://eth.llamarpc.com","chain_id":1,"name":"Ethereum"},
-    "bsc":      {"rpc":"https://bsc-dataseed.binance.org","chain_id":56,"name":"BNB Chain"},
-    "base":     {"rpc":"https://mainnet.base.org","chain_id":8453,"name":"Base"},
-    "arbitrum": {"rpc":"https://arb1.llamarpc.com","chain_id":42161,"name":"Arbitrum"},
-    "polygon":  {"rpc":"https://polygon.llamarpc.com","chain_id":137,"name":"Polygon"},
+    "ethereum": {"rpcs":["https://cloudflare-eth.com","https://rpc.ankr.com/eth","https://eth.llamarpc.com"],"chain_id":1,"name":"Ethereum"},
+    "bsc":      {"rpcs":["https://bsc-dataseed1.binance.org","https://bsc-dataseed2.binance.org","https://rpc.ankr.com/bsc"],"chain_id":56,"name":"BNB Chain"},
+    "base":     {"rpcs":["https://mainnet.base.org","https://rpc.ankr.com/base","https://base.llamarpc.com"],"chain_id":8453,"name":"Base"},
+    "arbitrum": {"rpcs":["https://arb1.llamarpc.com","https://rpc.ankr.com/arbitrum","https://arbitrum.llamarpc.com"],"chain_id":42161,"name":"Arbitrum"},
+    "polygon":  {"rpcs":["https://polygon-rpc.com","https://rpc.ankr.com/polygon","https://polygon.llamarpc.com"],"chain_id":137,"name":"Polygon"},
 }
 
 TOKENS = {
