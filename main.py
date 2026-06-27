@@ -587,104 +587,93 @@ def scan_arbitrage():
     if chain == "solana":
         sol_pairs = ["SOL/USDC", "BTC/USDC", "ETH/USDC"]
 
-        # ── Real on-chain DEX pool price reader ──────────────────────────────
-        # Raydium AMM pools store token amounts in vaultA and vaultB accounts
-        # Price = vaultA_amount / vaultB_amount (adjusted for decimals)
-        # We read these directly via Solana RPC getTokenAccountBalance
-
-        # Real Raydium SOL/USDC pool vault accounts
-        RAYDIUM_VAULTS = {
-            "SOL/USDC": {
-                "sol_vault":  "DQyrAcCrDXQ7NeoqGgDCZwBvWDcYmFCjSb9JtteuvPpz",  # SOL vault
-                "usdc_vault": "HRk9CMrpq7Jn9sh7mzxE8CChMBrMyeGaNomhnRMdWv2T",  # USDC vault
-                "sol_dec": 9, "usdc_dec": 6,
-            },
-            "BTC/USDC": {
-                "sol_vault":  "GGSSNBxmxzFkr1vHQbNuwjPpHFHxBkBBQaurK6vwVbNy",
-                "usdc_vault": "Hjpbz8F1tFEL3QGFUiKNhfzBzjkBBEhzBDGcXFo6X8H",
-                "sol_dec": 6, "usdc_dec": 6,
-            },
-        }
-
-        # Real Orca Whirlpool SOL/USDC pool
-        ORCA_POOLS = {
-            "SOL/USDC": {
-                "vault_a": "2JTw1fE2wz1SymWUQ7UqpVtrTuKjcd6mWwYwUJUCh2rq",  # SOL
-                "vault_b": "EqhpAZLT1qjJVSYCuCi3sABMPFjqvnL1jtHBERkCY2aS",  # USDC
-                "dec_a": 9, "dec_b": 6,
-            },
-        }
-
-        # Meteora DLMM SOL/USDC pool vaults
-        METEORA_POOLS = {
-            "SOL/USDC": {
-                "vault_x": "BVNo8ftg2LkkssnWT4ZWdtoAgnG7BjeQkFvFfMTKLkd5",  # SOL
-                "vault_y": "6trTbLaJPSEMbdgNmGTB6A6TiS6qJNsYmJKDUFwVoRLB",  # USDC
-                "dec_x": 9, "dec_y": 6,
-            },
-        }
-
-        def get_token_account_balance(account_address):
-            """Read token balance from a Solana token account via RPC"""
+        def get_raydium_pool_price(token_symbol):
+            """Get price from Raydium via their public API"""
             try:
-                payload = {
-                    "jsonrpc": "2.0", "id": 1,
-                    "method": "getTokenAccountBalance",
-                    "params": [account_address]
-                }
-                r = requests.post(SOL_RPC, json=payload, timeout=8)
-                data = r.json()
-                amount = data.get("result",{}).get("value",{}).get("uiAmount", 0)
-                return float(amount or 0)
-            except:
+                r = requests.get(
+                    "https://api.raydium.io/v2/main/pairs",
+                    timeout=10
+                )
+                if r.status_code != 200:
+                    log("Raydium API status: "+str(r.status_code), "WARN")
+                    return 0.0
+                pairs = r.json()
+                target = token_symbol+"-USDC"
+                for p in pairs:
+                    name = p.get("name","")
+                    if name == target or name == "W"+target:
+                        price = float(p.get("price", 0))
+                        if price > 0:
+                            return price
+                return 0.0
+            except Exception as ex:
+                log("Raydium API error: "+str(ex)[:60], "WARN")
                 return 0.0
 
-        def calc_pool_price(base_amount, quote_amount):
-            """Price of base token in quote terms"""
-            if base_amount <= 0 or quote_amount <= 0:
+        def get_orca_pool_price(token_symbol):
+            """Get price from Orca via their public API"""
+            try:
+                r = requests.get(
+                    "https://api.orca.so/allPools",
+                    timeout=10
+                )
+                if r.status_code != 200:
+                    return 0.0
+                data = r.json()
+                target = token_symbol.upper()+"/USDC"
+                alt    = "W"+token_symbol.upper()+"/USDC"
+                for pool_id, pool in data.items():
+                    tokens = pool.get("tokenA",{}).get("symbol","")+"/"+ pool.get("tokenB",{}).get("symbol","")
+                    if tokens == target or tokens == alt:
+                        price = float(pool.get("price", 0))
+                        if price > 0:
+                            return price
                 return 0.0
-            return quote_amount / base_amount
+            except Exception as ex:
+                log("Orca API error: "+str(ex)[:60], "WARN")
+                return 0.0
+
+        def get_meteora_pool_price(token_symbol):
+            """Get price from Meteora via their public API"""
+            try:
+                r = requests.get(
+                    "https://dlmm-api.meteora.ag/pair/all",
+                    timeout=10
+                )
+                if r.status_code != 200:
+                    return 0.0
+                data = r.json()
+                target = token_symbol.upper()+"-USDC"
+                alt    = "W"+token_symbol.upper()+"-USDC"
+                for pool in (data if isinstance(data, list) else data.get("data",[])):
+                    name = pool.get("name","")
+                    if target in name or alt in name:
+                        price = float(pool.get("current_price", 0))
+                        if price > 0:
+                            return price
+                return 0.0
+            except Exception as ex:
+                log("Meteora API error: "+str(ex)[:60], "WARN")
+                return 0.0
 
         try:
             for pair in sol_pairs:
+                token  = pair.split("/")[0]
                 prices = {}
 
-                # ── Raydium price ──
-                if pair in RAYDIUM_VAULTS:
-                    v = RAYDIUM_VAULTS[pair]
-                    sol_bal  = get_token_account_balance(v["sol_vault"])
-                    usdc_bal = get_token_account_balance(v["usdc_vault"])
-                    p = calc_pool_price(sol_bal, usdc_bal)
-                    if p > 0:
-                        prices["Raydium"] = p
-                        log("Raydium "+pair+": sol="+str(round(sol_bal,4))+" usdc="+str(round(usdc_bal,2))+" price=$"+str(round(p,4)))
+                p_raydium = get_raydium_pool_price(token)
+                p_orca    = get_orca_pool_price(token)
+                p_meteora = get_meteora_pool_price(token)
 
-                # ── Orca price ──
-                if pair in ORCA_POOLS:
-                    v = ORCA_POOLS[pair]
-                    sol_bal  = get_token_account_balance(v["vault_a"])
-                    usdc_bal = get_token_account_balance(v["vault_b"])
-                    p = calc_pool_price(sol_bal, usdc_bal)
-                    if p > 0:
-                        prices["Orca"] = p
-                        log("Orca "+pair+": sol="+str(round(sol_bal,4))+" usdc="+str(round(usdc_bal,2))+" price=$"+str(round(p,4)))
-
-                # ── Meteora price ──
-                if pair in METEORA_POOLS:
-                    v = METEORA_POOLS[pair]
-                    sol_bal  = get_token_account_balance(v["vault_x"])
-                    usdc_bal = get_token_account_balance(v["vault_y"])
-                    p = calc_pool_price(sol_bal, usdc_bal)
-                    if p > 0:
-                        prices["Meteora"] = p
-                        log("Meteora "+pair+": sol="+str(round(sol_bal,4))+" usdc="+str(round(usdc_bal,2))+" price=$"+str(round(p,4)))
+                if p_raydium > 0: prices["Raydium"]  = p_raydium
+                if p_orca    > 0: prices["Orca"]     = p_orca
+                if p_meteora > 0: prices["Meteora"]  = p_meteora
 
                 if prices:
                     log("SOL ARB scan "+pair+": "+str({k:round(v,4) for k,v in prices.items()}))
                 else:
                     log("SOL ARB scan "+pair+": no pool prices returned","WARN")
 
-                # Compare prices and find arb opportunities
                 if len(prices) >= 2:
                     vals = list(prices.items())
                     for i in range(len(vals)):
@@ -716,7 +705,7 @@ def scan_arbitrage():
                                     "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 1,
                                 })
         except Exception as ex:
-            log("SOL ARB pool error: "+str(ex), "WARN")
+            log("SOL ARB error: "+str(ex), "WARN")
 
     else:
         evm_pairs = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
