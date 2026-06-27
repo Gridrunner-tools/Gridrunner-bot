@@ -588,7 +588,6 @@ def scan_arbitrage():
     if chain == "solana":
         sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC", "BONK/USDC"]
 
-        # Token mints for Raydium v3 mint/price API
         TOKEN_MINTS = {
             "SOL":  "So11111111111111111111111111111111111111112",
             "ETH":  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
@@ -596,106 +595,68 @@ def scan_arbitrage():
             "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
         }
 
-        def get_raydium_price(token):
-            """Get price from Raydium v3 API — confirmed working"""
+        # Target DEXes for arbitrage comparison
+        TARGET_DEXES = ["raydium", "raydium_clmm", "orca", "meteora"]
+
+        def get_dexpaprika_prices(token):
+            """
+            Get per-DEX prices using DexPaprika token pools endpoint.
+            No API key, no rate limits, returns live pool prices.
+            API: https://api.dexpaprika.com/networks/solana/tokens/{mint}/pools
+            Returns dict of {dex_name: price_usd}
+            """
             try:
                 mint = TOKEN_MINTS.get(token, "")
-                if not mint: return 0.0
+                if not mint: return {}
                 r = requests.get(
-                    "https://api-v3.raydium.io/mint/price",
-                    params={"mints": mint},
-                    timeout=8
+                    "https://api.dexpaprika.com/networks/solana/tokens/"+mint+"/pools",
+                    params={"page": 0, "limit": 50, "sort": "desc", "order_by": "volume_usd"},
+                    timeout=10
                 )
-                if r.status_code != 200: return 0.0
-                data = r.json()
-                if not data.get("success"): return 0.0
-                raw = data.get("data", {}).get(mint)
-                return float(raw) if raw is not None else 0.0
-            except:
-                return 0.0
+                if r.status_code != 200:
+                    log("DexPaprika status "+str(r.status_code)+" for "+token, "WARN")
+                    return {}
 
-        def get_orca_price_onchain(token):
-            """Read Orca Whirlpool price from pool account data via Solana RPC.
-            The Whirlpool account stores sqrtPrice at bytes 65-80 (u128).
-            Price = (sqrtPrice / 2^64)^2, adjusted for decimals (9 for SOL, 6 for USDC).
-            """
-            ORCA_POOLS = {
-                "SOL":  "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",
-                "ETH":  "AU971DrPyhhrpRnmEBp5pDTWL2ny7nofb5vYBjDJkR2E",
-                "JUP":  "GaRZqVJCpRMsM12ZTaP13zpaY6npHw2SeruZRWY2GGfn",
-                "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",
-            }
-            DECIMALS_A = {"SOL": 9, "ETH": 8, "JUP": 6, "BONK": 5}
-            DECIMALS_B = 6  # USDC always 6 decimals
+                pools = r.json().get("pools", [])
+                dex_prices = {}
 
-            try:
-                pool_addr = ORCA_POOLS.get(token,"")
-                if not pool_addr: return 0.0
+                for pool in pools:
+                    dex_id   = pool.get("dex_id", "").lower()
+                    dex_name = pool.get("dex_name", "")
+                    price    = float(pool.get("price_usd", 0) or 0)
+                    tokens   = pool.get("tokens", [])
 
-                payload = {
-                    "jsonrpc": "2.0", "id": 1,
-                    "method": "getAccountInfo",
-                    "params": [pool_addr, {"encoding": "base64"}]
-                }
-                r = requests.post(SOL_RPC, json=payload, timeout=8)
-                data = r.json()
-                account_data = data.get("result",{}).get("value",{}).get("data",[None])[0]
-                if not account_data:
-                    log("Orca: no account data for "+token, "WARN")
-                    return 0.0
+                    # Only use pools that contain USDC as the quote token
+                    token_symbols = [t.get("symbol","") for t in tokens]
+                    if "USDC" not in token_symbols: continue
+                    if price <= 0: continue
 
-                import base64
-                raw = base64.b64decode(account_data)
+                    # Map to friendly names, keep only target DEXes
+                    if dex_id in ("raydium", "raydium_clmm") and "Raydium" not in dex_prices:
+                        dex_prices["Raydium"] = price
+                    elif dex_id == "orca" and "Orca" not in dex_prices:
+                        dex_prices["Orca"] = price
+                    elif dex_id == "meteora" and "Meteora" not in dex_prices:
+                        dex_prices["Meteora"] = price
 
-                # Whirlpool account layout:
-                # 8 bytes discriminator
-                # 32 bytes whirlpools_config
-                # 1 byte bump
-                # 2 bytes tick_spacing
-                # 2 bytes tick_spacing_seed
-                # 2 bytes fee_rate
-                # 2 bytes protocol_fee_rate
-                # 8 bytes liquidity
-                # 16 bytes sqrt_price_x64  <-- at offset 65
-                sqrt_price_offset = 8 + 32 + 1 + 2 + 2 + 2 + 2 + 8  # = 57... let me use known offset
-                # From Orca source: sqrtPrice is at byte offset 65
-                sqrt_price_bytes = raw[65:81]
-                sqrt_price = int.from_bytes(sqrt_price_bytes, "little")
+                    # Stop once we have all three
+                    if len(dex_prices) >= 3: break
 
-                # Price = (sqrtPrice / 2^64)^2 * 10^(decimals_b - decimals_a)
-                # For SOL/USDC: (sqrtPrice/2^64)^2 * 10^(6-9) = result / 1000
-                dec_a = DECIMALS_A.get(token, 9)
-                price_raw = (sqrt_price / (2**64))**2
-                price = price_raw * (10**(DECIMALS_B - dec_a))
-
-                if price > 0:
-                    log("Orca(RPC) "+token+"/USDC: $"+str(round(price,6)))
-                return price
+                return dex_prices
 
             except Exception as ex:
-                log("Orca RPC error "+token+": "+str(ex)[:80], "WARN")
-                return 0.0
+                log("DexPaprika error for "+token+": "+str(ex)[:60], "WARN")
+                return {}
 
         try:
             for pair in sol_pairs:
                 token  = pair.split("/")[0]
-                prices = {}
-
-                # Raydium — uses their v3 API (confirmed working, no rate limits)
-                p_ray = get_raydium_price(token)
-                if p_ray > 0:
-                    prices["Raydium"] = p_ray
-                    log("Raydium "+token+"/USDC: $"+str(round(p_ray,6)))
-
-                # Orca — reads directly from on-chain pool vaults via Solana RPC
-                p_orca = get_orca_price_onchain(token)
-                if p_orca > 0:
-                    prices["Orca"] = p_orca
+                prices = get_dexpaprika_prices(token)
 
                 if prices:
                     log("SOL ARB scan "+pair+": "+str({k:round(v,6) for k,v in prices.items()}))
                 else:
-                    log("SOL ARB scan "+pair+": no prices","WARN")
+                    log("SOL ARB scan "+pair+": no prices returned","WARN")
 
                 if len(prices) >= 2:
                     vals = list(prices.items())
@@ -705,7 +666,7 @@ def scan_arbitrage():
                             n2,p2 = vals[j]
                             if p1<=0 or p2<=0: continue
                             spread = abs(p1-p2)/min(p1,p2)*100
-                            if spread > 0.05:
+                            if spread > 0.01:
                                 buy_from   = n1 if p1 < p2 else n2
                                 sell_on    = n2 if p1 < p2 else n1
                                 buy_price  = min(p1,p2)
@@ -727,7 +688,7 @@ def scan_arbitrage():
                                     "chain":          "solana",
                                     "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 1,
                                 })
-                time.sleep(1)  # 1s between pairs
+                time.sleep(1)  # 1s between tokens
 
         except Exception as ex:
             log("SOL ARB error: "+str(ex), "WARN")
