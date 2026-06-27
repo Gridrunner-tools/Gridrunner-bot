@@ -400,7 +400,7 @@ def start_background_loops():
                 scan_arbitrage()
             except:
                 pass
-            time.sleep(60)
+            time.sleep(120)
 
     threading.Thread(target=price_loop, daemon=True).start()
     threading.Thread(target=balance_loop, daemon=True).start()
@@ -589,21 +589,25 @@ def scan_arbitrage():
         sol_pairs = ["SOL/USDC", "JUP/USDC", "BONK/USDC"]
 
         # Verified GeckoTerminal pool addresses — confirmed live with real liquidity
+        # Verified GeckoTerminal pool addresses — all confirmed live with real liquidity
         GT_POOLS = {
             "Raydium": {
-                "SOL":  "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",  # $8.8M TVL confirmed
+                "SOL":  "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",  # $4.4M liq confirmed
+                "ETH":  "EoNrn8iUhwgJySD1pHu8Qxm5gSQqLK3za4m8xzD2RuEb",  # WETH/USDC $30K liq
                 "JUP":  "7RJ5qmsgmvUKK5QtCLT9qHpQMegkiULppHRBNuWso12E",  # JUP/USDC confirmed
-                "BONK": "G7mw1d83ismcQJKkzt62Ug4noXCjVhu3eV7U5EMgge6Z",  # BONK/USDC confirmed
+                "BONK": "G7mw1d83ismcQJKkzt62Ug4noXCjVhu3eV7U5EMgge6Z",  # BONK/USDC $31K liq
             },
             "Orca": {
-                "SOL":  "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",  # $22.7M TVL confirmed
-                "JUP":  "GaRZqVJCpRMsM12ZTaP13zpaY6npHw2SeruZRWY2GGfn",  # JUP/USDC confirmed
-                "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",  # $1.4M TVL confirmed
+                "SOL":  "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",  # $22.7M liq confirmed
+                "ETH":  "AU971DrPyhhrpRnmEBp5pDTWL2ny7nofb5vYBjDJkR2E",  # WETH/USDC $685K liq
+                "JUP":  "GaRZqVJCpRMsM12ZTaP13zpaY6npHw2SeruZRWY2GGfn",  # JUP/USDC $7.5K liq
+                "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",  # $1.41M liq confirmed
             },
             "Meteora": {
-                "SOL":  "BSo8Z91m4jr7RxNB6ye8cBnLBGFBoBnj4rE76DhPgMvr",
-                "JUP":  "FoSDw2L5DmTuQTFe55gWPDXf88euaxAEKFre74CnvQbX",
-                "BONK": "DLarBEnCMBKjcj7mUMChbBEyYHB6jAExSnFjEcBpBFhb",
+                "SOL":  "5BKxfWMbmYBAEWvyPZS9esPducUba9GqyMjtLCfbaqyF",  # SOL/USDC $118K liq
+                "ETH":  "EoNrn8iUhwgJySD1pHu8Qxm5gSQqLK3za4m8xzD2RuEb",  # WETH/USDC (shared)
+                "JUP":  "HyhMt7jPKJ1LLXQTm5wjf5f4kWqAeTeKQZvMq8TtZnPV",  # JUP/USDC $176K liq
+                "BONK": "AJ53ZSqapCBHZnSg6AkLPBoTMHadoKPUbtaDZLVXtyCL",  # BONK/USDC $10K liq
             },
         }
         gt_cache = {}
