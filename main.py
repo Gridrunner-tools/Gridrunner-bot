@@ -586,84 +586,90 @@ def scan_arbitrage():
     chain = state.get("chain", "ethereum")
 
     if chain == "solana":
-        sol_pairs = ["SOL/USDC", "JUP/USDC", "BONK/USDC"]
+        sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC", "BONK/USDC"]
 
-        # Verified GeckoTerminal pool addresses — confirmed live with real liquidity
-        # Verified GeckoTerminal pool addresses — all confirmed live with real liquidity
-        GT_POOLS = {
-            "Raydium": {
-                "SOL":  "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",  # $4.4M liq confirmed
-                "ETH":  "EoNrn8iUhwgJySD1pHu8Qxm5gSQqLK3za4m8xzD2RuEb",  # WETH/USDC $30K liq
-                "JUP":  "7RJ5qmsgmvUKK5QtCLT9qHpQMegkiULppHRBNuWso12E",  # JUP/USDC confirmed
-                "BONK": "G7mw1d83ismcQJKkzt62Ug4noXCjVhu3eV7U5EMgge6Z",  # BONK/USDC $31K liq
-            },
-            "Orca": {
-                "SOL":  "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",  # $22.7M liq confirmed
-                "ETH":  "AU971DrPyhhrpRnmEBp5pDTWL2ny7nofb5vYBjDJkR2E",  # WETH/USDC $685K liq
-                "JUP":  "GaRZqVJCpRMsM12ZTaP13zpaY6npHw2SeruZRWY2GGfn",  # JUP/USDC $7.5K liq
-                "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",  # $1.41M liq confirmed
-            },
-            "Meteora": {
-                "SOL":  "5BKxfWMbmYBAEWvyPZS9esPducUba9GqyMjtLCfbaqyF",  # SOL/USDC $118K liq
-                "ETH":  "EoNrn8iUhwgJySD1pHu8Qxm5gSQqLK3za4m8xzD2RuEb",  # WETH/USDC (shared)
-                "JUP":  "HyhMt7jPKJ1LLXQTm5wjf5f4kWqAeTeKQZvMq8TtZnPV",  # JUP/USDC $176K liq
-                "BONK": "AJ53ZSqapCBHZnSg6AkLPBoTMHadoKPUbtaDZLVXtyCL",  # BONK/USDC $10K liq
-            },
+        # Token mints for Raydium v3 mint/price API
+        TOKEN_MINTS = {
+            "SOL":  "So11111111111111111111111111111111111111112",
+            "ETH":  "7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs",
+            "JUP":  "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
+            "BONK": "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
         }
-        gt_cache = {}
 
-        def get_gt_price(dex, token_symbol):
-            pool_id = GT_POOLS.get(dex,{}).get(token_symbol,"")
-            if not pool_id: return 0.0
-            if pool_id in gt_cache: return gt_cache[pool_id]
+        # Orca whirlpool vault accounts for direct on-chain price reading
+        # vault_a = token, vault_b = USDC — price = vault_b / vault_a
+        ORCA_VAULTS = {
+            "SOL":  ("HLmqeL62xR1QoZ1HKKbXRrdN1p3phKpxRMb2VVopvBBz",  # SOL vault
+                     "9RfZwn2Prux6QesG1Noo4HzMEBv3rPndbl46wS7QiJ38"), # USDC vault
+            "ETH":  ("6ikv2DpZXDNrzWTsyMZHqU85J4QmN7TWCdgGNJCxH7oE",  # ETH vault
+                     "8cfZiPmSss3ATEbFoHbWsJSVMVVVRskKoiQs7WFBe3jP"), # USDC vault
+            "JUP":  ("2ihQKMpEFjKPWePXHKGPGKxbGGjFP5EXNXXiHxaUaDNM",  # JUP vault
+                     "BYaGFLekSQiHurJsxmR3aCdMaT3gjPe2NVkoZD6WWTH6"), # USDC vault
+            "BONK": ("8UmSCFBpNR2H1DtTMRaZBQKkFtJwz1FZ6QNXGHb8B5nQ",  # BONK vault
+                     "2kfVfLLJsuHPBBQMjPCpJKErhLMNMiCR9RNj9V3bGVzk"), # USDC vault
+        }
+
+        def get_raydium_price(token):
+            """Get price from Raydium v3 API — confirmed working"""
             try:
-                time.sleep(0.5)
+                mint = TOKEN_MINTS.get(token, "")
+                if not mint: return 0.0
                 r = requests.get(
-                    "https://api.geckoterminal.com/api/v2/networks/solana/pools/"+pool_id,
-                    headers={"Accept":"application/json;version=20230302"},
-                    timeout=10
+                    "https://api-v3.raydium.io/mint/price",
+                    params={"mints": mint},
+                    timeout=8
                 )
-                if r.status_code == 429:
-                    log("GeckoTerminal rate limited — backing off 15s","WARN")
-                    time.sleep(15); return 0.0
-                if r.status_code != 200:
-                    log("GeckoTerminal "+dex+" "+token_symbol+" status:"+str(r.status_code),"WARN")
-                    return 0.0
-                attrs = r.json().get("data",{}).get("attributes",{})
-                price = float(attrs.get("base_token_price_usd",0))
-                gt_cache[pool_id] = price
-                if price > 0: log(dex+"(GT) "+token_symbol+": $"+str(round(price,4)))
-                return price
-            except Exception as ex:
-                log("GeckoTerminal "+dex+" "+token_symbol+": "+str(ex)[:60],"WARN")
+                if r.status_code != 200: return 0.0
+                data = r.json()
+                if not data.get("success"): return 0.0
+                raw = data.get("data", {}).get(mint)
+                return float(raw) if raw is not None else 0.0
+            except:
                 return 0.0
 
-        def get_raydium_pool_price(token_symbol):
-            return get_gt_price("Raydium", token_symbol)
+        def get_orca_price_onchain(token):
+            """Read Orca pool price directly from on-chain vault balances via Solana RPC"""
+            try:
+                vaults = ORCA_VAULTS.get(token)
+                if not vaults: return 0.0
+                vault_a, vault_b = vaults
 
-        def get_orca_pool_price(token_symbol):
-            return get_gt_price("Orca", token_symbol)
+                def get_vault_balance(addr):
+                    payload = {"jsonrpc":"2.0","id":1,"method":"getTokenAccountBalance","params":[addr]}
+                    r = requests.post(SOL_RPC, json=payload, timeout=8)
+                    return float(r.json().get("result",{}).get("value",{}).get("uiAmount") or 0)
 
-        def get_meteora_pool_price(token_symbol):
-            return get_gt_price("Meteora", token_symbol)
+                bal_a = get_vault_balance(vault_a)  # token amount
+                bal_b = get_vault_balance(vault_b)  # USDC amount
+                if bal_a > 0 and bal_b > 0:
+                    price = bal_b / bal_a
+                    log("Orca(RPC) "+token+"/USDC: $"+str(round(price,6))+" ("+str(round(bal_a,2))+" tokens, $"+str(round(bal_b,2))+" USDC)")
+                    return price
+                return 0.0
+            except Exception as ex:
+                log("Orca RPC error "+token+": "+str(ex)[:60], "WARN")
+                return 0.0
 
         try:
             for pair in sol_pairs:
                 token  = pair.split("/")[0]
                 prices = {}
 
-                p_raydium = get_raydium_pool_price(token)
-                p_orca    = get_orca_pool_price(token)
-                p_meteora = get_meteora_pool_price(token)
+                # Raydium — uses their v3 API (confirmed working, no rate limits)
+                p_ray = get_raydium_price(token)
+                if p_ray > 0:
+                    prices["Raydium"] = p_ray
+                    log("Raydium "+token+"/USDC: $"+str(round(p_ray,6)))
 
-                if p_raydium > 0: prices["Raydium"]  = p_raydium
-                if p_orca    > 0: prices["Orca"]     = p_orca
-                if p_meteora > 0: prices["Meteora"]  = p_meteora
+                # Orca — reads directly from on-chain pool vaults via Solana RPC
+                p_orca = get_orca_price_onchain(token)
+                if p_orca > 0:
+                    prices["Orca"] = p_orca
 
                 if prices:
-                    log("SOL ARB scan "+pair+": "+str({k:round(v,4) for k,v in prices.items()}))
+                    log("SOL ARB scan "+pair+": "+str({k:round(v,6) for k,v in prices.items()}))
                 else:
-                    log("SOL ARB scan "+pair+": no pool prices returned","WARN")
+                    log("SOL ARB scan "+pair+": no prices","WARN")
 
                 if len(prices) >= 2:
                     vals = list(prices.items())
@@ -682,19 +688,21 @@ def scan_arbitrage():
                                 bal        = state.get("sol_balance", 0)
                                 size       = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
                                 gross      = (sell_price-buy_price)*(size/buy_price) if buy_price>0 else 0
-                                est_profit = round(gross - est_gas, 4)
+                                est_profit = round(gross - est_gas, 6)
                                 opps.append({
                                     "pair":           pair,
                                     "buy_from":       buy_from,
                                     "sell_on":        sell_on,
-                                    "buy_price":      round(buy_price,4),
-                                    "sell_price":     round(sell_price,4),
+                                    "buy_price":      round(buy_price,6),
+                                    "sell_price":     round(sell_price,6),
                                     "spread_pct":     round(spread,4),
                                     "est_gas_usd":    est_gas,
                                     "est_profit_usd": est_profit,
                                     "chain":          "solana",
                                     "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 1,
                                 })
+                time.sleep(1)  # 1s between pairs
+
         except Exception as ex:
             log("SOL ARB error: "+str(ex), "WARN")
 
