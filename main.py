@@ -48,6 +48,8 @@ state = {
     "price":         0.0,
     "balance":       0.0,
     "sol_balance":   0.0,
+    "sol_usdc":      0.0,
+    "sol_native":    0.0,
     "positions":     [],
     "trades":        [],
     "pnl":           0.0,
@@ -449,6 +451,8 @@ def sol_get_balance():
             usdc = float(accounts[0].get("account",{}).get("data",{}).get("parsed",{}).get("info",{}).get("tokenAmount",{}).get("uiAmount",0) or 0)
         total_usd = round(sol_amt * sol_price + usdc, 2)
         state["sol_balance"] = total_usd
+        state["sol_usdc"] = usdc  # Track USDC separately for trading
+        state["sol_native"] = round(sol_amt * sol_price, 2)  # SOL value only
         log("Solana balance: "+str(round(sol_amt,4))+" SOL + $"+str(round(usdc,2))+" USDC = $"+str(total_usd))
         return total_usd
     except Exception as ex:
@@ -502,8 +506,13 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
     """Execute swap via Jupiter — paper trade if PAPER_TRADING=true, live swap if false"""
     from_mint     = SOL_TOKENS.get(from_token, SOL_TOKENS["USDC"])
     to_mint       = SOL_TOKENS.get(to_token, SOL_TOKENS["SOL"])
-    amount_tokens = round(amount_usd / price, 6) if price > 0 else 0
     side          = "SOL-BUY" if from_token == "USDC" else "SOL-SELL"
+    # For buys: amount_usd is USD value, calculate tokens from price
+    # For sells: amount_usd IS the token quantity already
+    if from_token in ("USDC","USDT"):
+        amount_tokens = round(amount_usd / price, 6) if price > 0 else 0
+    else:
+        amount_tokens = amount_usd  # already in token units
     # Calculate input amount in correct decimals for the from_token
     TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6}
     from_decimals = TOKEN_DECIMALS.get(from_token, 6)
@@ -665,15 +674,6 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
         except Exception as ex:
             log("Live swap error: "+str(ex)[:100], "WARN")
             return False
-def get_jupiter_price(token):
-    try:
-        mint = SOL_TOKENS.get(token)
-        if not mint: return 0.0
-        r = requests.get("https://price.jup.ag/v4/price", params={"ids": mint}, timeout=5)
-        data = r.json()
-        return float(data.get("data",{}).get(mint,{}).get("price", 0))
-    except: return 0.0
-
 # ── Real Solana DEX price feeds ───────────────────────────────────────────────
 SOL_DEX_POOLS = {
     "SOL/USDC": {"Raydium":"58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWaS3grPdTHE","Orca":"EGZ7tiLeH62TPV1gL8WwbXGzEPa9zmcpVnnkPKKnrE2U"},
@@ -856,7 +856,7 @@ def scan_arbitrage():
                                     "chain":          "solana",
                                     "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 0.10,
                                 })
-                time.sleep(1)  # 1s between tokens
+                time.sleep(3)  # 3s between tokens to avoid rate limits
 
         except Exception as ex:
             log("SOL ARB error: "+str(ex), "WARN")
@@ -920,10 +920,13 @@ def execute_arbitrage(opp):
     if state["daily_loss"] >= cfg["max_loss"]:
         log("ARB skipped — daily loss limit hit","WARN"); return False
 
-    bal  = state["sol_balance"] if chain=="solana" else state["balance"]
+    if chain == "solana":
+        bal = state.get("sol_usdc", 0)  # Use USDC only, not total SOL+USDC
+    else:
+        bal = state["balance"]
     size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
-    if size < 1:
-        log("ARB skipped — insufficient balance $"+str(round(bal,2)),"WARN"); return False
+    if size < 0.10:
+        log("ARB skipped — insufficient USDC balance $"+str(round(bal,2)),"WARN"); return False
 
     token = pair.split("/")[0]
     amt   = round(size/price, 6)
