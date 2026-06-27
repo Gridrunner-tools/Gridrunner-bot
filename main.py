@@ -211,12 +211,33 @@ def cex_place_order(pair, side, amount):
     return None
 
 # ── DEX Trading ───────────────────────────────────────────────────────────────
+ALCHEMY_KEY = os.environ.get("ALCHEMY_KEY", "")
+
+def get_rpc(chain):
+    alchemy_rpcs = {
+        "ethereum": "https://eth-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY,
+        "bsc":      "https://bnb-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY,
+        "base":     "https://base-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY,
+        "arbitrum": "https://arb-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY,
+        "polygon":  "https://polygon-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY,
+    }
+    public_rpcs = {
+        "ethereum": ["https://cloudflare-eth.com","https://rpc.ankr.com/eth"],
+        "bsc":      ["https://bsc-dataseed1.binance.org","https://rpc.ankr.com/bsc"],
+        "base":     ["https://mainnet.base.org","https://rpc.ankr.com/base"],
+        "arbitrum": ["https://arb1.llamarpc.com","https://rpc.ankr.com/arbitrum"],
+        "polygon":  ["https://polygon-rpc.com","https://rpc.ankr.com/polygon"],
+    }
+    if ALCHEMY_KEY:
+        return [alchemy_rpcs.get(chain, alchemy_rpcs["ethereum"])]
+    return public_rpcs.get(chain, public_rpcs["ethereum"])
+
 CHAIN_CONFIG = {
-    "ethereum": {"rpcs":["https://cloudflare-eth.com","https://rpc.ankr.com/eth","https://eth.llamarpc.com"],"chain_id":1,"name":"Ethereum"},
-    "bsc":      {"rpcs":["https://bsc-dataseed1.binance.org","https://bsc-dataseed2.binance.org","https://rpc.ankr.com/bsc"],"chain_id":56,"name":"BNB Chain"},
-    "base":     {"rpcs":["https://mainnet.base.org","https://rpc.ankr.com/base","https://base.llamarpc.com"],"chain_id":8453,"name":"Base"},
-    "arbitrum": {"rpcs":["https://arb1.llamarpc.com","https://rpc.ankr.com/arbitrum","https://arbitrum.llamarpc.com"],"chain_id":42161,"name":"Arbitrum"},
-    "polygon":  {"rpcs":["https://polygon-rpc.com","https://rpc.ankr.com/polygon","https://polygon.llamarpc.com"],"chain_id":137,"name":"Polygon"},
+    "ethereum": {"chain_id":1,    "name":"Ethereum"},
+    "bsc":      {"chain_id":56,   "name":"BNB Chain"},
+    "base":     {"chain_id":8453, "name":"Base"},
+    "arbitrum": {"chain_id":42161,"name":"Arbitrum"},
+    "polygon":  {"chain_id":137,  "name":"Polygon"},
 }
 
 TOKENS = {
@@ -282,24 +303,74 @@ def dex_get_balance():
         chain = state["chain"]
         wallet = cfg["wallet"]
         if not wallet:
+            log("No wallet address set — add WALLET_ADDRESS to Render environment", "WARN")
             return 0.0
         chain_cfg = CHAIN_CONFIG.get(chain, CHAIN_CONFIG["ethereum"])
         tokens = TOKENS.get(chain, {})
         usdt_addr = tokens.get("USDT","")
-        if not usdt_addr:
-            return 0.0
-        payload = {"jsonrpc":"2.0","method":"eth_call","params":[{
-            "to": usdt_addr,
-            "data": "0x70a08231000000000000000000000000"+wallet[2:].lower().zfill(64)
-        },"latest"],"id":1}
-        r = requests.post(chain_cfg["rpc"], json=payload, timeout=5)
-        result = r.json().get("result","0x0")
-        balance = int(result, 16) / 1e6
-        state["balance"] = balance
-        return balance
+        rpcs = chain_cfg.get("rpcs", [])
+
+        # Try USDT balance first across all RPCs
+        for rpc in rpcs:
+            try:
+                padded = wallet[2:].lower().zfill(64) if wallet.startswith("0x") else wallet.lower().zfill(64)
+                payload = {"jsonrpc":"2.0","method":"eth_call","params":[{
+                    "to": usdt_addr,
+                    "data": "0x70a08231000000000000000000000000"+padded
+                },"latest"],"id":1}
+                r = requests.post(rpc, json=payload, timeout=5)
+                result = r.json().get("result","0x0")
+                if result and result != "0x":
+                    balance = int(result, 16) / 1e6
+                    state["balance"] = balance
+                    return balance
+            except:
+                continue
+
+        # Fallback: try native ETH/BNB/MATIC balance
+        for rpc in rpcs:
+            try:
+                payload = {"jsonrpc":"2.0","method":"eth_getBalance","params":[wallet,"latest"],"id":1}
+                r = requests.post(rpc, json=payload, timeout=5)
+                result = r.json().get("result","0x0")
+                if result and result != "0x":
+                    balance = int(result, 16) / 1e18
+                    price = get_price_kraken("ETH/USDT") or get_price_coingecko("ETH/USDT")
+                    usd_val = round(balance * price, 2)
+                    state["balance"] = usd_val
+                    log("Native balance: "+str(round(balance,6))+" ETH = $"+str(usd_val))
+                    return usd_val
+            except:
+                continue
+
     except Exception as ex:
         log("DEX balance error: "+str(ex), "ERROR")
     return 0.0
+
+def start_background_loops():
+    """Start continuous price + arb scanning regardless of strategy"""
+    def price_loop():
+        while True:
+            try:
+                pair = state.get("pair","ETH/USDT")
+                p = get_price(pair)
+                if p > 0:
+                    state["price"] = p
+            except:
+                pass
+            time.sleep(5)
+
+    def arb_loop():
+        while True:
+            try:
+                scan_arbitrage()
+            except:
+                pass
+            time.sleep(30)
+
+    threading.Thread(target=price_loop, daemon=True).start()
+    threading.Thread(target=arb_loop, daemon=True).start()
+    log("Background price feed and arb scanner started")
 
 # ── Arbitrage ─────────────────────────────────────────────────────────────────
 ARB_PAIRS = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
@@ -808,6 +879,7 @@ class Handler(BaseHTTPRequestHandler):
 if __name__=="__main__":
     port=int(os.environ.get("PORT",10000))
     log("Bot dashboard starting on port "+str(port))
+    start_background_loops()
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
     server.serve_forever()
