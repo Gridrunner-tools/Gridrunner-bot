@@ -686,7 +686,7 @@ def scan_arbitrage():
                                     "est_gas_usd":    est_gas,
                                     "est_profit_usd": est_profit,
                                     "chain":          "solana",
-                                    "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 1,
+                                    "executable":     spread >= cfg["min_arb_spread"] and est_profit > 0 and size >= 0.10,
                                 })
                 time.sleep(1)  # 1s between tokens
 
