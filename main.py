@@ -421,7 +421,6 @@ SOL_TOKENS = {
     "BNB":   "9gP2kCy3wA1ctvYWQk75guqXuzoJGLIDs5oPHkHGs89",
     "JUP":   "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN",
     "BONK":  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
-    "BONK":  "DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263",
     "WIF":   "EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm",
     "MATIC": "Gz7VkD4MacbEB6yC5XD3HcumEiYx2EtDYYrfikGsvopG",
 }
@@ -516,13 +515,6 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
     else:
         log("Raydium quote failed, trying Jupiter...", "WARN")
         quote = jupiter_get_quote(from_mint, to_mint, lamports)
-        router = "Jupiter"
-        if quote:
-            out_amount = int(quote.get("outAmount", 0))
-            log("Jupiter quote: $"+str(amount_usd)+" "+from_token+" → "+str(out_amount)+" "+to_token+" units")
-        else:
-            log("Both Raydium and Jupiter quotes failed for "+from_token+"→"+to_token, "WARN")
-            return False
         router = "Jupiter"
         if quote:
             out_amount = int(quote.get("outAmount", 0))
@@ -625,17 +617,21 @@ def jupiter_swap(from_token, to_token, amount_usd, price):
                 log("No swap transaction returned from Jupiter", "WARN")
                 return False
 
-            # Deserialize, sign, and send transaction
-            raw_tx   = b64.b64decode(swap_tx_b64)
-            tx       = VersionedTransaction.from_bytes(raw_tx)
-            signed   = keypair.sign_message(bytes(tx.message))
+            # Deserialize, sign, and send versioned transaction
+            from solders import message as solders_message
+            raw_tx      = b64.b64decode(swap_tx_b64)
+            raw_tx_obj  = VersionedTransaction.from_bytes(raw_tx)
+
+            # Correct signing for VersionedTransaction per solders docs
+            signature   = keypair.sign_message(solders_message.to_bytes_versioned(raw_tx_obj.message))
+            signed_tx   = VersionedTransaction.populate(raw_tx_obj.message, [signature])
 
             # Send via Solana RPC
             send_payload = {
                 "jsonrpc": "2.0", "id": 1,
                 "method": "sendTransaction",
                 "params": [
-                    b64.b64encode(bytes(tx)).decode(),
+                    b64.b64encode(bytes(signed_tx)).decode(),
                     {"encoding": "base64", "skipPreflight": False, "preflightCommitment": "confirmed"}
                 ]
             }
