@@ -586,7 +586,53 @@ def scan_arbitrage():
     chain = state.get("chain", "ethereum")
 
     if chain == "solana":
-        sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC", "BONK/USDC"]
+        sol_pairs = ["SOL/USDC", "JUP/USDC", "BONK/USDC"]
+
+        # Verified GeckoTerminal pool addresses — confirmed live with real liquidity
+        GT_POOLS = {
+            "Raydium": {
+                "SOL":  "58oQChx4yWmvKdwLLZzBi4ChoCc2fqCUWBkwMihLYQo2",  # $8.8M TVL confirmed
+                "JUP":  "7RJ5qmsgmvUKK5QtCLT9qHpQMegkiULppHRBNuWso12E",  # JUP/USDC confirmed
+                "BONK": "G7mw1d83ismcQJKkzt62Ug4noXCjVhu3eV7U5EMgge6Z",  # BONK/USDC confirmed
+            },
+            "Orca": {
+                "SOL":  "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE",  # $22.7M TVL confirmed
+                "JUP":  "GaRZqVJCpRMsM12ZTaP13zpaY6npHw2SeruZRWY2GGfn",  # JUP/USDC confirmed
+                "BONK": "8QaXeHBrShJTdtN1rWCccBxpSVvKksQ2PCu5nufb2zbk",  # $1.4M TVL confirmed
+            },
+            "Meteora": {
+                "SOL":  "BSo8Z91m4jr7RxNB6ye8cBnLBGFBoBnj4rE76DhPgMvr",
+                "JUP":  "FoSDw2L5DmTuQTFe55gWPDXf88euaxAEKFre74CnvQbX",
+                "BONK": "DLarBEnCMBKjcj7mUMChbBEyYHB6jAExSnFjEcBpBFhb",
+            },
+        }
+        gt_cache = {}
+
+        def get_gt_price(dex, token_symbol):
+            pool_id = GT_POOLS.get(dex,{}).get(token_symbol,"")
+            if not pool_id: return 0.0
+            if pool_id in gt_cache: return gt_cache[pool_id]
+            try:
+                time.sleep(0.5)
+                r = requests.get(
+                    "https://api.geckoterminal.com/api/v2/networks/solana/pools/"+pool_id,
+                    headers={"Accept":"application/json;version=20230302"},
+                    timeout=10
+                )
+                if r.status_code == 429:
+                    log("GeckoTerminal rate limited — backing off 15s","WARN")
+                    time.sleep(15); return 0.0
+                if r.status_code != 200:
+                    log("GeckoTerminal "+dex+" "+token_symbol+" status:"+str(r.status_code),"WARN")
+                    return 0.0
+                attrs = r.json().get("data",{}).get("attributes",{})
+                price = float(attrs.get("base_token_price_usd",0))
+                gt_cache[pool_id] = price
+                if price > 0: log(dex+"(GT) "+token_symbol+": $"+str(round(price,4)))
+                return price
+            except Exception as ex:
+                log("GeckoTerminal "+dex+" "+token_symbol+": "+str(ex)[:60],"WARN")
+                return 0.0
 
         def get_raydium_pool_price(token_symbol):
             return get_gt_price("Raydium", token_symbol)
