@@ -156,15 +156,13 @@ def cex_get_balance():
                 if d.get("ccy")=="USDT":
                     state["balance"]=float(d.get("availBal",0)); return state["balance"]
         elif exchange == "lbank":
-            import random, string
             ts = str(int(time.time()*1000))
-            echostr = ''.join(random.choices(string.ascii_letters+string.digits, k=12))
-            params = {"api_key":cfg["api_key"],"timestamp":ts,"echostr":echostr}
+            params = {"api_key":cfg["api_key"],"timestamp":ts}
             keys = sorted(params.keys())
-            query = "&".join(f"{k}={params[k]}" for k in keys) + f"&secret_key={cfg['api_secret']}"
-            sign = hashlib.md5(query.encode("utf-8")).hexdigest().upper()
+            raw = "&".join(f"{k}={params[k]}" for k in keys) + f"&secret_key={cfg['api_secret']}"
+            sign = hashlib.md5(raw.encode("utf-8")).hexdigest().upper()
             params["sign"] = sign
-            r = requests.post("https://api.lbank.info/v2/supplement/user_info.do", data=params, timeout=10)
+            r = requests.post("https://api.lbank.info/v1/user_info.do", data=params, timeout=10)
             data = r.json()
             if data.get("result")=="true":
                 usdt = float(data.get("info",{}).get("free",{}).get("usdt",0))
