@@ -224,7 +224,9 @@ def cex_place_order(pair, side, amount):
             lsym = pair  # ccxt handles symbol normalization internally
             lside = 'buy' if 'buy' in side.lower() else 'sell'
             if lside == 'buy':
-                order = ex.create_market_buy_order(lsym, amount)
+                # LBank market buy: amount = cost (USDT), not quantity
+                cost = amount * state.get("price", 0)
+                order = ex.create_market_buy_order(lsym, cost if cost > 0 else amount)
             else:
                 order = ex.create_market_sell_order(lsym, amount)
             if order.get('id'):
