@@ -442,14 +442,19 @@ def start_background_loops():
 
     def balance_loop():
         time.sleep(3)
-        if cfg["wallet"]:
+        # Set initial mode hint from config, but dashboard selection overrides
+        if cfg["wallet"] and state["mode"] is None:
             state["mode"] = "dex"
         while True:
             try:
-                if cfg["wallet"]:
-                    dex_get_balance()
-                elif cfg["api_key"]:
+                m = state.get("mode", "cex")
+                if m == "cex" and cfg["api_key"]:
                     cex_get_balance()
+                elif cfg["wallet"]:
+                    dex_get_balance()
+                elif cfg["sol_wallet"]:
+                    sol_get_balance()
+                # Always show Solana balance if wallet is set, regardless of mode
                 if cfg["sol_wallet"]:
                     sol_get_balance()
             except Exception as ex:
