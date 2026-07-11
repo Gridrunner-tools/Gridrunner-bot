@@ -239,19 +239,24 @@ def cex_place_order(pair, side, amount):
             data = r.json()
             return data.get("result",{}).get("orderId")
         elif exchange == "lbank":
-            # Use ccxt for LBank orders (handles signing + correct pair format)
             ex = _get_cex_exchange('lbank')
-            lsym = pair  # ccxt normalizes internally
+            lsym = pair
             lside = 'buy' if 'buy' in side.lower() else 'sell'
-            if lside == 'buy':
-                cost = amount * state.get("price", 1)
-                order = ex.create_order(lsym, 'market', 'buy', cost, None, {
-                    'createMarketBuyOrderRequiresPrice': False,
-                })
-            else:
-                order = ex.create_order(lsym, 'market', 'sell', amount, None)
-            if order.get('id'):
-                return order['id']
+            try:
+                if lside == 'buy':
+                    cost = amount * state.get("price", 1)
+                    order = ex.create_order(lsym, 'market', 'buy', cost, None, {
+                        'createMarketBuyOrderRequiresPrice': False,
+                    })
+                else:
+                    order = ex.create_order(lsym, 'market', 'sell', amount, None)
+                oid = order.get('id')
+                if oid:
+                    return oid
+                else:
+                    log("LBank order returned no id: " + str(order.get('info', {}))[:200], "WARN")
+            except Exception as e:
+                log("LBank order exception: " + str(e)[:200], "WARN")
         elif exchange == "okx":
             import base64, datetime
             ts = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
