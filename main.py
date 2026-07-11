@@ -644,12 +644,8 @@ def raydium_get_quote(from_mint, to_mint, amount, slippage_bps="200"):
 
 def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
     """
-    Execute a Solana DEX swap via Raydium Trade API.
-    - from_token/to_token: token symbols e.g. "USDC", "BONK"
-    - amount_input: USDC value for stablecoin buys; token quantity for token sells
-    - price: current price of output token in USDC (for display/logging)
-    - dex: optional DEX name hint for logging ("Raydium", "Orca", "Meteora")
-    Returns (success: bool, out_amount_human: float)
+    Execute a Solana DEX swap via Jupiter aggregator (v6 API).
+    Jupiter routes through all DEXes (Raydium, Orca, Meteora, etc.) for best price.
     """
     TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6}
     from_mint = SOL_TOKENS.get(from_token, SOL_TOKENS["USDC"])
@@ -662,24 +658,32 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
     lamports = int(amount_input * (10 ** from_dec))
     log("Swap "+side+via+": "+str(amount_input)+" "+from_token+" → "+to_token)
 
-    # Get execution quote from Raydium (confirmed accessible from Render)
-    slippage = "100" if side == "BUY" else "300"
-    quote    = raydium_get_quote(from_mint, to_mint, lamports, slippage)
-    if not quote:
-        log("Raydium quote failed — swap aborted", "WARN")
+    # Get quote from Jupiter
+    try:
+        r = requests.get("https://quote-api.jup.ag/v6/quote", params={
+            "inputMint": from_mint,
+            "outputMint": to_mint,
+            "amount": str(lamports),
+            "slippageBps": "100",
+        }, timeout=10)
+        quote = r.json()
+        if not quote or quote.get("error"):
+            log("Jupiter quote failed: "+str(quote.get("error","no data")), "WARN")
+            return False, 0.0
+        out_amount = int(quote.get("outAmount", 0))
+        out_human = out_amount / (10 ** to_dec) if out_amount > 0 else 0.0
+        log("Quote: "+str(amount_input)+" "+from_token+" → "+str(round(out_human,6))+" "+to_token)
+    except Exception as e:
+        log("Jupiter quote error: "+str(e)[:80], "WARN")
         return False, 0.0
-
-    out_lamports = int(quote.get("data",{}).get("outputAmount", 0))
-    out_human    = out_lamports / (10 ** to_dec) if out_lamports > 0 else 0.0
-    log("Quote: "+str(amount_input)+" "+from_token+" → "+str(round(out_human,6))+" "+to_token)
 
     if state["paper_trading"]:
         trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side+via,
-                 "price":price,"amount":out_human,"router":"Raydium","chain":"solana"}
+                 "price":price,"amount":out_human,"router":"Jupiter","chain":"solana"}
         state["trades"].append(trade)
         return True, out_human
 
-    # ── Live execution ────────────────────────────────────────────────────────
+    # ── Live execution via Jupiter ────────────────────────────────────────────
     try:
         from solders.keypair import Keypair
         from solders.transaction import VersionedTransaction
@@ -698,161 +702,28 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
             log("Key decode failed: "+str(ke)[:60], "WARN")
             return False, 0.0
 
-        # ── ATA lookup with multi-RPC fallback ───────────────────────────────
-        def get_ata(wallet_addr, mint_addr):
-            """Look up Associated Token Account across multiple RPCs."""
-            rpcs = [SOL_RPC, "https://rpc.ankr.com/solana"]
-            if ALCHEMY_KEY:
-                rpcs = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + rpcs
-            payload = {
-                "jsonrpc":"2.0","id":1,
-                "method":"getTokenAccountsByOwner",
-                "params":[wallet_addr, {"mint":mint_addr}, {"encoding":"jsonParsed"}]
-            }
-            for rpc in rpcs:
-                try:
-                    r = requests.post(rpc, json=payload, timeout=8)
-                    accs = r.json().get("result",{}).get("value",[])
-                    if accs:
-                        return accs[0].get("pubkey")
-                except:
-                    continue
-            return None
-
-        # ── ATA creation if missing ───────────────────────────────────────────
-        def create_ata_if_missing(keypair, wallet_addr, mint_addr):
-            """
-            Create Associated Token Account on-chain if it doesn't exist.
-            Uses Solana's Associated Token Program via raw RPC instruction.
-            Cost: ~0.002 SOL. Only needed once per token.
-            """
-            existing = get_ata(wallet_addr, mint_addr)
-            if existing:
-                return existing
-
-            log("Creating ATA for mint "+mint_addr[:8]+"...", "WARN")
-            try:
-                from solders.pubkey import Pubkey
-                import struct
-
-                # Derive ATA address
-                wallet_pk  = Pubkey.from_string(wallet_addr)
-                mint_pk    = Pubkey.from_string(mint_addr)
-                token_prog = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
-                ata_prog   = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bsU")
-                sys_prog   = Pubkey.from_string("11111111111111111111111111111111")
-
-                # Derive ATA PDA
-                seeds = [bytes(wallet_pk), bytes(token_prog), bytes(mint_pk)]
-                ata_pk, _ = Pubkey.find_program_address(seeds, ata_prog)
-
-                # Get recent blockhash
-                bh_payload = {"jsonrpc":"2.0","id":1,"method":"getLatestBlockhash","params":[{"commitment":"confirmed"}]}
-                bh_r = requests.post(SOL_RPC, json=bh_payload, timeout=8)
-                blockhash_str = bh_r.json().get("result",{}).get("value",{}).get("blockhash","")
-                if not blockhash_str:
-                    log("Could not get blockhash for ATA creation", "WARN")
-                    return None
-
-                from solders.hash import Hash
-                from solders.instruction import AccountMeta, Instruction
-                from solders.message import MessageV0
-                from solders.transaction import VersionedTransaction as VT
-
-                blockhash = Hash.from_string(blockhash_str)
-
-                # Create Associated Token Account instruction
-                create_ix = Instruction(
-                    ata_prog,
-                    bytes([0]),  # CreateIdempotent instruction (safe to retry)
-                    [
-                        AccountMeta(wallet_pk,  True,  True),   # payer
-                        AccountMeta(ata_pk,     False, True),   # ata
-                        AccountMeta(wallet_pk,  False, False),  # owner
-                        AccountMeta(mint_pk,    False, False),  # mint
-                        AccountMeta(sys_prog,   False, False),  # system program
-                        AccountMeta(token_prog, False, False),  # token program
-                    ]
-                )
-
-                msg     = MessageV0.try_compile(wallet_pk, [create_ix], [], blockhash)
-                tx      = VT(msg, [keypair])
-                import base64 as b64
-                tx_b64  = b64.b64encode(bytes(tx)).decode()
-
-                send_payload = {
-                    "jsonrpc":"2.0","id":1,"method":"sendTransaction",
-                    "params":[tx_b64, {"encoding":"base64","skipPreflight":True,"maxRetries":3}]
-                }
-                send_rpc = ("https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY) if ALCHEMY_KEY else SOL_RPC
-                r2 = requests.post(send_rpc, json=send_payload, timeout=15)
-                result = r2.json()
-                tx_sig = result.get("result","")
-                if tx_sig:
-                    log("ATA created: "+tx_sig[:20]+"... waiting 3s for confirmation")
-                    time.sleep(3)
-                    return str(ata_pk)
-                else:
-                    log("ATA creation failed: "+str(result.get("error",""))[:80], "WARN")
-                    return None
-            except Exception as ex:
-                log("ATA creation error: "+str(ex)[:80], "WARN")
-                return None
-
-        # Get or create ATAs
-        input_ata  = get_ata(wallet, from_mint) if from_token != "SOL" else None
-        output_ata = get_ata(wallet, to_mint)   if to_token  != "SOL" else None
-        log("ATA — input: "+str(input_ata)+" output: "+str(output_ata))
-
-        # For non-SOL input: must have ATA to spend from
-        if from_token != "SOL" and not input_ata:
-            log("Input ATA missing for "+from_token+" — swap cannot proceed", "WARN")
-            return False, 0.0
-
-        # For non-SOL output: create ATA if missing (e.g. first time receiving BONK)
-        if to_token != "SOL" and not output_ata:
-            output_ata = create_ata_if_missing(keypair, wallet, to_mint)
-            if not output_ata:
-                log("Could not create output ATA for "+to_token, "WARN")
-                return False, 0.0
-
-        # Build transaction via Raydium Trade API
+        # Get swap transaction from Jupiter (handles ATA creation automatically)
         swap_payload = {
-            "computeUnitPriceMicroLamports": "10000",
-            "swapResponse":  quote,
-            "txVersion":     "V0",
-            "wallet":        wallet,
-            "wrapSol":       from_token == "SOL",
-            "unwrapSol":     to_token   == "SOL",
-            "inputAccount":  input_ata,
-            "outputAccount": output_ata,
+            "quoteResponse": quote,
+            "userPublicKey": wallet,
+            "wrapAndUnwrapSol": True,
+            "dynamicComputeUnitLimit": True,
+            "prioritizationFeeLamports": 10000,
         }
-        r = requests.post(
-            "https://transaction-v1.raydium.io/transaction/swap-base-in",
-            json=swap_payload, headers={"Content-Type":"application/json"}, timeout=15
-        )
-        log("Raydium TX: "+str(r.status_code)+" "+r.text[:120])
-        if r.status_code != 200:
-            return False, 0.0
-
+        r = requests.post("https://quote-api.jup.ag/v6/swap",
+            json=swap_payload, timeout=15)
         swap_data = r.json()
-        if not swap_data.get("success"):
-            log("Raydium TX failed: "+str(swap_data.get("msg",""))[:80], "WARN")
+        if not swap_data.get("swapTransaction"):
+            log("Jupiter swap tx failed: "+str(swap_data.get("error",""))[:100], "WARN")
             return False, 0.0
 
-        txs = swap_data.get("data",[])
-        swap_tx_b64 = txs[0].get("transaction","") if txs else ""
-        if not swap_tx_b64:
-            log("No transaction in Raydium response", "WARN")
-            return False, 0.0
-
-        # Sign versioned transaction
-        raw_tx    = b64.b64decode(swap_tx_b64)
-        tx_obj    = VersionedTransaction.from_bytes(raw_tx)
-        sig       = keypair.sign_message(solders_message.to_bytes_versioned(tx_obj.message))
+        swap_tx_b64 = swap_data["swapTransaction"]
+        raw_tx = b64.b64decode(swap_tx_b64)
+        tx_obj = VersionedTransaction.from_bytes(raw_tx)
+        sig = keypair.sign_message(solders_message.to_bytes_versioned(tx_obj.message))
         signed_tx = VersionedTransaction.populate(tx_obj.message, [sig])
 
-        # Send — Alchemy first, public RPC on 429
+        # Send transaction
         send_payload = {
             "jsonrpc":"2.0","id":1,"method":"sendTransaction",
             "params":[
@@ -861,18 +732,18 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
                  "preflightCommitment":"confirmed","maxRetries":3}
             ]
         }
-        send_rpc = ("https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY) if ALCHEMY_KEY else SOL_RPC
-        r2     = requests.post(send_rpc, json=send_payload, timeout=15)
+        send_rpc = ("https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY) if ALCHEMY_KEY else "https://api.mainnet-beta.solana.com"
+        r2 = requests.post(send_rpc, json=send_payload, timeout=15)
         result = r2.json()
         if result.get("error",{}).get("code") == 429:
-            log("Rate limited on send — retrying in 3s", "WARN")
+            log("Rate limited — retrying", "WARN")
             time.sleep(3)
-            r2     = requests.post(SOL_RPC, json=send_payload, timeout=15)
+            r2 = requests.post("https://api.mainnet-beta.solana.com", json=send_payload, timeout=15)
             result = r2.json()
 
         tx_sig = result.get("result","")
         if tx_sig:
-            # Wait briefly and verify the transaction was confirmed
+            # Verify confirmation
             time.sleep(2)
             verify_payload = {"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[[tx_sig]]}
             vr = requests.post(send_rpc, json=verify_payload, timeout=8)
@@ -881,12 +752,12 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
             if status and status.get("confirmationStatus") in ("confirmed","finalized"):
                 log("SWAP CONFIRMED: "+tx_sig[:20]+"... "+from_token+"→"+to_token+via)
                 trade = {"time":time.strftime("%H:%M:%S"),"side":"LIVE-"+side+via,
-                         "price":price,"amount":out_human,"router":"Raydium",
+                         "price":price,"amount":out_human,"router":"Jupiter",
                          "chain":"solana","tx":tx_sig[:20]}
                 state["trades"].append(trade)
                 return True, out_human
             else:
-                log("Swap submitted but not confirmed yet: "+tx_sig[:20], "WARN")
+                log("Swap submitted but not confirmed: "+tx_sig[:20], "WARN")
                 return False, 0.0
         else:
             log("Send failed: "+str(result.get("error",""))[:100], "WARN")
@@ -895,7 +766,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
     except ImportError as ie:
         log("Missing package: "+str(ie), "WARN"); return False, 0.0
     except Exception as ex:
-        log("Swap error: "+str(ex)[:100], "WARN"); return False, 0.0
+        log("Jupiter swap error: "+str(ex)[:100], "WARN"); return False, 0.0
 
 
 def get_evm_dex_price(chain, pair):
