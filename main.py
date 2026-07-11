@@ -49,6 +49,7 @@ state = {
     "balance":       0.0,
     "sol_balance":   0.0,
     "sol_usdc":      0.0,
+    "sol_usdt":      0.0,
     "sol_native":    0.0,
     "positions":     [],
     "trades":        [],
@@ -422,7 +423,7 @@ SOL_TOKENS = {
 }
 
 def sol_get_balance():
-    """Get SOL + USDC balance. Tries multiple RPC endpoints for reliability."""
+    """Get SOL + USDC + USDT balance. Tries multiple RPC endpoints for reliability."""
     SOL_RPCS = [SOL_RPC, "https://rpc.ankr.com/solana"]
     if ALCHEMY_KEY:
         SOL_RPCS = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + SOL_RPCS
@@ -443,28 +444,35 @@ def sol_get_balance():
                 continue
         return None
 
+    def get_token_balance(mint):
+        """Helper to get balance of any SPL token by mint address."""
+        raw = rpc_call("getTokenAccountsByOwner",
+            [wallet, {"mint": mint}, {"encoding": "jsonParsed"}])
+        if raw and raw.get("value"):
+            return float(
+                raw["value"][0]
+                .get("account",{}).get("data",{}).get("parsed",{})
+                .get("info",{}).get("tokenAmount",{}).get("uiAmount", 0) or 0
+            )
+        return 0.0
+
     try:
         # Get SOL native balance
         sol_raw = rpc_call("getBalance", [wallet])
         sol_amt = (sol_raw.get("value", 0) / 1e9) if isinstance(sol_raw, dict) else 0.0
         sol_price = get_price_kraken("SOL/USDT") or get_price_coingecko("SOL/USDT") or 150
 
-        # Get USDC token balance
-        usdc_raw = rpc_call("getTokenAccountsByOwner",
-            [wallet, {"mint": SOL_TOKENS["USDC"]}, {"encoding": "jsonParsed"}])
-        usdc = 0.0
-        if usdc_raw and usdc_raw.get("value"):
-            usdc = float(
-                usdc_raw["value"][0]
-                .get("account",{}).get("data",{}).get("parsed",{})
-                .get("info",{}).get("tokenAmount",{}).get("uiAmount", 0) or 0
-            )
+        # Get USDC and USDT balances
+        usdc = get_token_balance(SOL_TOKENS["USDC"])
+        usdt = get_token_balance(SOL_TOKENS["USDT"])
 
-        total_usd = round(sol_amt * sol_price + usdc, 2)
+        stable_total = round(usdc + usdt, 2)
+        total_usd = round(sol_amt * sol_price + stable_total, 2)
         state["sol_balance"] = total_usd
         state["sol_usdc"]    = usdc
+        state["sol_usdt"]    = usdt
         state["sol_native"]  = round(sol_amt * sol_price, 2)
-        log("Solana balance: "+str(round(sol_amt,4))+" SOL + $"+str(round(usdc,2))+" USDC = $"+str(total_usd))
+        log("Solana balance: "+str(round(sol_amt,4))+" SOL + $"+str(usdc)+" USDC + $"+str(usdt)+" USDT = $"+str(total_usd))
         return total_usd
     except Exception as ex:
         log("Solana balance error: "+str(ex), "ERROR")
@@ -1281,7 +1289,7 @@ td{padding:8px 0;border-bottom:1px solid #0f0f0f;color:#888}
   <div class="stats">
     <div class="stat"><div class="sl">Price (Kraken)</div><div class="sv" id="s-price">—</div></div>
     <div class="stat"><div class="sl">EVM Balance</div><div class="sv" id="s-balance">—</div></div>
-    <div class="stat"><div class="sl">SOL Balance</div><div class="sv" id="s-sol-balance">—</div></div>
+    <div class="stat"><div class="sl">Solana</div><div class="sv" id="s-sol-balance" style="font-size:16px">—</div></div>
     <div class="stat"><div class="sl">Total P&L</div><div class="sv" id="s-pnl">$0.00</div></div>
     <div class="stat"><div class="sl">Open Positions</div><div class="sv" id="s-pos">0</div></div>
     <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
@@ -1470,7 +1478,7 @@ function refresh() {
     document.getElementById("status-text").textContent=on?"Running — "+(d.strategy||"").toUpperCase()+" on "+d.pair+" ("+(d.mode||"").toUpperCase()+")":"Stopped";
     document.getElementById("s-price").textContent=d.price>0?"$"+d.price.toFixed(4):"—";
     document.getElementById("s-balance").textContent=d.balance>0?"$"+d.balance.toFixed(2):"—";
-    document.getElementById("s-sol-balance").textContent=d.sol_balance>0?"$"+d.sol_balance.toFixed(2):"—";
+    document.getElementById("s-sol-balance").textContent=d.sol_balance>0?"$"+d.sol_balance.toFixed(2)+" (USDC: $"+d.sol_usdc.toFixed(2)+" USDT: $"+d.sol_usdt.toFixed(2)+")":"—";
     document.getElementById("s-mode").textContent=d.paper_trading?"📋 PAPER":"🔴 LIVE";
     document.getElementById("s-mode").style.color=d.paper_trading?"#ffd43b":"#ff6b6b";
     var pe=document.getElementById("s-pnl");
