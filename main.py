@@ -239,48 +239,48 @@ def cex_place_order(pair, side, amount):
             data = r.json()
             return data.get("result",{}).get("orderId")
         elif exchange == "lbank":
-            # Direct LBank supplement API call
-            import random, string
-            lsym = pair.replace("/", "_").lower()  # LBank format: btc_usdt
+            # LBank supplement API: HMAC-SHA256 signing
+            lsym = pair.replace("/", "_").lower()
             lside = 'buy' if 'buy' in side.lower() else 'sell'
             timestamp = str(int(time.time() * 1000))
             echostr = ''.join(random.choices(string.ascii_letters + string.digits, k=35))
-            signature_method = 'md5'
+            signature_method = 'HmacSHA256'
 
             if lside == 'buy':
                 cost = str(round(amount * state.get("price", 1), 2))
-                params = {
-                    'symbol': lsym,
-                    'type': 'buy_market',
-                    'price': cost,
-                }
+                params = {'symbol': lsym, 'type': 'buy_market', 'price': cost}
             else:
                 amt_str = str(round(amount, 8))
-                params = {
-                    'symbol': lsym,
-                    'type': 'sell_market',
-                    'amount': amt_str,
-                }
+                params = {'symbol': lsym, 'type': 'sell_market', 'amount': amt_str}
 
-            # Build signature string (sorted alphabetically)
+            # Build auth string (sorted): echostr, signature_method, timestamp, then rest sorted
             params['api_key'] = cfg['api_key']
-            params['timestamp'] = timestamp
-            params['echostr'] = echostr
-
-            sorted_keys = sorted(params.keys())
-            sign_str = '&'.join([k + '=' + params[k] for k in sorted_keys])
-            sign_str += '&secret_key=' + cfg['api_secret']
-            sign = hashlib.md5(sign_str.encode()).hexdigest().upper()
+            auth_params = {'echostr': echostr, 'signature_method': signature_method, 'timestamp': timestamp}
+            auth_params.update(params)
+            sorted_keys = sorted(auth_params.keys())
+            auth_str = '&'.join([k + '=' + auth_params[k] for k in sorted_keys])
+            md5_hash = hashlib.md5(auth_str.encode()).hexdigest().upper()
+            sign = hmac.new(cfg['api_secret'].encode(), md5_hash.encode(), hashlib.sha256).hexdigest()
 
             params['sign'] = sign
+            params['echostr'] = echostr
+            params['signature_method'] = signature_method
+            params['timestamp'] = timestamp
+
+            headers = {
+                'Content-Type': 'application/x-www-form-urlencoded',
+                'timestamp': timestamp,
+                'signature_method': signature_method,
+                'echostr': echostr,
+            }
             r = requests.post("https://api.lbank.info/v2/supplement/create_order.do",
-                data=params, timeout=10)
+                data=params, headers=headers, timeout=10)
             resp = r.json()
-            log("LBank order response: " + str(resp)[:150])
+            log("LBank order: " + str(resp)[:150])
             if resp.get("result") and resp.get("data", {}).get("order_id"):
                 return resp["data"]["order_id"]
             else:
-                log("LBank order failed: " + str(resp.get("error_code", resp.get("msg", "unknown"))), "WARN")
+                log("LBank order failed: " + str(resp.get("msg", resp.get("error_code", "unknown"))), "WARN")
         elif exchange == "okx":
             import base64, datetime
             ts = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
