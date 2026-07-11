@@ -1149,20 +1149,39 @@ ARB_PAIRS = ["BTC/USDT","ETH/USDT","BNB/USDT","SOL/USDT"]
 
 # ── Strategies ────────────────────────────────────────────────────────────────
 def get_balance():
-    return dex_get_balance() if state["mode"]=="dex" else cex_get_balance()
+    if state["mode"] == "dex":
+        chain = state.get("chain", "ethereum")
+        if chain == "solana" and cfg["sol_wallet"]:
+            sol_get_balance()
+            return state.get("sol_balance", 0.0)
+        else:
+            dex_get_balance()
+            return state.get("balance", 0.0)
+    else:
+        return cex_get_balance()
 
 def place_order(pair, side, amount):
     if state["mode"] == "dex":
         chain = state["chain"]
-        tokens = TOKENS.get(chain, {})
         price = get_price(pair)
         token = pair.split("/")[0]
-        from_t = tokens.get("USDT","")
-        to_t   = tokens.get("W"+token, tokens.get(token,""))
-        if side in ("buy","buy_market"):
-            return dex_swap(chain, from_t, to_t, amount*get_price(pair), get_price(pair))
+        stablecoin = pair.split("/")[1]
+
+        if chain == "solana":
+            # Use Jupiter/Raydium for Solana trades
+            if side in ("buy","buy_market"):
+                return jupiter_swap(stablecoin, token, amount, price, dex="Raydium")
+            else:
+                return jupiter_swap(token, stablecoin, amount, price, dex="Raydium")
         else:
-            return dex_swap(chain, to_t, from_t, amount*get_price(pair), get_price(pair))
+            # EVM chains: use 1inch/Uniswap
+            tokens = TOKENS.get(chain, {})
+            from_t = tokens.get("USDT","")
+            to_t   = tokens.get("W"+token, tokens.get(token,""))
+            if side in ("buy","buy_market"):
+                return dex_swap(chain, from_t, to_t, amount * price, price)
+            else:
+                return dex_swap(chain, to_t, from_t, amount * price, price)
     else:
         return cex_place_order(pair, side, amount)
 
