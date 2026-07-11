@@ -245,13 +245,10 @@ def cex_place_order(pair, side, amount):
             if lside == 'buy':
                 cost = amount * state.get("price", 1)
                 order = ex.create_order(lsym, 'market', 'buy', cost, None, {
-                    'method': 'spotPrivatePostCreateOrder',
                     'createMarketBuyOrderRequiresPrice': False,
                 })
             else:
-                order = ex.create_order(lsym, 'market', 'sell', amount, None, {
-                    'method': 'spotPrivatePostCreateOrder',
-                })
+                order = ex.create_order(lsym, 'market', 'sell', amount, None)
             if order.get('id'):
                 return order['id']
         elif exchange == "okx":
