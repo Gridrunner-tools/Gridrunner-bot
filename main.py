@@ -642,6 +642,91 @@ def raydium_get_quote(from_mint, to_mint, amount, slippage_bps="200"):
             time.sleep(2)
     return None
 
+def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
+                          amount_input, out_human, price, side, via,
+                          lamports, raydium_quote, to_dec):
+    """Execute a Raydium swap using the quote from raydium_get_quote."""
+    if state["paper_trading"]:
+        trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side+via,
+                 "price":price,"amount":out_human,"router":"Raydium","chain":"solana"}
+        state["trades"].append(trade)
+        return True, out_human
+
+    try:
+        from solders.keypair import Keypair
+        from solders.transaction import VersionedTransaction
+        from solders import message as solders_message
+        import base64 as b64
+
+        private_key = cfg.get("sol_key","")
+        wallet      = cfg.get("sol_wallet","")
+        if not private_key or not wallet:
+            log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set", "WARN")
+            return False, 0.0
+
+        keypair = Keypair.from_base58_string(private_key)
+
+        # Build Raydium swap transaction payload
+        swap_payload = {
+            "computeUnitPrice": "auto",
+            "computeUnitBudget": "auto",
+            "prioritizationFeeLamports": 10000,
+            "quoteResponse": raydium_quote["data"],
+            "userPublicKey": wallet,
+            "wrapAndUnwrapSol": True,
+            "dynamicComputeUnitLimit": True,
+        }
+        r = requests.post("https://transaction-v1.raydium.io/transaction/swap-base-in",
+            json=swap_payload, timeout=15)
+        tx_data = r.json()
+        if not tx_data.get("success") or not tx_data.get("data",{}).get("transaction"):
+            log("Raydium tx build failed: "+str(tx_data.get("msg",""))[:100], "WARN")
+            return False, 0.0
+
+        tx_b64 = tx_data["data"]["transaction"]
+        raw_tx = b64.b64decode(tx_b64)
+        tx_obj = VersionedTransaction.from_bytes(raw_tx)
+        sig = keypair.sign_message(solders_message.to_bytes_versioned(tx_obj.message))
+        signed_tx = VersionedTransaction.populate(tx_obj.message, [sig])
+
+        # Submit
+        send_payload = {
+            "jsonrpc":"2.0","id":1,"method":"sendTransaction",
+            "params":[
+                b64.b64encode(bytes(signed_tx)).decode(),
+                {"encoding":"base64","skipPreflight":False,
+                 "preflightCommitment":"confirmed","maxRetries":3}
+            ]
+        }
+        rpc = ("https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY) if ALCHEMY_KEY else "https://api.mainnet-beta.solana.com"
+        r2 = requests.post(rpc, json=send_payload, timeout=15)
+        result = r2.json()
+
+        tx_sig = result.get("result","")
+        if tx_sig:
+            time.sleep(2)
+            verify_payload = {"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[[tx_sig]]}
+            vr = requests.post(rpc, json=verify_payload, timeout=8)
+            vdata = vr.json()
+            vresult = vdata.get("result",{}).get("value",[{}])[0]
+            if vresult and vresult.get("confirmationStatus") in ("confirmed","finalized"):
+                log("RAYDIUM SWAP CONFIRMED: "+tx_sig[:20]+"... "+from_token+"→"+to_token+via)
+                trade = {"time":time.strftime("%H:%M:%S"),"side":"LIVE-"+side+via,
+                         "price":price,"amount":out_human,"router":"Raydium",
+                         "chain":"solana","tx":tx_sig[:20]}
+                state["trades"].append(trade)
+                return True, out_human
+            else:
+                log("Raydium swap submitted but not confirmed: "+tx_sig[:20], "WARN")
+                return True, out_human  # Still consider it placed
+        else:
+            log("Raydium send failed: "+str(result.get("error",""))[:100], "WARN")
+            return False, 0.0
+    except ImportError as ie:
+        log("Missing package: "+str(ie), "WARN"); return False, 0.0
+    except Exception as ex:
+        log("Raydium swap error: "+str(ex)[:100], "WARN"); return False, 0.0
+
 def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
     """
     Execute a Solana DEX swap via Jupiter aggregator (v6 API).
@@ -686,8 +771,8 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
             out_human = out_lamports / (10 ** to_dec) if out_lamports > 0 else 0.0
             if out_human > 0:
                 log("Raydium quote: "+str(amount_input)+" "+from_token+" → "+str(round(out_human,6))+" "+to_token)
-                # Use Raydium for the swap
-                return _execute_raydium_swap(from_token, to_token, from_mint, to_mint, 
+                # Fallback: Raydium direct swap
+                return _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                     amount_input, out_human, price, side, via, lamports, rq, to_dec)
         log("All quotes failed — swap aborted", "WARN")
         return False, 0.0
