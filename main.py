@@ -239,26 +239,25 @@ def cex_place_order(pair, side, amount):
             data = r.json()
             return data.get("result",{}).get("orderId")
         elif exchange == "lbank":
-            # Try LBank v1 API (old, might work better for some accounts)
             ex = _get_cex_exchange('lbank')
-            lsym = pair
             lside = 'buy' if 'buy' in side.lower() else 'sell'
             try:
+                # Get the market ID that ccxt uses (e.g. "btc_usdt")
+                market = ex.market(pair)
+                symbol_id = market['id']  # This is what ccxt sends to the API
+                log("LBank using symbol: " + symbol_id + " for pair: " + pair, "INFO")
                 if lside == 'buy':
                     cost = amount * state.get("price", 1)
-                    order = ex.create_order(lsym, 'market', 'buy', cost, None, {
+                    order = ex.create_order(pair, 'market', 'buy', cost, None, {
                         'createMarketBuyOrderRequiresPrice': False,
-                        'method': 'spotPrivatePostCreateOrder',
                     })
                 else:
-                    order = ex.create_order(lsym, 'market', 'sell', amount, None, {
-                        'method': 'spotPrivatePostCreateOrder',
-                    })
+                    order = ex.create_order(pair, 'market', 'sell', amount, None)
                 oid = order.get('id')
                 if oid:
                     return oid
                 info = order.get('info', {})
-                log("LBank order: " + str(info)[:200], "WARN")
+                log("LBank response: " + str(info)[:200], "WARN")
             except Exception as e:
                 log("LBank error: " + str(e)[:200], "WARN")
         elif exchange == "okx":
