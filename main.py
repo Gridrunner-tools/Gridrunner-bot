@@ -161,7 +161,11 @@ def cex_get_balance():
             query = "&".join(k+"="+str(v) for k,v in sorted(params.items()))
             sign = hmac.new(cfg["api_secret"].encode(), query.encode(), hashlib.md5).hexdigest().upper()
             params["sign"] = sign
-            r = requests.post("https://api.lbank.info/v1/user_info.do", data=params, timeout=5)
+            params["echostr"] = ''.join(__import__('random').choices(__import__('string').ascii_letters + __import__('string').digits, k=12))
+query = "&".join(k+"="+str(v) for k,v in sorted(params.items()))
+sign = hmac.new(cfg["api_secret"].encode(), query.encode(), hashlib.md5).hexdigest().upper()
+params["sign"] = sign
+r = requests.post("https://api.lbank.info/v2/supplement/user_info.do", data=params, timeout=5)
             data = r.json()
             if data.get("result")=="true":
                 usdt = float(data.get("info",{}).get("free",{}).get("usdt",0))
