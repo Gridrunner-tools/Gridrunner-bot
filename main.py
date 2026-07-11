@@ -119,6 +119,22 @@ CEX_CONFIGS = {
     "lbank":   {"base":"https://api.lbank.info","sign":"md5"},
 }
 
+# Reusable ccxt exchange instances to avoid reloading markets on every call
+_cex_exchanges = {}
+
+def _get_cex_exchange(name):
+    """Get or create a cached ccxt exchange instance."""
+    global _cex_exchanges
+    if name not in _cex_exchanges:
+        import ccxt
+        opts = {'apiKey': cfg['api_key'], 'secret': cfg['api_secret']}
+        if name == 'lbank':
+            opts['options'] = {'createMarketBuyOrderRequiresPrice': False}
+        ex = getattr(ccxt, name)(opts)
+        ex.load_markets()
+        _cex_exchanges[name] = ex
+    return _cex_exchanges[name]
+
 def cex_get_balance():
     exchange = state["exchange"]
     # Rate-limit self-protection: don't check more than once per 60s per exchange
@@ -166,8 +182,7 @@ def cex_get_balance():
                 if d.get("ccy")=="USDT":
                     state["balance"]=float(d.get("availBal",0)); return state["balance"]
         elif exchange == "lbank":
-            import ccxt
-            ex = ccxt.lbank({'apiKey': cfg['api_key'], 'secret': cfg['api_secret']})
+            ex = _get_cex_exchange('lbank')
             bal = ex.fetch_balance()
             usdt = bal.get('USDT', {}).get('free', 0)
             state['balance'] = usdt
@@ -224,16 +239,10 @@ def cex_place_order(pair, side, amount):
             data = r.json()
             return data.get("result",{}).get("orderId")
         elif exchange == "lbank":
-            import ccxt
-            ex = ccxt.lbank({
-                'apiKey': cfg['api_key'],
-                'secret': cfg['api_secret'],
-                'options': {'createMarketBuyOrderRequiresPrice': False},
-            })
+            ex = _get_cex_exchange('lbank')
             lsym = pair  # ccxt handles symbol normalization internally
             lside = 'buy' if 'buy' in side.lower() else 'sell'
             if lside == 'buy':
-                # LBank market buy: amount is the cost (USDT to spend)
                 cost = amount * state.get("price", 1)
                 order = ex.create_order(lsym, 'market', 'buy', cost, None, {
                     'method': 'spotPrivatePostCreateOrder',
