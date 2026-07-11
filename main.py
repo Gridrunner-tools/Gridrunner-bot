@@ -161,7 +161,7 @@ def cex_get_balance():
             query = "&".join(k+"="+str(v) for k,v in sorted(params.items()))
             sign = hmac.new(cfg["api_secret"].encode(), query.encode(), hashlib.md5).hexdigest().upper()
             params["sign"] = sign
-            r = requests.post("https://api.lbank.com/v1/user_info.do", data=params, timeout=5)
+            r = requests.post("https://api.lbank.com/v2/supplement/user_info.do", data=params, timeout=5)
             data = r.json()
             if data.get("result")=="true":
                 usdt = float(data.get("info",{}).get("free",{}).get("usdt",0))
@@ -213,7 +213,7 @@ def cex_place_order(pair, side, amount):
             query = "&".join(k+"="+str(v) for k,v in sorted(params.items()))
             sign = hmac.new(cfg["api_secret"].encode(), query.encode(), hashlib.md5).hexdigest().upper()
             params["sign"] = sign
-            r = requests.post("https://api.lbank.com/v1/create_order.do", data=params, timeout=10)
+            r = requests.post("https://api.lbank.com/v2/supplement/user_info.do", data=params, timeout=10)
             data = r.json()
             if data.get("result")=="true": return data.get("order_id")
             else: log("LBank order error: "+str(data.get("error_code","")), "ERROR")
