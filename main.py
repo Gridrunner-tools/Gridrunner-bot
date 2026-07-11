@@ -156,20 +156,19 @@ def cex_get_balance():
                 if d.get("ccy")=="USDT":
                     state["balance"]=float(d.get("availBal",0)); return state["balance"]
         elif exchange == "lbank":
-            import random, string, urllib.parse
-            params = {"api_key": cfg["api_key"], "timestamp": str(int(time.time() * 1000)), "echostr": ''.join(random.choices(string.ascii_letters + string.digits, k=12))}
+            ts = str(int(time.time()*1000))
+            params = {"api_key": cfg["api_key"], "timestamp": ts}
             keys = sorted(params.keys())
             raw = "&".join(f"{k}={params[k]}" for k in keys) + f"&secret_key={cfg['api_secret']}"
             params["sign"] = hashlib.md5(raw.encode("utf-8")).hexdigest().upper()
-            r = requests.post("https://api.lbank.com/v2/supplement/user_info.do", data=urllib.parse.urlencode(params), timeout=10)
+            r = requests.post("https://api.lbank.info/v1/user_info.do", data=params, timeout=10)
             data = r.json()
-            if data.get("error_code") == 0:
-                for b in data.get("data", {}).get("balances", []):
-                    if b.get("asset", "").upper() == "USDT":
-                        state["balance"] = float(b.get("free", 0))
-                        return state["balance"]
+            if data.get("result") == "true":
+                usdt = float(data.get("info", {}).get("free", {}).get("usdt", 0))
+                state["balance"] = usdt
+                return usdt
             else:
-                log(f"LBank error {data.get('error_code')}: {data.get('msg', '')}", "ERROR")
+                log(f"LBank error: {data.get('error_code', '')}", "ERROR")
         elif exchange == "kucoin":
             ts = str(int(time.time()*1000))
             path = "/api/v1/accounts"
