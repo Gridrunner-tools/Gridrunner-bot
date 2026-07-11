@@ -156,16 +156,15 @@ def cex_get_balance():
                 if d.get("ccy")=="USDT":
                     state["balance"]=float(d.get("availBal",0)); return state["balance"]
         elif exchange == "lbank":
+            import random, string
             ts = str(int(time.time()*1000))
-            params = {"api_key":cfg["api_key"],"timestamp":ts}
-            query = "&".join(k+"="+str(v) for k,v in sorted(params.items()))
-            sign = hmac.new(cfg["api_secret"].encode(), query.encode(), hashlib.md5).hexdigest().upper()
+            echostr = ''.join(random.choices(string.ascii_letters+string.digits, k=12))
+            params = {"api_key":cfg["api_key"],"timestamp":ts,"echostr":echostr}
+            keys = sorted(params.keys())
+            query = "&".join(f"{k}={params[k]}" for k in keys) + f"&secret_key={cfg['api_secret']}"
+            sign = hashlib.md5(query.encode("utf-8")).hexdigest().upper()
             params["sign"] = sign
-            params["echostr"] = ''.join(__import__('random').choices(__import__('string').ascii_letters + __import__('string').digits, k=12))
-query = "&".join(k+"="+str(v) for k,v in sorted(params.items()))
-sign = hmac.new(cfg["api_secret"].encode(), query.encode(), hashlib.md5).hexdigest().upper()
-params["sign"] = sign
-r = requests.post("https://api.lbank.info/v2/supplement/user_info.do", data=params, timeout=5)
+            r = requests.post("https://api.lbank.info/v2/supplement/user_info.do", data=params, timeout=10)
             data = r.json()
             if data.get("result")=="true":
                 usdt = float(data.get("info",{}).get("free",{}).get("usdt",0))
