@@ -1409,16 +1409,20 @@ def run_grid():
                         state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                         record_trade("GRID-BUY",price,amt)
                         log("Grid BUY level "+str(i)+" @ $"+str(price))
-                # Sell at upper levels or take profit
-                elif i in filled and (i >= mid_idx or price >= filled[i]["price"]*(1+cfg["take_profit"]/100)):
-                    amt = filled[i]["amount"]
-                    if place_order(state["pair"],"sell",amt):
-                        pnl=(price-filled[i]["price"])*amt
-                        state["pnl"]+=pnl
-                        record_trade("GRID-SELL",price,amt,round(pnl,2))
-                        log("Grid SELL level "+str(i)+" PnL: $"+str(round(pnl,2)))
-                        del filled[i]
-                        state["positions"]=[p for p in state["positions"] if p.get("grid")!=i]
+                # Sell: when price enters upper half, sell any filled position below
+                if not is_buy_zone and filled:
+                    for buy_idx in sorted(filled.keys()):
+                        if buy_idx < i:
+                            amt = filled[buy_idx]["amount"]
+                            buy_price = filled[buy_idx]["price"]
+                            if place_order(state["pair"],"sell",amt):
+                                pnl=(price-buy_price)*amt
+                                state["pnl"]+=pnl
+                                record_trade("GRID-SELL",price,amt,round(pnl,2))
+                                log("Grid SELL level "+str(buy_idx)+" PnL: $"+str(round(pnl,2)))
+                                del filled[buy_idx]
+                                state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
+                                break
         time.sleep(30)
 
 def run_scalp():
