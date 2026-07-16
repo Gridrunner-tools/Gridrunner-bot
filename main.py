@@ -1404,9 +1404,9 @@ def run_grid():
         if price <= 0: time.sleep(30); continue
 
         # ── Grid re-centering: if price drifts outside grid, rebuild around current price ──
-        if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price > grids[mid_idx] * 1.01):
-            if not filled and price > grids[mid_idx] * 1.01:
-                log("Grid re-centering: no positions, price $"+str(price)+" above buy zone")
+        if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price > grids[mid_idx]):
+            if not filled and price > grids[mid_idx]:
+                log("Grid re-centering: no positions at $"+str(price))
             else:
                 log("Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
             grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
