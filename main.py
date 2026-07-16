@@ -9,6 +9,8 @@ Strategies: DCA, Grid, Scalping, Copy Trading, Arbitrage
 import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
+os.environ["TZ"] = "US/Eastern"
+time.tzset()
 
 logging.basicConfig(level=logging.WARNING)
 TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6}
