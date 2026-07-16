@@ -1402,6 +1402,22 @@ def run_grid():
     while state["running"] and state["strategy"]=="grid":
         price = get_price(state["pair"])
         if price <= 0: time.sleep(30); continue
+
+        # ── Grid re-centering: if price drifts outside grid, rebuild around current price ──
+        if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price > grids[mid_idx] * 1.01):
+            if not filled and price > grids[mid_idx] * 1.01:
+                log("Grid re-centering: no positions, price $"+str(price)+" above buy zone")
+            else:
+                log("Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
+            grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+            mid_idx = len(grids) // 2
+            trailing_sell_active = False
+            trailing_high = 0.0
+            trailing_buy_active = False
+            trailing_low = 0.0
+            log("Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+            # Don't clear filled positions — they'll be sold on next uptick
+
         bal = get_balance()
         size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels
         for i,g in enumerate(grids[:-1]):
