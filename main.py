@@ -1392,7 +1392,7 @@ def run_grid():
     # Lower half = buy zone, upper half = sell zone
     mid_idx = len(grids) // 2
     # Trailing take profit (sell)
-    trailing_pct = 1.0
+    trailing_pct = 0.5
     trailing_high = 0.0
     trailing_sell_active = False
     # Trailing buy (buy on bounce)
