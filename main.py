@@ -1446,7 +1446,7 @@ def run_grid():
                                 filled[i]={"price":price,"amount":amt}
                                 state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                 record_trade("GRID-BUY",price,amt)
-                                log("Grid BUY level "+str(i)+" @ $"+str(price)+(" (bounce from $"+str(trailing_low)+")" if dip_occurred else ""))
+                                log("BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
                                 trailing_buy_active = False
                                 trailing_low = 0.0
                                 # Reset sell trailing too, new position opened
@@ -1479,7 +1479,8 @@ def run_grid():
                                     pnl=(price-buy_price)*amt
                                     state["pnl"]+=pnl
                                     record_trade("GRID-SELL",price,amt,round(pnl,2))
-                                    log("Grid SELL trailing @ $"+str(price)+" (high was $"+str(trailing_high)+")")
+                                    log("SELL level "+str(buy_idx)+" @ $"+str(round(price,2))+" (peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2))+")")
+                                    log("TRADE SUMMARY: bought $"+str(round(buy_price,2))+" sold $"+str(round(price,2))+" peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2)))
                                     del filled[buy_idx]
                                     state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
                                     trailing_sell_active = False
