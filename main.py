@@ -1398,6 +1398,7 @@ def run_grid():
     # Trailing buy (buy on bounce)
     trailing_low = 0.0
     trailing_buy_active = False
+    dip_occurred = False
     log("Grid levels: "+str(grids)+" buy_zone=<="+str(grids[mid_idx])+" trailing="+str(trailing_pct)+"%")
     while state["running"] and state["strategy"]=="grid":
         price = get_price(state["pair"])
@@ -1415,6 +1416,7 @@ def run_grid():
             trailing_high = 0.0
             trailing_buy_active = False
             trailing_low = 0.0
+            dip_occurred = False
             log("Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
             # Don't clear filled positions — they'll be sold on next uptick
 
@@ -1430,18 +1432,21 @@ def run_grid():
                     if not trailing_buy_active and i not in filled:
                         trailing_buy_active = True
                         trailing_low = price
+                        dip_occurred = False
                     elif trailing_buy_active:
                         if price < trailing_low:
                             trailing_low = price
-                    # Buy when price bounces 1% above the low
+                            dip_occurred = True
+                    # Buy: immediately if no dip, or on 0.5% bounce if dipped
                     if trailing_buy_active and i not in filled and size > 1:
-                        if price >= trailing_low * (1 + trailing_pct / 100):
+                        should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                        if should_buy:
                             amt = round(size/price,6)
                             if place_order(state["pair"],"buy",amt):
                                 filled[i]={"price":price,"amount":amt}
                                 state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                 record_trade("GRID-BUY",price,amt)
-                                log("Grid BUY level "+str(i)+" bounce @ $"+str(price)+" (low was $"+str(trailing_low)+")")
+                                log("Grid BUY level "+str(i)+" @ $"+str(price)+(" (bounce from $"+str(trailing_low)+")" if dip_occurred else ""))
                                 trailing_buy_active = False
                                 trailing_low = 0.0
                                 # Reset sell trailing too, new position opened
@@ -1452,6 +1457,7 @@ def run_grid():
                     if trailing_buy_active:
                         trailing_buy_active = False
                         trailing_low = 0.0
+                        dip_occurred = False
 
                 # ── SELL ZONE: trailing take profit ──
                 if not is_buy_zone:
