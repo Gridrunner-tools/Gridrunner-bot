@@ -1391,7 +1391,11 @@ def run_grid():
     filled = {}
     # Lower half = buy zone, upper half = sell zone
     mid_idx = len(grids) // 2
-    log("Grid levels: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+    # Trailing take profit
+    trailing_pct = 1.0  # sell when price drops 1% below the peak
+    trailing_high = 0.0
+    trailing_active = False
+    log("Grid levels: "+str(grids)+" buy_zone=<="+str(grids[mid_idx])+" trailing="+str(trailing_pct)+"%")
     while state["running"] and state["strategy"]=="grid":
         price = get_price(state["pair"])
         if price <= 0: time.sleep(30); continue
@@ -1409,20 +1413,39 @@ def run_grid():
                         state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                         record_trade("GRID-BUY",price,amt)
                         log("Grid BUY level "+str(i)+" @ $"+str(price))
-                # Sell: when price enters upper half, sell any filled position below
-                if not is_buy_zone and filled:
-                    for buy_idx in sorted(filled.keys()):
-                        if buy_idx < i:
-                            amt = filled[buy_idx]["amount"]
-                            buy_price = filled[buy_idx]["price"]
-                            if place_order(state["pair"],"sell",amt):
-                                pnl=(price-buy_price)*amt
-                                state["pnl"]+=pnl
-                                record_trade("GRID-SELL",price,amt,round(pnl,2))
-                                log("Grid SELL level "+str(buy_idx)+" PnL: $"+str(round(pnl,2)))
-                                del filled[buy_idx]
-                                state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
-                                break
+                # Trailing take profit: when price enters upper half
+                if not is_buy_zone:
+                    if not trailing_active and filled:
+                        trailing_active = True
+                        trailing_high = price
+                        log("Trailing active at $"+str(price))
+                    elif trailing_active:
+                        if price > trailing_high:
+                            trailing_high = price
+                            log("Trailing high updated to $"+str(price))
+                    # Check trailing stop triggered
+                    if trailing_active and price <= trailing_high * (1 - trailing_pct / 100):
+                        # Sell any filled position below current price
+                        for buy_idx in sorted(filled.keys()):
+                            if buy_idx < i:
+                                amt = filled[buy_idx]["amount"]
+                                buy_price = filled[buy_idx]["price"]
+                                if place_order(state["pair"],"sell",amt):
+                                    pnl=(price-buy_price)*amt
+                                    state["pnl"]+=pnl
+                                    record_trade("GRID-SELL",price,amt,round(pnl,2))
+                                    log("Grid SELL trailing stop @ $"+str(price)+" (high was $"+str(trailing_high)+")")
+                                    del filled[buy_idx]
+                                    state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
+                                    trailing_active = False
+                                    trailing_high = 0.0
+                                    break
+                else:
+                    # Price dropped back to buy zone — reset trailing
+                    if trailing_active:
+                        log("Trailing reset — price back in buy zone")
+                        trailing_active = False
+                        trailing_high = 0.0
         time.sleep(30)
 
 def run_scalp():
