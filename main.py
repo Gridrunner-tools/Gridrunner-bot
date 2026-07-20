@@ -1913,8 +1913,12 @@ function initChart() {
       },
     });
     candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
-      color: "#00ff9d",
-      lineWidth: 2,
+      upColor: "#00ff9d",
+      downColor: "#ff6b6b",
+      borderUpColor: "#00ff9d",
+      borderDownColor: "#ff6b6b",
+      wickUpColor: "#00ff9d",
+      wickDownColor: "#ff6b6b",
       priceFormat: {type: "price", precision: 4, minMove: 0.0001},
     });
   } catch(e) { console.log("Chart init error:", e); }
