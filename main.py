@@ -1867,9 +1867,25 @@ function toggleTheme() {
 
 
 var chart = null;
-var lineSeries = null;
+var candleSeries = null;
 var gridLines = [];
 
+function aggregateCandles(data, intervalSec) {
+  var candles = [], current = null;
+  data.forEach(function(d) {
+    var bucket = Math.floor(d.time / intervalSec) * intervalSec;
+    if (!current || current.time !== bucket) {
+      if (current) candles.push(current);
+      current = {time: bucket, open: d.value, high: d.value, low: d.value, close: d.value};
+    } else {
+      current.high = Math.max(current.high, d.value);
+      current.low = Math.min(current.low, d.value);
+      current.close = d.value;
+    }
+  });
+  if (current) candles.push(current);
+  return candles;
+}
 function initChart() {
   try {
     chart = LightweightCharts.createChart(document.getElementById("chart-container"), {
@@ -1896,7 +1912,7 @@ function initChart() {
         borderColor: "#1a1a1a",
       },
     });
-    lineSeries = chart.addSeries(LightweightCharts.LineSeries, {
+    candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
       color: "#00ff9d",
       lineWidth: 2,
       priceFormat: {type: "price", precision: 4, minMove: 0.0001},
@@ -1924,12 +1940,13 @@ function updateChartTheme(isDarkMode) {
 }
 
 function updateChart(data, gridLevels, gridBuyZone, pair) {
-  if (!chart || !lineSeries) return;
+  if (!chart || !candleSeries) return;
   // Update price line
   if (data && data.length > 1) {
-    lineSeries.setData(data);
+    var candles = aggregateCandles(data, 900);
+    candleSeries.setData(candles);
     var _now = Math.floor(Date.now()/1000);
-    chart.timeScale().setVisibleRange({from: _now - 900, to: _now});
+    chart.timeScale().setVisibleRange({from: _now - 7200, to: _now});
   }
 
   // Remove old grid lines
