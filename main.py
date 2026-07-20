@@ -1949,11 +1949,11 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   if (!data || data.length < 2) return;
 
   // Update candles
-  var candles = aggregateCandles(data, 900);
+  var candles = aggregateCandles(data, 300);
   candleSeries.setData(candles);
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
-  var span = Math.max(dataEnd - dataStart, 900);
+  var span = Math.max(dataEnd - dataStart, 3600);
   chart.timeScale().setVisibleRange({from: dataEnd - span * 1.5, to: dataEnd + 60});
 
   // Grid overlay
