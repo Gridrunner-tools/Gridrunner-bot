@@ -1999,7 +1999,7 @@ function startBot() {
   fetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
     document.getElementById("pause-btn").style.display = "inline-block";
-    document.getElementById("pause-btn").textContent = "&#9208; Pause";
+    document.getElementById("pause-btn").textContent = "⏸ Pause";
   });
 }
 
@@ -2013,12 +2013,12 @@ function stopBot() {
 function pauseBot() {
   fetch("/pause").then(function(r) { return r.json(); }).then(function(d) {
     var paused = d.paused || d.status === "paused";
-    document.getElementById("pause-btn").textContent = paused ? "&#9654; Resume" : "&#9208; Pause";
+    document.getElementById("pause-btn").textContent = paused ? "▶ Resume" : "⏸ Pause";
     showToast(paused ? "Bot paused" : "Bot resumed", "info");
   }).catch(function() {
     var btn = document.getElementById("pause-btn");
     var paused = btn.textContent.indexOf("Pause") !== -1;
-    btn.textContent = paused ? "&#9654; Resume" : "&#9208; Pause";
+    btn.textContent = paused ? "▶ Resume" : "⏸ Pause";
     showToast(paused ? "Bot paused" : "Bot resumed", "info");
   });
 }
@@ -2057,7 +2057,7 @@ function refresh() {
     // Update pause button state
     if (on) {
       document.getElementById("pause-btn").style.display = "inline-block";
-      document.getElementById("pause-btn").textContent = d.paused ? "&#9654; Resume" : "&#9208; Pause";
+      document.getElementById("pause-btn").textContent = d.paused ? "▶ Resume" : "⏸ Pause";
     } else {
       document.getElementById("pause-btn").style.display = "none";
     }
