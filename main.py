@@ -1958,6 +1958,9 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   candleSeries.setData(candles);
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
+  var dataSpan = dataEnd - dataStart;
+  var showFrom = dataEnd - Math.max(dataSpan * 0.5, 1800);
+  chart.timeScale().setVisibleRange({from: showFrom, to: dataEnd + 30});
 
 
   // Grid overlay
