@@ -69,7 +69,7 @@ state = {
     "win_rate":      0,
     "avg_profit":    0.0,
     "trades_count":  0,
-    "trades":        0,           # JS reads d.trades
+    
     "best_trade":    None,
     "trades_list":   [],
     "positions_list": [],
