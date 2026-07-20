@@ -1928,7 +1928,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   // Update price line
   if (data && data.length > 1) {
     lineSeries.setData(data);
-    chart.timeScale().fitContent();
+    var _now = Math.floor(Date.now()/1000);
+    chart.timeScale().setVisibleRange({from: _now - 900, to: _now});
   }
 
   // Remove old grid lines
