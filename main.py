@@ -1896,7 +1896,7 @@ function initChart() {
         borderColor: "#1a1a1a",
       },
     });
-    lineSeries = chart.addLineSeries({
+    lineSeries = chart.addSeries(LightweightCharts.lineSeries, {
       color: "#00ff9d",
       lineWidth: 2,
       priceFormat: {type: "price", precision: 4, minMove: 0.0001},
@@ -1928,6 +1928,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   // Update price line
   if (data && data.length > 1) {
     lineSeries.setData(data);
+    chart.timeScale().fitContent();
   }
 
   // Remove old grid lines
@@ -1942,7 +1943,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
 
   // Buy zone lines (green)
   buyZone.forEach(function(g) {
-    var s = chart.addLineSeries({
+    var s = chart.addSeries(LightweightCharts.lineSeries, {
       color: "#00ff9d44",
       lineWidth: 1,
       lineStyle: 2,
@@ -1955,7 +1956,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
 
   // Sell zone lines (red)
   sellZone.forEach(function(g) {
-    var s = chart.addLineSeries({
+    var s = chart.addSeries(LightweightCharts.lineSeries, {
       color: "#ff6b6b44",
       lineWidth: 1,
       lineStyle: 2,
@@ -1967,7 +1968,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   });
 
   // Midpoint line (yellow, thicker)
-  var midLine = chart.addLineSeries({
+  var midLine = chart.addSeries(LightweightCharts.lineSeries, {
     color: "#ffd43b88",
     lineWidth: 2,
     lineStyle: 2,
