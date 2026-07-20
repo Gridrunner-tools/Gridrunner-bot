@@ -1347,7 +1347,8 @@ def place_order(pair, side, amount):
 def record_trade(side, price, amount, pnl=None):
     trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl}
     state["trades"].append(trade)
-    state["last_trade"] = {"action": side, "pair": state["pair"], "price": price}
+    state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
+    state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t["pnl"],"via":t.get("router","")} for t in state["trades"][-50:]]
 
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
@@ -1838,6 +1839,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 var sel = {mode:"cex", strat:null, pair:null, exch:null, chain:null};
 var isDark = true;
 var tradeLog = [];
+var _lastTradeTime = null;
 var toastId = 0;
 var notifRequested = false;
 
@@ -2054,7 +2056,7 @@ function refresh() {
     document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
     document.getElementById("s-mode").style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
     document.getElementById("s-pnl").innerHTML = d.pnl != null ? pnlHtml(d.pnl) : "$0.00";
-    document.getElementById("s-pos").textContent = d.positions != null ? d.positions : 0;
+    document.getElementById("s-pos").textContent = d.positions != null && d.positions.length != null ? d.positions.length : 0;
 
     // Update pause button state
     if (on) {
@@ -2106,8 +2108,9 @@ function refresh() {
       document.getElementById("log-box").innerHTML = logHtml;
     }
 
-    // Toast on new trade
-    if (d.last_trade && d.last_trade.action) {
+    // Toast on new trade (only once per trade)
+    if (d.last_trade && d.last_trade.action && d.last_trade.time != _lastTradeTime) {
+      _lastTradeTime = d.last_trade.time;
       showToast(d.last_trade.action.toUpperCase() + " " + d.last_trade.pair + " @ $" + d.last_trade.price, "trade");
       playBeep();
       requestNotif();
@@ -2140,6 +2143,8 @@ class Handler(BaseHTTPRequestHandler):
         if path=="/":
             self.respond(200,"text/html",DASHBOARD.encode())
         elif path=="/state":
+            state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router","")} for t in state["trades"][-50:]]
+            state["positions_count"] = len(state.get("positions", []))
             self.respond(200,"application/json",json.dumps(state).encode())
         elif path=="/start":
             start_bot(
