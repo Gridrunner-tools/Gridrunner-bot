@@ -1692,7 +1692,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   <div class="head-row">
     <div><h1>Trading Bot</h1><div class="sub"><span class="dot" id="dot"></span><span id="status-text">Stopped</span></div></div>
     <div style="display:flex;gap:6px">
-      <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">&#127769; Dark</button>
+      <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
       <button class="btn" onclick="exportCSV()" style="font-size:11px">&#11015; CSV</button>
     </div>
   </div>
@@ -1786,8 +1786,8 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="action-bar">
       <button class="btn-start" id="start-btn" onclick="startBot()" disabled>Select options above</button>
       <button class="btn-stop" onclick="stopBot()">&#9209; Stop</button>
-      <button class="btn-pause" id="pause-btn" onclick="pauseBot()" style="display:none">&#9208; Pause</button>
-      <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)44;padding:13px 20px">&#128203; Paper: ON</button>
+      <button class="btn-pause" id="pause-btn" onclick="pauseBot()" style="display:none">⏸ Pause</button>
+      <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)44;padding:13px 20px">📋 Paper: ON</button>
     </div>
   </div>
 
@@ -1842,7 +1842,7 @@ var notifRequested = false;
 function toggleTheme() {
   isDark = !isDark;
   document.body.classList.toggle("light", !isDark);
-  document.getElementById("theme-btn").textContent = isDark ? "&#127769; Dark" : "&#9728; Light";
+  document.getElementById("theme-btn").textContent = isDark ? "🌙 Dark" : "☀ Light";
 }
 
 function showToast(msg, type) {
@@ -2033,7 +2033,7 @@ function togglePaper() {
   fetch("/toggle_paper").then(function(r) { return r.json(); }).then(function(d) {
     var btn = document.getElementById("paper-btn");
     var on = d.paper_trading;
-    btn.textContent = "&#128203; Paper: " + (on ? "ON" : "OFF");
+    btn.textContent = "📋 Paper: " + (on ? "ON" : "OFF");
     btn.style.color = on ? "var(--yellow)" : "var(--red)";
     btn.style.borderColor = on ? "var(--yellow)44" : "var(--red)44";
     btn.style.background = on ? "var(--yellow)18" : "var(--red)18";
@@ -2049,7 +2049,7 @@ function refresh() {
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + d.price.toFixed(4) : "—";
     document.getElementById("s-balance").textContent = d.balance > 0 ? "$" + d.balance.toFixed(2) : "—";
     document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + d.sol_usdc.toFixed(2) + " USDT: $" + d.sol_usdt.toFixed(2) + ")" : "—";
-    document.getElementById("s-mode").textContent = d.paper_trading ? "&#128203; PAPER" : "&#128308; LIVE";
+    document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
     document.getElementById("s-mode").style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
     document.getElementById("s-pnl").innerHTML = d.pnl != null ? pnlHtml(d.pnl) : "$0.00";
     document.getElementById("s-pos").textContent = d.positions != null ? d.positions : 0;
