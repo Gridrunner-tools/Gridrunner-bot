@@ -1949,7 +1949,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   if (!data || data.length < 2) return;
 
   // Update candles
-  var candles = aggregateCandles(data, 300);
+  var candles = aggregateCandles(data, 60);
   candleSeries.setData(candles);
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
