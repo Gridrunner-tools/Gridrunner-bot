@@ -1988,10 +1988,9 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   candleSeries.setData(candles);
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
-  var dataSpan = dataEnd - dataStart;
-  var showFrom = dataEnd - Math.max(dataSpan * 0.5, 1800);
-  chart.timeScale().setVisibleRange({from: showFrom, to: dataEnd + 30});
 
+  // Scroll to show the latest candle (don't setVisibleRange — that overrides barSpacing)
+  chart.timeScale().scrollToPosition(candles.length, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
