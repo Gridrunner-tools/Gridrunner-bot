@@ -82,6 +82,7 @@ state = {
     "grid_trailing_active": False,
     "grid_trailing_high": 0.0,
     "grid_mid_idx": 0,
+    "positions_count": 0,
 }
 
 def log(msg, level="INFO"):
@@ -120,7 +121,8 @@ def get_price_coingecko(token):
         r = requests.get("https://api.coingecko.com/api/v3/simple/price", params={"ids":cid,"vs_currencies":"usd"}, timeout=5)
         data = r.json()
         return float(data.get(cid,{}).get("usd",0))
-    except:
+    except Exception as e:
+        log("CoinGecko error: "+str(e), "WARN")
         return 0.0
 
 def get_price_raydium(pair):
@@ -606,7 +608,8 @@ def sol_get_balance():
                 result = r.json()
                 if "result" in result:
                     return result["result"]
-            except:
+            except Exception as e:
+                log("RPC error: "+str(e), "WARN")
                 continue
         return None
 
@@ -739,7 +742,8 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                     accs = r.json().get("result",{}).get("value",[])
                     if accs:
                         return accs[0].get("pubkey")
-                except:
+                except Exception as e:
+                    log("ATA error: "+str(e), "WARN")
                     continue
             return None
 
@@ -1066,7 +1070,8 @@ def get_evm_dex_price(chain, pair):
         data = r.json()
         price = float(data.get("price", 0))
         return 1.0/price if price > 0 else 0.0
-    except:
+    except Exception as e:
+        log("EVM DEX price error: "+str(e), "WARN")
         return 0.0
 
 def scan_arbitrage():
@@ -1357,6 +1362,8 @@ def place_order(pair, side, amount):
 def record_trade(side, price, amount, pnl=None):
     trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl}
     state["trades"].append(trade)
+    if len(state["trades"]) > 500:
+        state["trades"] = state["trades"][-500:]
     state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
     state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t["pnl"],"via":t.get("router","")} for t in state["trades"][-50:]]
 
@@ -1538,6 +1545,9 @@ def run_grid():
                                     state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
                                     trailing_sell_active = False
                                     trailing_high = 0.0
+                                    state["grid_trailing_active"] = False
+                                    state["grid_trailing_high"] = 0.0
+                                    state["grid_filled"] = {k: v for k, v in filled.items()}
                                     break
                 else:
                     # Price back in buy zone — reset sell trailing
@@ -2401,6 +2411,20 @@ initChart();
 
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
+    API_SECRET = os.environ.get("API_SECRET", "")
+
+    def _check_auth(self):
+        sent = self.headers.get("X-API-Secret", "")
+        if self.API_SECRET and sent != self.API_SECRET:
+            self.respond(401, "text/plain", b"Unauthorized")
+            return False
+        return True
+
+    def _auth_or_401(self):
+        if not self._check_auth():
+            return False
+        return True
+
     def do_GET(self):
         parsed=urlparse(self.path)
         path=parsed.path
@@ -2411,8 +2435,12 @@ class Handler(BaseHTTPRequestHandler):
         elif path=="/state":
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router","")} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))
+            if not self._check_auth():
+                self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
+                return
             self.respond(200,"application/json",json.dumps(state).encode())
         elif path=="/start":
+            if not self._auth_or_401(): return
             start_bot(
                 params.get("strategy",["dca"])[0],
                 params.get("pair",[cfg["pair"]])[0],
@@ -2422,9 +2450,11 @@ class Handler(BaseHTTPRequestHandler):
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
+            if not self._auth_or_401(): return
             stop_bot()
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/debug_orca":
+            if not self._auth_or_401(): return
             try:
                 import base64 as b64
                 pool = "Czfq3xZZDmsdGdUyrNLtRhGc47cXcZtLG4crryfu44zE"
@@ -2442,12 +2472,14 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as ex:
                 self.respond(200,"application/json",json.dumps({"error":str(ex)}).encode())
         elif path=="/toggle_paper":
+            if not self._auth_or_401(): return
             state["paper_trading"] = not state["paper_trading"]
             mode = "PAPER" if state["paper_trading"] else "LIVE"
             log("Switched to "+mode+" trading mode")
             self.respond(200,"application/json",json.dumps({"paper_trading":state["paper_trading"]}).encode())
             return
         elif path=="/pause":
+            if not self._auth_or_401(): return
             state["paused"] = not state["paused"]
             log("Bot "+("paused" if state["paused"] else "resumed"))
             self.respond(200,"application/json",json.dumps({"paused":state["paused"]}).encode())
@@ -2460,10 +2492,13 @@ class Handler(BaseHTTPRequestHandler):
         if content_len > 0:
             body = self.rfile.read(content_len)
             try: data = json.loads(body)
-            except: data = {}
+            except Exception as e:
+                log("JSON parse error: "+str(e), "WARN")
+                data = {}
         else: data = {}
         path = urlparse(self.path).path
         if path == "/config":
+            if not self._auth_or_401(): return
             for key in ["max_leverage", "max_position", "cooldown", "slippage"]:
                 if key in data: cfg[key] = data[key]
             state["config"] = {k: cfg.get(k) for k in ["max_leverage", "max_position", "cooldown", "slippage"] if cfg.get(k)}
