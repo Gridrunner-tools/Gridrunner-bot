@@ -1837,6 +1837,14 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         </optgroup>
       </select>
       <button class="btn" onclick="switchPair()" title="One-click pair switch" style="padding:9px 12px">&#128260;</button>
+      <details style="font-size:12px;margin-top:6px">
+        <summary style="color:var(--dim);cursor:pointer;padding:4px 0">+ Custom Token</summary>
+        <div style="display:flex;gap:6px;margin-top:6px">
+          <input type="text" id="custom-addr" placeholder="Paste Solana token address..." style="flex:1;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text)">
+          <button class="btn" onclick="lookupToken()" style="font-size:11px;white-space:nowrap">Lookup</button>
+        </div>
+        <div id="custom-token-status" style="margin-top:4px;font-size:11px;color:var(--dim)"></div>
+      </details>
     </div>
 
     <div class="action-bar">
@@ -2163,6 +2171,31 @@ function selectStrat(s) {
   updateBtn();
 }
 
+function lookupToken() {
+  var addr = document.getElementById("custom-addr").value.trim();
+  var stat = document.getElementById("custom-token-status");
+  if (!addr) { stat.textContent = "Enter an address"; stat.style.color = "var(--red)"; return; }
+  stat.textContent = "Looking up..."; stat.style.color = "var(--dim)";
+  fetch("/lookup_token?address=" + encodeURIComponent(addr)).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.error) { stat.textContent = d.error; stat.style.color = "var(--red)"; return; }
+    var pair = d.symbol + "/USDC";
+    var ps = document.getElementById("pair-select");
+    var exists = Array.from(ps.options).find(function(o) { return o.value === pair; });
+    if (!exists) {
+      var opt = document.createElement("option");
+      opt.value = pair;
+      opt.textContent = pair + " \u2014 " + (d.name || "");
+      ps.appendChild(opt);
+    }
+    ps.value = pair;
+    selectPair(pair);
+    stat.textContent = "\u2705 Added " + pair; stat.style.color = "var(--accent)";
+    document.getElementById("custom-addr").value = "";
+  }).catch(function(e) {
+    stat.textContent = "Lookup failed"; stat.style.color = "var(--red)";
+  });
+}
+
 function selectPair(p) {
   if (!p) return;
   sel.pair = p;
@@ -2453,6 +2486,36 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_or_401(): return
             stop_bot()
             self.respond(200,"application/json",b'{"ok":true}')
+        elif path=="/lookup_token":
+            addr = params.get("address",[""])[0].strip()
+            if not addr or not addr.replace(" ", ""):
+                self.respond(400,"application/json",json.dumps({"error":"No address"}).encode()); return
+            # Basic Solana base58 check: 32-44 chars, alphanumeric except 0OIlo
+            import re
+            base58_re = re.compile(r'^[1-9A-HJ-NP-Za-km-z]{32,44}$')
+            if not base58_re.match(addr):
+                self.respond(400,"application/json",json.dumps({"error":"Invalid Solana address"}).encode()); return
+            try:
+                # Use Jupiter token info endpoint to get metadata
+                r = requests.get("https://tokens.jup.ag/token/"+addr, timeout=5)
+                if r.status_code == 200:
+                    data = r.json()
+                    sym = data.get("symbol","")
+                    name = data.get("name","")
+                    if sym:
+                        self.respond(200,"application/json",json.dumps({"symbol":sym,"name":name,"address":addr}).encode())
+                        return
+                # Fallback: try Jupiter quote to validate
+                q = requests.get(JUPITER_API+"/quote", params={
+                    "inputMint":addr,"outputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+                    "amount":"1000","slippageBps":"50"
+                }, timeout=5)
+                if q.status_code == 200 and q.json().get("outAmount"):
+                    self.respond(200,"application/json",json.dumps({"symbol":addr[:8]+"...","name":"Custom Token","address":addr}).encode()); return
+                self.respond(404,"application/json",json.dumps({"error":"Token not found or not tradeable"}).encode())
+            except Exception as e:
+                log("Token lookup error: "+str(e),"WARN")
+                self.respond(500,"application/json",json.dumps({"error":"Lookup failed"}).encode())
         elif path=="/debug_orca":
             if not self._auth_or_401(): return
             try:
