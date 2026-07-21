@@ -2447,7 +2447,7 @@ window.addEventListener("resize", function() {
 setInterval(refresh, 3000);
 refresh();
 initChart();
-  var API_SECRET = "";
+  var API_SECRET = "{API_SECRET}";
   function apiFetch(url, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
@@ -2480,7 +2480,7 @@ class Handler(BaseHTTPRequestHandler):
         params=parse_qs(parsed.query)
 
         if path=="/":
-            self.respond(200,"text/html",DASHBOARD.encode())
+            self.respond(200,"text/html",DASHBOARD.replace("{API_SECRET}", os.environ.get("API_SECRET","")).encode())
         elif path=="/state":
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router","")} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))
