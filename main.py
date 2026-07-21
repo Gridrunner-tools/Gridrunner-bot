@@ -2302,7 +2302,7 @@ function refresh() {
       var trailActive = d.grid_trailing_active || false;
       var trailHigh = d.grid_trailing_high || 0;
       var trailingPct = 0.5;
-      document.getElementById("gdt-status").textContent = trailActive ? "\uD83D\uDD34 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
+      document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
       var html = '<div style="margin-top:12px">';
       var minP = gl[0], maxP = gl[gl.length-1], range = maxP - minP;
       var curPct = range > 0 ? ((curPrice - minP) / range * 100) : 50;
@@ -2342,7 +2342,7 @@ function refresh() {
         var distToSell = curPrice - sellTrigger;
         html += '<div style="margin-top:12px;padding:10px 12px;background:#ffd43b08;border:1px solid #ffd43b33;border-radius:6px">';
         html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-        html += '<span>\uD83C\uDFAF</span><span style="font-weight:600;color:#ffd43b">Take-profit triggered \u2014 waiting for pullback</span></div>';
+        html += '<span>🎯</span><span style="font-weight:600;color:#ffd43b">Take-profit triggered \u2014 waiting for pullback</span></div>';
         html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">';
         html += '<div><span style="color:var(--dim);font-size:10px">Peak</span><div style="font-weight:600;font-family:monospace;color:#ffd43b">$' + trailHigh.toFixed(2) + '</div></div>';
         html += '<div><span style="color:var(--dim);font-size:10px">Sell Trigger</span><div style="font-weight:600;font-family:monospace;color:#ff6b6b">$' + sellTrigger.toFixed(2) + '</div></div>';
