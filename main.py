@@ -1989,7 +1989,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Scroll to show the latest candle (don't setVisibleRange — that overrides barSpacing)
+  // Force barSpacing after setData (setData resets the time scale)
+  chart.applyOptions({ timeScale: { barSpacing: 5 } });
   chart.timeScale().scrollToPosition(candles.length, false);
 
   // Grid overlay
