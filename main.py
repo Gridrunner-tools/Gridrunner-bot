@@ -1999,8 +1999,9 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Fit candles to fill the window — thin out as data grows, scrolls when full
-  chart.timeScale().fitContent();
+  // Fixed 3px candles — scroll left as time passes, scroll back up to 24h
+  chart.applyOptions({ timeScale: { barSpacing: 3 } });
+  chart.timeScale().scrollToPosition(candles.length, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
