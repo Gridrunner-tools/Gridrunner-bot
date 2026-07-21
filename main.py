@@ -78,6 +78,10 @@ state = {
     "price_history": [],
     "grid_levels":   [],
     "grid_buy_zone": 0.0,
+    "grid_filled":   {},
+    "grid_trailing_active": False,
+    "grid_trailing_high": 0.0,
+    "grid_mid_idx": 0,
 }
 
 def log(msg, level="INFO"):
@@ -1425,6 +1429,10 @@ def run_grid():
     dip_occurred = False
     state["grid_levels"] = grids[:]
     state["grid_buy_zone"] = grids[mid_idx]
+    state["grid_mid_idx"] = mid_idx
+    state["grid_filled"] = filled
+    state["grid_trailing_active"] = trailing_sell_active
+    state["grid_trailing_high"] = trailing_high
     log("Grid levels: "+str(grids)+" buy_zone=<="+str(grids[mid_idx])+" trailing="+str(trailing_pct)+"%")
     while state["running"] and state["strategy"]=="grid":
         price = get_price(state["pair"])
@@ -1451,6 +1459,10 @@ def run_grid():
             dip_occurred = False
             state["grid_levels"] = grids[:]
             state["grid_buy_zone"] = grids[mid_idx]
+            state["grid_mid_idx"] = mid_idx
+            state["grid_filled"] = filled
+            state["grid_trailing_active"] = trailing_sell_active
+            state["grid_trailing_high"] = trailing_high
             log("Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
             # Don't clear filled positions — they'll be sold on next uptick
 
@@ -1486,6 +1498,8 @@ def run_grid():
                                 # Reset sell trailing too, new position opened
                                 trailing_sell_active = False
                                 trailing_high = 0.0
+                                state["grid_trailing_active"] = trailing_sell_active
+                                state["grid_trailing_high"] = trailing_high
                 else:
                     # Reset buy trailing when leaving buy zone
                     if trailing_buy_active:
@@ -1498,10 +1512,13 @@ def run_grid():
                     if not trailing_sell_active and filled:
                         trailing_sell_active = True
                         trailing_high = price
+                        state["grid_trailing_active"] = trailing_sell_active
+                        state["grid_trailing_high"] = trailing_high
                         log("Trailing sell active at $"+str(price))
                     elif trailing_sell_active:
                         if price > trailing_high:
                             trailing_high = price
+                            state["grid_trailing_high"] = trailing_high
                             log("Trailing high updated to $"+str(price))
                     # Sell when price drops 1% below peak
                     if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
@@ -1722,7 +1739,16 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
   </div>
 
-  <div id="chart-container"></div>
+  <div style="display:flex;gap:16px;align-items:stretch">
+    <div id="chart-container" style="flex:1;min-width:0"></div>
+    <div class="card" id="grid-details-card" style="display:none;width:340px;flex-shrink:0;height:350px;overflow-y:auto">
+      <div class="ct" style="display:flex;align-items:center;gap:8px">
+        Grid Details
+        <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
+      </div>
+      <div id="grid-details-body"></div>
+    </div>
+  </div>
 
   <div class="summary-cards" id="summary-cards">
     <div class="summary-card"><div class="label">Win Rate</div><div class="value" id="sm-winrate">0%</div></div>
@@ -1843,6 +1869,8 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       </table>
     </div>
   </div>
+
+
 
   <div class="card">
     <div class="ct">Live Log</div>
