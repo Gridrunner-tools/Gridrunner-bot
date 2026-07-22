@@ -103,7 +103,7 @@ def send_telegram(msg):
             json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
             timeout=5)
     except Exception as e:
-        pass  # silent failure — don't block trading
+        log("Telegram send failed: "+str(e), "WARN") — don't block trading
 
 def log(msg, level="INFO"):
     ts = time.strftime("%H:%M:%S")
