@@ -127,11 +127,12 @@ KRAKEN_PAIRS = {
     "SOL/USDT": "SOLUSD", "ARB/USDT": "ARBUSD", "MATIC/USDT": "MATICUSD",
     "AVAX/USDT": "AVAXUSD", "LINK/USDT": "LINKUSD", "UNI/USDT": "UNIUSD",
     "BTC/USDC": "XBTUSD", "ETH/USDC": "ETHUSD", "SOL/USDC": "SOLUSD",
+    "BNB/USDC": "BNBUSD", "MATIC/USDC": "MATICUSD",
 }
 
 def get_price_kraken(pair):
     try:
-        kraken_pair = KRAKEN_PAIRS.get(pair, pair.replace("/","").replace("USDT","USD"))
+        kraken_pair = KRAKEN_PAIRS.get(pair, pair.replace("/","").replace("USDT","USD").replace("USDC","USD"))
         r = requests.get("https://api.kraken.com/0/public/Ticker", params={"pair": kraken_pair}, timeout=5)
         data = r.json()
         if not data.get("error"):
