@@ -703,9 +703,9 @@ def start_background_loops():
 
 # ── Solana ────────────────────────────────────────────────────────────────────
 SOL_RPC = "https://api.mainnet-beta.solana.com"
-# Jupiter API — use lite-api.jup.ag (new endpoint, requires API key after June 2026)
-# Set JUPITER_API_KEY in Render env vars from dev.jup.ag
-JUPITER_API     = "https://quote-api.jup.ag/v6"
+# Jupiter API — api.jup.ag/swap/v1 (current as of 2026)
+# Set JUPITER_API_KEY in Render env vars if using paid tier
+JUPITER_API     = "https://api.jup.ag/swap/v1"
 JUPITER_API_KEY = os.environ.get("JUPITER_API_KEY", "")
 
 # Solana token mints
@@ -1099,7 +1099,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
     # Fallback: Jupiter
     log("Trying Jupiter swap...", "INFO")
     try:
-        r = requests.get("https://quote-api.jup.ag/v6/quote", params={
+        r = requests.get("https://api.jup.ag/swap/v1/quote", params={
             "inputMint": from_mint,
             "outputMint": to_mint,
             "amount": str(lamports),
@@ -1160,7 +1160,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
             "dynamicComputeUnitLimit": True,
             "prioritizationFeeLamports": 10000,
         }
-        r = requests.post("https://quote-api.jup.ag/v6/swap",
+        r = requests.post("https://api.jup.ag/swap/v1/swap",
             json=swap_payload, timeout=15)
         swap_data = r.json()
         if not swap_data.get("swapTransaction"):
