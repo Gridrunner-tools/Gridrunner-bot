@@ -1387,7 +1387,7 @@ def record_trade(side, price, amount, pnl=None):
     if len(state["trades"]) > 500:
         state["trades"] = state["trades"][-500:]
     state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
-    state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t["pnl"],"via":t.get("router","")} for t in state["trades"][-50:]]
+    state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router","")} for t in state["trades"][-50:]]
 
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
