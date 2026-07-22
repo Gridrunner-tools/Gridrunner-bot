@@ -1,0 +1,7 @@
+title = "LeverBot Gitleaks config"
+
+[allowlist]
+  description = "Global allowlist"
+  paths = [
+    '''.env.example''',
+  ]
