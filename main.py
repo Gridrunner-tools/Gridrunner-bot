@@ -1120,7 +1120,7 @@ def scan_arbitrage():
     chain = state.get("chain", "ethereum")
 
     if chain == "solana":
-        sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC"]
+        sol_pairs = ["SOL/USDC", "JUP/USDC", "ETH/USDC", "SPCX/USDC", "BONK/USDC", "WIF/USDC"]
 
         TOKEN_MINTS = {
             "SOL":  "So11111111111111111111111111111111111111112",
@@ -2024,6 +2024,8 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
           <option value="ETH/USDC">ETH/USDC</option>
           <option value="JUP/USDC">JUP/USDC</option>
           <option value="WIF/USDC">WIF/USDC</option>
+          <option value="BONK/USDC">BONK/USDC</option>
+          <option value="SPCX/USDC">SPCX/USDC</option>
         </optgroup>
       </select>
       <button class="btn" onclick="switchPair()" title="One-click pair switch" style="padding:9px 12px">&#128260;</button>
