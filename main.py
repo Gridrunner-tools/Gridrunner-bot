@@ -44,6 +44,9 @@ cfg = {
     "tg_chat_id":      os.environ.get("TG_CHAT_ID", ""),
 }
 
+import threading
+_state_lock = threading.Lock()
+
 # ── Bot State ─────────────────────────────────────────────────────────────────
 state = {
     "running":       False,
@@ -117,9 +120,10 @@ def log(msg, level="INFO"):
     ts = time.strftime("%H:%M:%S")
     entry = "["+ts+"] ["+level+"] "+msg
     print(entry)
-    state["log"].insert(0, entry)
-    if len(state["log"]) > 150:
-        state["log"] = state["log"][:150]
+    with _state_lock:
+        state["log"].insert(0, entry)
+        if len(state["log"]) > 150:
+            state["log"] = state["log"][:150]
 
 # ── Price Feeds (Kraken — no API key needed) ──────────────────────────────────
 KRAKEN_PAIRS = {
@@ -1421,11 +1425,12 @@ def place_order(pair, side, amount):
 
 def record_trade(side, price, amount, pnl=None):
     trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl,"pair":state.get("pair","")}
-    state["trades"].append(trade)
-    if len(state["trades"]) > 500:
-        state["trades"] = state["trades"][-500:]
-    state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
-    state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair", state.get("pair",""))} for t in state["trades"][-50:]]
+    with _state_lock:
+        state["trades"].append(trade)
+        if len(state["trades"]) > 500:
+            state["trades"] = state["trades"][-500:]
+        state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
+        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair", state.get("pair",""))} for t in state["trades"][-50:]]
 
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
@@ -2971,7 +2976,10 @@ class Handler(BaseHTTPRequestHandler):
                         cfg[key] = str(data[key]).lower() in ("true","1","yes")
                     elif key in float_keys:
                         try:
-                            cfg[key] = float(data[key])
+                            val = float(data[key])
+                            if key == "partial_sell_pct":
+                                val = max(1, min(99, val))
+                            cfg[key] = val
                         except (ValueError, TypeError) as e:
                             log("Config "+key+" parse error: "+str(e), "WARN")
                     else:
