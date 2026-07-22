@@ -1537,6 +1537,78 @@ def record_trade(side, price, amount, pnl=None):
         state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
         state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair", state.get("pair",""))} for t in state["trades"][-50:]]
 
+
+# ── Technical Indicators (stdlib only) ────────────────────────────────────
+def calc_ema(prices, period):
+    """Exponential Moving Average. Returns list of EMA values, same length as input."""
+    if len(prices) < period:
+        return [None] * len(prices)
+    ema = [None] * (period - 1)
+    sma = sum(prices[:period]) / period
+    ema.append(sma)
+    multiplier = 2 / (period + 1)
+    for i in range(period, len(prices)):
+        ema.append((prices[i] - ema[-1]) * multiplier + ema[-1])
+    return ema
+
+def calc_rsi(prices, period=14):
+    """Relative Strength Index using Wilder's smoothing. Returns list of RSI values."""
+    if len(prices) < period + 1:
+        return [None] * len(prices)
+    deltas = [prices[i] - prices[i-1] for i in range(1, len(prices))]
+    gains = [d if d > 0 else 0 for d in deltas]
+    losses = [-d if d < 0 else 0 for d in deltas]
+    rsi = [None] * (period + 1)  # first period+1 are None (need period deltas + 1 extra)
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    for i in range(period, len(deltas)):
+        if avg_loss == 0:
+            rsi.append(100.0)
+        else:
+            rs = avg_gain / avg_loss
+            rsi.append(100.0 - (100.0 / (1.0 + rs)))
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+    return rsi
+
+def calc_bbands(prices, period=20, stddev=2.0):
+    """Bollinger Bands. Returns (middle, upper, lower) — each a same-length list."""
+    if len(prices) < period:
+        return [None]*len(prices), [None]*len(prices), [None]*len(prices)
+    middle, upper, lower = [], [], []
+    for i in range(len(prices)):
+        if i < period - 1:
+            middle.append(None); upper.append(None); lower.append(None)
+        else:
+            window = prices[i-period+1:i+1]
+            m = sum(window) / period
+            variance = sum((x - m)**2 for x in window) / period
+            sd = variance ** 0.5
+            middle.append(m)
+            upper.append(m + stddev * sd)
+            lower.append(m - stddev * sd)
+    return middle, upper, lower
+
+def get_price_history(pair, lookback=100):
+    """Fetch recent candle closes for the pair. Returns list of prices (most recent last)."""
+    prices = []
+    for source in ["raydium", "kraken", "coingecko"]:
+        try:
+            p = _fetch_price(source, pair)
+            if p and p > 0:
+                prices.append(p)
+                break
+        except Exception:
+            pass
+    # Build a simple price buffer from live ticks
+    buf = state.get("_price_buf_" + pair, [])
+    if prices:
+        buf.append(prices[0])
+    if len(buf) > lookback:
+        buf = buf[-lookback:]
+    state["_price_buf_" + pair] = buf
+    return buf
+
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
     buy_prices = []
@@ -1937,7 +2009,153 @@ def run_arbitrage():
                 break  # Stop after first executable — wait for next scan cycle
         time.sleep(30)
 
-STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage}
+
+def run_rsi_ema():
+    """RSI + EMA crossover spot strategy. Buys on oversold+crossover, sells on overbought or reverse crossover."""
+    pair = state["pair"]
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
+    log("[RSI-EMA] Started on " + pair + " (" + mode + ")")
+    rsi_period = cfg.get("rsi_period", 14)
+    ema_fast = cfg.get("ema_fast", 9)
+    ema_slow = cfg.get("ema_slow", 21)
+    rsi_oversold = cfg.get("rsi_oversold", 30)
+    rsi_overbought = cfg.get("rsi_overbought", 70)
+    order_size = cfg.get("order_size_usdc", 50)
+    has_position = False
+    entry_price = 0
+    prev_fast = None
+    prev_slow = None
+    while state["running"] and state["strategy"] == "rsi_ema":
+        while state["paused"]: time.sleep(1)
+        try:
+            price = get_price(pair)
+            if price <= 0: time.sleep(30); continue
+            # Build price buffer
+            buf = get_price_history(pair, 100)
+            if len(buf) < max(rsi_period, ema_slow) + 5:
+                time.sleep(30); continue
+            rsi_vals = calc_rsi(buf, rsi_period)
+            ema_f = calc_ema(buf, ema_fast)
+            ema_s = calc_ema(buf, ema_slow)
+            rsi_now = rsi_vals[-1]
+            f_now, s_now = ema_f[-1], ema_s[-1]
+            f_prev, s_prev = ema_f[-2] if len(ema_f) > 1 else None, ema_s[-2] if len(ema_s) > 1 else None
+            crossover_up = f_prev and s_prev and f_prev <= s_prev and f_now > s_now
+            crossover_down = f_prev and s_prev and f_prev >= s_prev and f_now < s_now
+            # Buy signal
+            if not has_position and rsi_now and rsi_now < rsi_oversold and crossover_up:
+                amt = round(order_size / price, 6)
+                if place_order(pair, "buy", amt):
+                    state["positions"].append({"price": price, "amount": amt, "strategy": "RSI-EMA"})
+                    record_trade("RSI-BUY", price, amt)
+                    has_position = True
+                    entry_price = price
+                    log("[RSI-EMA] BUY " + pair + " @ $" + str(round(price, 2)) + " | RSI=" + str(round(rsi_now, 1)) + " crossover")
+            # Sell signals
+            elif has_position:
+                sell_signal = False
+                reason = ""
+                if rsi_now and rsi_now > rsi_overbought:
+                    sell_signal = True
+                    reason = "RSI overbought " + str(round(rsi_now, 1))
+                elif crossover_down:
+                    sell_signal = True
+                    reason = "EMA crossover down"
+                else:
+                    # Trailing sell
+                    pnl_pct = (price - entry_price) / entry_price * 100
+                    trail_pct = cfg.get("trailing_pct", 1.5)
+                    if pnl_pct >= 1.0:
+                        peak = state.get("_rsi_peak_" + pair, entry_price)
+                        if price > peak:
+                            state["_rsi_peak_" + pair] = price
+                            peak = price
+                        if (peak - price) / peak * 100 >= trail_pct:
+                            sell_signal = True
+                            reason = "Trailing stop " + str(round(trail_pct, 1)) + "%"
+                if sell_signal:
+                    amt = state["positions"][-1]["amount"] if state["positions"] else round(order_size / entry_price, 6)
+                    if place_order(pair, "sell", amt):
+                        pnl = (price - entry_price) * amt
+                        record_trade("RSI-SELL", price, amt, pnl)
+                        log("[RSI-EMA] SELL " + pair + " @ $" + str(round(price, 2)) + " | PnL $" + str(round(pnl, 2)) + " | " + reason)
+                        has_position = False
+                        entry_price = 0
+        except Exception as e:
+            log("[RSI-EMA] Error: " + str(e), "ERROR")
+        time.sleep(30)
+
+def run_bbands():
+    """Bollinger Bands spot strategy. Buys at lower band, sells at upper band."""
+    pair = state["pair"]
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
+    log("[BBANDS] Started on " + pair + " (" + mode + ")")
+    period = cfg.get("bbands_period", 20)
+    stddev = cfg.get("bbands_stddev", 2.0)
+    order_size = cfg.get("order_size_usdc", 50)
+    has_position = False
+    entry_price = 0
+    while state["running"] and state["strategy"] == "bbands":
+        while state["paused"]: time.sleep(1)
+        try:
+            price = get_price(pair)
+            if price <= 0: time.sleep(30); continue
+            buf = get_price_history(pair, 100)
+            if len(buf) < period + 5:
+                time.sleep(30); continue
+            middle, upper, lower = calc_bbands(buf, period, stddev)
+            lower_now = lower[-1]
+            upper_now = upper[-1]
+            if lower_now is None or upper_now is None:
+                time.sleep(30); continue
+            # Buy at lower band
+            if not has_position and price <= lower_now:
+                amt = round(order_size / price, 6)
+                if place_order(pair, "buy", amt):
+                    state["positions"].append({"price": price, "amount": amt, "strategy": "Bollinger"})
+                    record_trade("BB-BUY", price, amt)
+                    has_position = True
+                    entry_price = price
+                    log("[BBANDS] BUY " + pair + " @ $" + str(round(price, 2)) + " | lower band $" + str(round(lower_now, 2)))
+            # Sell at upper band or trailing
+            elif has_position:
+                pnl_pct = (price - entry_price) / entry_price * 100
+                trail_pct = cfg.get("trailing_pct", 1.5)
+                sell_signal = False
+                reason = ""
+                if price >= upper_now:
+                    sell_signal = True
+                    reason = "Upper band $" + str(round(upper_now, 2))
+                elif pnl_pct >= 1.0:
+                    peak = state.get("_bb_peak_" + pair, entry_price)
+                    if price > peak:
+                        state["_bb_peak_" + pair] = price
+                        peak = price
+                    if (peak - price) / peak * 100 >= trail_pct:
+                        sell_signal = True
+                        reason = "Trailing stop " + str(round(trail_pct, 1)) + "%"
+                if sell_signal:
+                    amt = state["positions"][-1]["amount"] if state["positions"] else round(order_size / entry_price, 6)
+                    if place_order(pair, "sell", amt):
+                        pnl = (price - entry_price) * amt
+                        record_trade("BB-SELL", price, amt, pnl)
+                        log("[BBANDS] SELL " + pair + " @ $" + str(round(price, 2)) + " | PnL $" + str(round(pnl, 2)) + " | " + reason)
+                        has_position = False
+                        entry_price = 0
+        except Exception as e:
+            log("[BBANDS] Error: " + str(e), "ERROR")
+        time.sleep(30)
+
+def run_webhook():
+    """TradingView webhook receiver. Waits for external buy/sell signals via /webhook endpoint."""
+    pair = state["pair"]
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
+    log("[WEBHOOK] Active on " + pair + " (" + mode + ") — waiting for TradingView alerts")
+    while state["running"] and state["strategy"] == "webhook":
+        while state["paused"]: time.sleep(1)
+        time.sleep(5)  # Just keep alive; trades come in via webhook handler
+
+STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook}
 
 def start_bot(strategy, pair, mode, exchange=None, chain=None):
     if state["running"]:
@@ -2098,6 +2316,9 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <option value="">— Select Strategy —</option>
       <option value="dca">DCA — Dollar Cost Average</option>
       <option value="grid">Grid Trading</option>
+      <option value="rsi_ema">RSI + EMA Crossover</option>
+      <option value="bbands">Bollinger Bands</option>
+      <option value="webhook">TradingView Webhook</option>
       <option value="scalp">Scalping</option>
       <option value="copy">Copy Trading</option>
       <option value="arb">Arbitrage</option>
