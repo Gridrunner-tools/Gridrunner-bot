@@ -91,6 +91,12 @@ state = {
     "partial_positions": {},
     "active_pairs":   [],
     "grid_pairs":     {},
+    "daily_pnl":      0.0,
+    "peak_balance":   0.0,
+    "dip_active":     False,
+    "dip_24h_high":   0.0,
+    "last_midnight":  0,
+    "emergency_stop":  False,
 }
 
 def send_telegram(msg):
@@ -1558,7 +1564,7 @@ def run_grid():
                     if trailing_buy_active and i not in filled and size > 1:
                         should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
                         if should_buy:
-                            amt = round(size/price,6)
+                            amt = round(size*dip_mult/price,6)
                             if place_order(state["pair"],"buy",amt):
                                 filled[i]={"price":price,"amount":amt}
                                 state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
@@ -1581,6 +1587,20 @@ def run_grid():
                         state["grid_trailing_active"] = trailing_sell_active
                         state["grid_trailing_high"] = trailing_high
 
+                # ── Stop-loss check: immediate sell if position drops too far ──
+                stop_pct = cfg.get("grid_stop_loss_pct", 8)
+                for sl_buy_idx in sorted(list(filled.keys())):
+                    sl_bp = filled[sl_buy_idx]["price"]
+                    sl_loss = (price - sl_bp) / sl_bp * 100
+                    if sl_loss < -stop_pct:
+                        sl_amt = filled[sl_buy_idx]["amount"]
+                        if place_order(pair,"sell",sl_amt):
+                            sl_pnl = (price - sl_bp) * sl_amt
+                            state["pnl"] += sl_pnl
+                            record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2))
+                            log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
+                            del filled[sl_buy_idx]
+                            state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
                 # ── SELL ZONE: trailing take profit ──
                 if not is_buy_zone:
                     if not trailing_sell_active and filled:
@@ -1627,6 +1647,7 @@ def run_grid():
                                 if place_order(pair,"sell",sell_amt):
                                     pnl=(price-buy_price)*sell_amt
                                     state["pnl"]+=pnl
+                                    state["daily_pnl"] = state.get("daily_pnl",0)+pnl
                                     if cfg.get("auto_compound", True) and pnl > 0:
                                         state["compound_profit"] += pnl
                                     tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
@@ -1657,6 +1678,32 @@ def run_grid():
                         log("["+pair+"] Trailing sell reset — price back in buy zone")
                         trailing_sell_active = False
                         trailing_high = 0.0
+            # ── Daily loss limit check ──
+            now = int(time.time())
+            today_midnight = now - (now % 86400)
+            if state.get("last_midnight",0) < today_midnight:
+                state["daily_pnl"] = 0.0
+                state["last_midnight"] = today_midnight
+            # Track peak balance
+            b = get_balance()
+            if b > state.get("peak_balance", 0):
+                state["peak_balance"] = b
+            # Drawdown check
+            dd_pct = cfg.get("max_drawdown_pct", 20)
+            pk = state.get("peak_balance", 0)
+            if pk > 0 and b < pk * (1 - dd_pct/100):
+                log("DRAWDOWN STOP: balance $"+str(round(b,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
+                state["running"] = False
+                state["strategy"] = None
+                state["emergency_stop"] = True
+                return
+            dl = cfg.get("daily_loss_limit", 200)
+            if state["daily_pnl"] < -dl:
+                log("DAILY LOSS LIMIT: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl), "WARN")
+                state["running"] = False
+                state["strategy"] = None
+                state["emergency_stop"] = True
+                return
             # Save per-pair state back
             gs.update({
                 "grids": grids, "mid_idx": mid_idx, "filled": filled,
@@ -1850,6 +1897,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div style="display:flex;gap:6px">
       <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
       <button class="btn" onclick="exportCSV()" style="font-size:11px">&#11015; CSV</button>
+      <button class="btn" onclick="killSwitch()" title="Emergency close all positions" style="font-size:11px;color:var(--red);border-color:var(--red)44">&#128721; Kill</button>
       <button class="btn" onclick="runBacktest()" style="font-size:11px">📊 Backtest</button>
     </div>
   </div>
@@ -2347,6 +2395,13 @@ function pnlHtml(v) {
   return "<span class='" + cls + "'>" + (v >= 0 ? "+" : "") + "$" + Math.abs(v).toFixed(2) + "</span>";
 }
 
+function killSwitch() {
+  if (!confirm("🛑 KILL SWITCH: Close ALL positions on ALL pairs? This cannot be undone.")) return;
+  fetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
+    showToast("KILL: "+d.closed+" positions closed, $"+d.total_value.toFixed(2),"error");
+  }).catch(function(){showToast("Kill failed","error")});
+}
+
 function runBacktest() {
   var pair = document.getElementById("pair-select").value;
   var strategy = document.getElementById("strat-select").value;
@@ -2659,6 +2714,57 @@ class Handler(BaseHTTPRequestHandler):
                 "trades": trades[-20:]
             }
             self.respond(200,"application/json",json.dumps(result).encode())
+        elif path=="/webhook":
+            if not self._auth_or_401(): return
+            try:
+                data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
+            except:
+                self.respond(400,"application/json",json.dumps({"error":"Invalid JSON"}).encode()); return
+            signal = data.get("signal","")
+            wpair = data.get("pair",state.get("pair","SOL/USDC"))
+            wprice = data.get("price", 0.0)
+            if signal == "buy" and wprice > 0:
+                # Force buy at signaled level
+                gs = state["grid_pairs"].get(wpair, {})
+                grids = gs.get("grids", [])
+                filled = gs.get("filled", {})
+                mid_idx = gs.get("mid_idx", len(grids)//2) if grids else 2
+                if not grids:
+                    levels=5; spread_val=cfg.get("base_spread",0.05)
+                    grids = [round(wprice*(1-spread_val)+i*(wprice*spread_val*2/levels),4) for i in range(levels+1)]
+                    mid_idx = len(grids)//2
+                    state["grid_pairs"][wpair] = {"grids":grids,"mid_idx":mid_idx,"filled":{}}
+                    if wpair not in state.get("active_pairs",[]): state["active_pairs"].append(wpair)
+                bal = get_balance()
+                sz = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])/5
+                amt = round(sz/wprice,6)
+                if place_order(wpair,"buy",amt):
+                    for i,g in enumerate(grids[:-1]):
+                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                            filled[i] = {"price":wprice,"amount":amt}
+                            state["grid_pairs"][wpair]["filled"] = filled
+                            record_trade("WEBHOOK-BUY",wprice,amt)
+                            log("[WEBHOOK] Forced buy "+wpair+" @ $"+str(round(wprice,2)))
+                            break
+                self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair}).encode())
+            elif signal == "sell":
+                gs = state["grid_pairs"].get(wpair, {})
+                filled = gs.get("filled", {})
+                sold = 0
+                for bi in sorted(filled.keys()):
+                    amt = filled[bi]["amount"]
+                    bp = filled[bi]["price"]
+                    sp = wprice if wprice > 0 else get_price(wpair)
+                    if place_order(wpair,"sell",amt):
+                        pnl = (sp - bp) * amt
+                        state["pnl"] += pnl
+                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2))
+                        log("[WEBHOOK] Forced sell "+wpair+" @ $"+str(round(sp,2)))
+                        sold += 1
+                state["grid_pairs"][wpair]["filled"] = {}
+                self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair,"closed":sold}).encode())
+            else:
+                self.respond(400,"application/json",json.dumps({"error":"signal must be buy or sell"}).encode())
         elif path=="/debug_orca":
             if not self._auth_or_401(): return
             try:
