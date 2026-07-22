@@ -1426,14 +1426,14 @@ def run_dca():
             loss = (avg-price)/avg*100
             total = sum(p["amount"] for p in state["positions"])
             if gain >= cfg["take_profit"]:
-                if place_order(pair,"sell",total):
+                if place_order(state["pair"],"sell",total):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
                     record_trade("SELL",price,total,round(pnl,2))
                     log("DCA SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
                     buy_prices.clear(); state["positions"].clear()
             elif loss >= cfg["stop_loss"]:
-                if place_order(pair,"sell",total):
+                if place_order(state["pair"],"sell",total):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
                     state["daily_loss"] += abs(pnl)
@@ -1444,7 +1444,7 @@ def run_dca():
                 size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
                 if size > 1:
                     amt = round(size/price,6)
-                    if place_order(pair,"buy",amt):
+                    if place_order(state["pair"],"buy",amt):
                         buy_prices.append(price)
                         state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                         record_trade("DCA-BUY",price,amt)
@@ -1558,245 +1558,245 @@ def run_grid():
             bal = get_balance()
             effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
             size = min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels
-            for i,g in enumerate(grids[:-1]):
-                ng = grids[i+1]
-                if g <= price < ng:
-                    is_buy_zone = i < mid_idx
-                    # ── BUY ZONE: trailing buy (buy on bounce) ──
-                    if is_buy_zone:
-                        # Track the low
-                        if not trailing_buy_active and i not in filled:
-                            trailing_buy_active = True
+        for i,g in enumerate(grids[:-1]):
+            ng = grids[i+1]
+            if g <= price < ng:
+                is_buy_zone = i < mid_idx
+                # ── BUY ZONE: trailing buy (buy on bounce) ──
+                if is_buy_zone:
+                    # Track the low
+                    if not trailing_buy_active and i not in filled:
+                        trailing_buy_active = True
+                        trailing_low = price
+                        dip_occurred = False
+                    elif trailing_buy_active:
+                        if price < trailing_low:
                             trailing_low = price
-                            dip_occurred = False
-                        elif trailing_buy_active:
-                            if price < trailing_low:
-                                trailing_low = price
-                                dip_occurred = True
-                        dip_mult = 1.5 if state.get("dip_active") else 1.0
-                        # Buy: immediately if no dip, or on 0.5% bounce if dipped
-                        if trailing_buy_active and i not in filled and size > 1:
-                            should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
-                            if should_buy:
-                                amt = round(size*dip_mult/price,6)
-                                if place_order(pair,"buy",amt):
-                                    filled[i]={"price":price,"amount":amt}
-                                    state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
-                                    record_trade("GRID-BUY",price,amt)
-                                    log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
-                                    send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
-                                    trailing_buy_active = False
-                                    trailing_low = 0.0
-                                    # Reset sell trailing too, new position opened
-                                    trailing_sell_active = False
-                                    trailing_high = 0.0
-                                    state["grid_trailing_active"] = trailing_sell_active
-                                    state["grid_trailing_high"] = trailing_high
-                    else:
-                        # Reset buy trailing when leaving buy zone
-                        if trailing_buy_active:
-                            trailing_buy_active = False
-                            trailing_low = 0.0
-                            dip_occurred = False
-                            state["grid_trailing_active"] = trailing_sell_active
-                            state["grid_trailing_high"] = trailing_high
-
-                    # ── Stop-loss check: immediate sell if position drops too far ──
-                    stop_pct = cfg.get("grid_stop_loss_pct", 8)
-                    for sl_buy_idx in sorted(list(filled.keys())):
-                        sl_bp = filled[sl_buy_idx]["price"]
-                        sl_loss = (price - sl_bp) / sl_bp * 100
-                        if sl_loss < -stop_pct:
-                            sl_amt = filled[sl_buy_idx]["amount"]
-                            if place_order(pair,"sell",sl_amt):
-                                sl_pnl = (price - sl_bp) * sl_amt
-                                state["pnl"] += sl_pnl
-                                record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2))
-                                log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
-                                del filled[sl_buy_idx]
-                                state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
-                    # ── SELL ZONE: trailing take profit ──
-                    if not is_buy_zone:
-                        if not trailing_sell_active and filled:
-                            trailing_sell_active = True
-                            trailing_high = price
-                            state["grid_trailing_active"] = trailing_sell_active
-                            state["grid_trailing_high"] = trailing_high
-                            log("["+pair+"] Trailing sell active at $"+str(price))
-                        elif trailing_sell_active:
-                            if price > trailing_high:
-                                trailing_high = price
+                            dip_occurred = True
+                    dip_mult = 1.5 if state.get("dip_active") else 1.0
+                    # Buy: immediately if no dip, or on 0.5% bounce if dipped
+                    if trailing_buy_active and i not in filled and size > 1:
+                        should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                        if should_buy:
+                            amt = round(size*dip_mult/price,6)
+                            if place_order(state["pair"],"buy",amt):
+                                filled[i]={"price":price,"amount":amt}
+                                state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
+                                record_trade("GRID-BUY",price,amt)
+                                log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
+                                send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
+                                trailing_buy_active = False
+                                trailing_low = 0.0
+                                # Reset sell trailing too, new position opened
+                                trailing_sell_active = False
+                                trailing_high = 0.0
+                                state["grid_trailing_active"] = trailing_sell_active
                                 state["grid_trailing_high"] = trailing_high
-                                log("["+pair+"] Trailing high updated to $"+str(price))
-                        # Sell when price drops trailing_pct% below peak
-                        if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
-                            for buy_idx in sorted(filled.keys()):
-                                if buy_idx < i:
-                                    amt = filled[buy_idx]["amount"]
-                                    buy_price = filled[buy_idx]["price"]
-                                    partial_pct = cfg.get("partial_sell_pct", 50)
-                                    # Check if this position still has a partial remainder
-                                    partial_key = str(buy_idx)
-                                    is_partial_sell = cfg.get("partial_sell_pct", 50) < 100
-                                    sell_amt = amt
-                                    # ── Partial sell logic ──
-                                    if is_partial_sell and partial_key not in state.get("partial_positions", {}):
-                                        # First sell: only sell partial_pct%
-                                        sell_amt = amt * partial_pct / 100
-                                        keep_amt = amt - sell_amt
-                                        state["partial_positions"][partial_key] = {
-                                            "amount": keep_amt, "buy_price": buy_price,
-                                            "orig_amount": amt, "price": price
-                                        }
-                                        # Update filled entry to reflect kept amount
-                                        filled[buy_idx]["amount"] = keep_amt
-                                        log("PARTIAL SELL: sold "+str(round(sell_amt,6))+" ("
-                                            +str(int(partial_pct))+"%) @ $"+str(round(price,2))
-                                            +", keeping "+str(round(keep_amt,6))+" for wider trailing")
-                                    elif partial_key in state.get("partial_positions", {}):
-                                        # Second sell: sell the remainder
-                                        sell_amt = amt  # sell everything left
-                                        if partial_key in state["partial_positions"]:
-                                            del state["partial_positions"][partial_key]
-                                    if place_order(pair,"sell",sell_amt):
-                                        pnl=(price-buy_price)*sell_amt
-                                        state["pnl"]+=pnl
-                                        state["daily_pnl"] = state.get("daily_pnl",0)+pnl
-                                        if cfg.get("auto_compound", True) and pnl > 0:
-                                            state["compound_profit"] += pnl
-                                        tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
-                                        record_trade(tag,price,sell_amt,round(pnl,2))
-                                        log("SELL level "+str(buy_idx)+" @ $"+str(round(price,2))+" (peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2))+")")
-                                        log("TRADE SUMMARY: bought $"+str(round(buy_price,2))+" sold $"+str(round(price,2))+" peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2)))
-                                        send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
-                                        if is_partial_sell and partial_key in state.get("partial_positions",{}):
-                                            # Don't delete the position yet — still holding remainder
-                                            trailing_sell_active = False
-                                            trailing_high = 0.0
-                                            state["grid_trailing_active"] = False
-                                            state["grid_trailing_high"] = 0.0
-                                            state["grid_filled"] = {k: v for k, v in filled.items()}
-                                            break
-                                        else:
-                                            del filled[buy_idx]
-                                            state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
-                                            trailing_sell_active = False
-                                            trailing_high = 0.0
-                                            state["grid_trailing_active"] = False
-                                            state["grid_trailing_high"] = 0.0
-                                            state["grid_filled"] = {k: v for k, v in filled.items()}
-                                            break
-                    else:
-                        # Price back in buy zone — reset sell trailing
-                        if trailing_sell_active:
-                            log("["+pair+"] Trailing sell reset — price back in buy zone")
-                            trailing_sell_active = False
-                            trailing_high = 0.0
-                # ── Daily loss limit check ──
-                now = int(time.time())
-                today_midnight = now - (now % 86400)
-                if state.get("last_midnight",0) < today_midnight:
-                    state["daily_pnl"] = 0.0
-                    state["last_midnight"] = today_midnight
-                # Track peak balance
-                b = get_balance()
-                if b > state.get("peak_balance", 0):
-                    state["peak_balance"] = b
-                # Drawdown check
-                dd_pct = cfg.get("max_drawdown_pct", 20)
-                pk = state.get("peak_balance", 0)
-                if pk > 0 and b < pk * (1 - dd_pct/100):
-                    log("DRAWDOWN STOP: balance $"+str(round(b,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
-                    state["running"] = False
-                    state["strategy"] = None
-                    state["emergency_stop"] = True
-                    return
-                dl = cfg.get("daily_loss_limit", 200)
-                if state["daily_pnl"] < -dl:
-                    log("DAILY LOSS LIMIT: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl), "WARN")
-                    state["running"] = False
-                    state["strategy"] = None
-                    state["emergency_stop"] = True
-                    return
-                # Save per-pair state back
-                gs.update({
-                    "grids": grids, "mid_idx": mid_idx, "filled": filled,
-                    "trailing_high": trailing_high, "trailing_sell_active": trailing_sell_active,
-                    "trailing_low": trailing_low, "trailing_buy_active": trailing_buy_active,
-                    "dip_occurred": dip_occurred,
-                })
-                _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
-            time.sleep(30)
+                else:
+                    # Reset buy trailing when leaving buy zone
+                    if trailing_buy_active:
+                        trailing_buy_active = False
+                        trailing_low = 0.0
+                        dip_occurred = False
+                        state["grid_trailing_active"] = trailing_sell_active
+                        state["grid_trailing_high"] = trailing_high
 
-    def run_scalp():
-        log("Scalping started on "+state["pair"]+" ("+state["mode"].upper()+")")
-        prices=[]; position=None
-        while state["running"] and state["strategy"]=="scalp":
-            while state["paused"]: time.sleep(1)
-            price=get_price(state["pair"])
-            if price<=0: time.sleep(10); continue
-            prices.append(price)
-            if len(prices)>20: prices.pop(0)
-            if len(prices)<10: time.sleep(10); continue
-            sma=sum(prices)/len(prices)
-            bal=get_balance()
-            size=min(bal*cfg["risk_pct"]/100,cfg["max_pos"])
-            if position is None and price<sma*0.999 and size>1:
-                amt=round(size/price,6)
-                if place_order(pair,"buy",amt):
-                    position={"price":price,"amount":amt}
-                    state["positions"]=[{"price":price,"amount":amt,"strategy":"Scalp"}]
-                    record_trade("SCALP-BUY",price,amt)
-                    log("Scalp BUY @ $"+str(price))
-            elif position:
-                gain=(price-position["price"])/position["price"]*100
-                loss=(position["price"]-price)/position["price"]*100
-                if gain>=cfg["take_profit"]/3 or loss>=cfg["stop_loss"]/2:
-                    if place_order(pair,"sell",position["amount"]):
-                        pnl=(price-position["price"])*position["amount"]
-                        state["pnl"]+=pnl
-                        if pnl<0: state["daily_loss"]+=abs(pnl)
-                        record_trade("SCALP-SELL",price,position["amount"],round(pnl,2))
-                        log("Scalp SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
-                        position=None; state["positions"]=[]
-            time.sleep(10)
+                # ── Stop-loss check: immediate sell if position drops too far ──
+                stop_pct = cfg.get("grid_stop_loss_pct", 8)
+                for sl_buy_idx in sorted(list(filled.keys())):
+                    sl_bp = filled[sl_buy_idx]["price"]
+                    sl_loss = (price - sl_bp) / sl_bp * 100
+                    if sl_loss < -stop_pct:
+                        sl_amt = filled[sl_buy_idx]["amount"]
+                        if place_order(pair,"sell",sl_amt):
+                            sl_pnl = (price - sl_bp) * sl_amt
+                            state["pnl"] += sl_pnl
+                            record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2))
+                            log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
+                            del filled[sl_buy_idx]
+                            state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
+                # ── SELL ZONE: trailing take profit ──
+                if not is_buy_zone:
+                    if not trailing_sell_active and filled:
+                        trailing_sell_active = True
+                        trailing_high = price
+                        state["grid_trailing_active"] = trailing_sell_active
+                        state["grid_trailing_high"] = trailing_high
+                        log("["+pair+"] Trailing sell active at $"+str(price))
+                    elif trailing_sell_active:
+                        if price > trailing_high:
+                            trailing_high = price
+                            state["grid_trailing_high"] = trailing_high
+                            log("["+pair+"] Trailing high updated to $"+str(price))
+                    # Sell when price drops trailing_pct% below peak
+                    if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
+                        for buy_idx in sorted(filled.keys()):
+                            if buy_idx < i:
+                                amt = filled[buy_idx]["amount"]
+                                buy_price = filled[buy_idx]["price"]
+                                partial_pct = cfg.get("partial_sell_pct", 50)
+                                # Check if this position still has a partial remainder
+                                partial_key = str(buy_idx)
+                                is_partial_sell = cfg.get("partial_sell_pct", 50) < 100
+                                sell_amt = amt
+                                # ── Partial sell logic ──
+                                if is_partial_sell and partial_key not in state.get("partial_positions", {}):
+                                    # First sell: only sell partial_pct%
+                                    sell_amt = amt * partial_pct / 100
+                                    keep_amt = amt - sell_amt
+                                    state["partial_positions"][partial_key] = {
+                                        "amount": keep_amt, "buy_price": buy_price,
+                                        "orig_amount": amt, "price": price
+                                    }
+                                    # Update filled entry to reflect kept amount
+                                    filled[buy_idx]["amount"] = keep_amt
+                                    log("PARTIAL SELL: sold "+str(round(sell_amt,6))+" ("
+                                        +str(int(partial_pct))+"%) @ $"+str(round(price,2))
+                                        +", keeping "+str(round(keep_amt,6))+" for wider trailing")
+                                elif partial_key in state.get("partial_positions", {}):
+                                    # Second sell: sell the remainder
+                                    sell_amt = amt  # sell everything left
+                                    if partial_key in state["partial_positions"]:
+                                        del state["partial_positions"][partial_key]
+                                if place_order(pair,"sell",sell_amt):
+                                    pnl=(price-buy_price)*sell_amt
+                                    state["pnl"]+=pnl
+                                    state["daily_pnl"] = state.get("daily_pnl",0)+pnl
+                                    if cfg.get("auto_compound", True) and pnl > 0:
+                                        state["compound_profit"] += pnl
+                                    tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
+                                    record_trade(tag,price,sell_amt,round(pnl,2))
+                                    log("SELL level "+str(buy_idx)+" @ $"+str(round(price,2))+" (peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2))+")")
+                                    log("TRADE SUMMARY: bought $"+str(round(buy_price,2))+" sold $"+str(round(price,2))+" peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2)))
+                                    send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
+                                    if is_partial_sell and partial_key in state.get("partial_positions",{}):
+                                        # Don't delete the position yet — still holding remainder
+                                        trailing_sell_active = False
+                                        trailing_high = 0.0
+                                        state["grid_trailing_active"] = False
+                                        state["grid_trailing_high"] = 0.0
+                                        state["grid_filled"] = {k: v for k, v in filled.items()}
+                                        break
+                                    else:
+                                        del filled[buy_idx]
+                                        state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
+                                        trailing_sell_active = False
+                                        trailing_high = 0.0
+                                        state["grid_trailing_active"] = False
+                                        state["grid_trailing_high"] = 0.0
+                                        state["grid_filled"] = {k: v for k, v in filled.items()}
+                                        break
+                else:
+                    # Price back in buy zone — reset sell trailing
+                    if trailing_sell_active:
+                        log("["+pair+"] Trailing sell reset — price back in buy zone")
+                        trailing_sell_active = False
+                        trailing_high = 0.0
+            # ── Daily loss limit check ──
+            now = int(time.time())
+            today_midnight = now - (now % 86400)
+            if state.get("last_midnight",0) < today_midnight:
+                state["daily_pnl"] = 0.0
+                state["last_midnight"] = today_midnight
+            # Track peak balance
+            b = get_balance()
+            if b > state.get("peak_balance", 0):
+                state["peak_balance"] = b
+            # Drawdown check
+            dd_pct = cfg.get("max_drawdown_pct", 20)
+            pk = state.get("peak_balance", 0)
+            if pk > 0 and b < pk * (1 - dd_pct/100):
+                log("DRAWDOWN STOP: balance $"+str(round(b,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
+                state["running"] = False
+                state["strategy"] = None
+                state["emergency_stop"] = True
+                return
+            dl = cfg.get("daily_loss_limit", 200)
+            if state["daily_pnl"] < -dl:
+                log("DAILY LOSS LIMIT: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl), "WARN")
+                state["running"] = False
+                state["strategy"] = None
+                state["emergency_stop"] = True
+                return
+            # Save per-pair state back
+            gs.update({
+                "grids": grids, "mid_idx": mid_idx, "filled": filled,
+                "trailing_high": trailing_high, "trailing_sell_active": trailing_sell_active,
+                "trailing_low": trailing_low, "trailing_buy_active": trailing_buy_active,
+                "dip_occurred": dip_occurred,
+            })
+            _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
+        time.sleep(30)
 
-    def run_copy():
-        source=cfg["source_wallet"]
-        log("Copy Trading watching: "+source)
-        while state["running"] and state["strategy"]=="copy":
-            while state["paused"]: time.sleep(1)
-            log("Monitoring "+source+" for trades...")
-            time.sleep(60)
+def run_scalp():
+    log("Scalping started on "+state["pair"]+" ("+state["mode"].upper()+")")
+    prices=[]; position=None
+    while state["running"] and state["strategy"]=="scalp":
+        while state["paused"]: time.sleep(1)
+        price=get_price(state["pair"])
+        if price<=0: time.sleep(10); continue
+        prices.append(price)
+        if len(prices)>20: prices.pop(0)
+        if len(prices)<10: time.sleep(10); continue
+        sma=sum(prices)/len(prices)
+        bal=get_balance()
+        size=min(bal*cfg["risk_pct"]/100,cfg["max_pos"])
+        if position is None and price<sma*0.999 and size>1:
+            amt=round(size/price,6)
+            if place_order(state["pair"],"buy",amt):
+                position={"price":price,"amount":amt}
+                state["positions"]=[{"price":price,"amount":amt,"strategy":"Scalp"}]
+                record_trade("SCALP-BUY",price,amt)
+                log("Scalp BUY @ $"+str(price))
+        elif position:
+            gain=(price-position["price"])/position["price"]*100
+            loss=(position["price"]-price)/position["price"]*100
+            if gain>=cfg["take_profit"]/3 or loss>=cfg["stop_loss"]/2:
+                if place_order(state["pair"],"sell",position["amount"]):
+                    pnl=(price-position["price"])*position["amount"]
+                    state["pnl"]+=pnl
+                    if pnl<0: state["daily_loss"]+=abs(pnl)
+                    record_trade("SCALP-SELL",price,position["amount"],round(pnl,2))
+                    log("Scalp SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
+                    position=None; state["positions"]=[]
+        time.sleep(10)
 
-    def run_arbitrage():
-        mode = "PAPER" if state["paper_trading"] else "LIVE"
-        chain = state.get("chain","ethereum")
-        log("Arbitrage started ["+mode+" MODE] on "+chain+" — min spread: "+str(cfg["min_arb_spread"])+"%")
-        while state["running"] and state["strategy"]=="arb":
-            while state["paused"]: time.sleep(1)
-            # Don't scan if a trade is in progress
-            if state["trading_lock"]:
-                time.sleep(5)
-                continue
+def run_copy():
+    source=cfg["source_wallet"]
+    log("Copy Trading watching: "+source)
+    while state["running"] and state["strategy"]=="copy":
+        while state["paused"]: time.sleep(1)
+        log("Monitoring "+source+" for trades...")
+        time.sleep(60)
 
-            # Cooldown between trades — wait 15s after last trade
-            time_since_last = time.time() - state["last_trade_time"]
-            if time_since_last < 15:
-                time.sleep(15 - time_since_last)
-                continue
+def run_arbitrage():
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
+    chain = state.get("chain","ethereum")
+    log("Arbitrage started ["+mode+" MODE] on "+chain+" — min spread: "+str(cfg["min_arb_spread"])+"%")
+    while state["running"] and state["strategy"]=="arb":
+        while state["paused"]: time.sleep(1)
+        # Don't scan if a trade is in progress
+        if state["trading_lock"]:
+            time.sleep(5)
+            continue
 
-            opps = scan_arbitrage()
-            # Only execute the BEST opportunity per cycle, not all of them
-            for opp in opps:
-                if not state["running"]: break
-                if opp["executable"]:
-                    log("ARB opportunity: "+opp["pair"]+" spread "+str(opp["spread_pct"])+"% est profit $"+str(opp["est_profit_usd"]))
-                    execute_arbitrage(opp)
-                    break  # Stop after first executable — wait for next scan cycle
-            time.sleep(30)
+        # Cooldown between trades — wait 15s after last trade
+        time_since_last = time.time() - state["last_trade_time"]
+        if time_since_last < 15:
+            time.sleep(15 - time_since_last)
+            continue
 
-    STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage}
+        opps = scan_arbitrage()
+        # Only execute the BEST opportunity per cycle, not all of them
+        for opp in opps:
+            if not state["running"]: break
+            if opp["executable"]:
+                log("ARB opportunity: "+opp["pair"]+" spread "+str(opp["spread_pct"])+"% est profit $"+str(opp["est_profit_usd"]))
+                execute_arbitrage(opp)
+                break  # Stop after first executable — wait for next scan cycle
+        time.sleep(30)
+
+STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage}
 
 def start_bot(strategy, pair, mode, exchange=None, chain=None):
     if state["running"]:
