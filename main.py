@@ -2042,8 +2042,9 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Auto-fill window: wide candles at first, shrink to 3px min, scroll when full
-  chart.timeScale().fitContent();
+  // Fixed 3px candles — always 3px, scroll to latest
+  chart.applyOptions({ timeScale: { barSpacing: 3 } });
+  chart.timeScale().scrollToPosition(candles.length, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
