@@ -1375,7 +1375,18 @@ def get_balance():
     else:
         return cex_get_balance()
 
+_last_order_key = None
+_last_order_time = 0
+
 def place_order(pair, side, amount):
+    global _last_order_key, _last_order_time
+    order_key = f"{pair}:{side}:{amount}"
+    now = time.time()
+    if order_key == _last_order_key and now - _last_order_time < 5:
+        log(f"DUPLICATE ORDER BLOCKED: {order_key}", "WARN")
+        return False
+    _last_order_key = order_key
+    _last_order_time = now
     if state["mode"] == "dex":
         chain = state["chain"]
         price = get_price(pair)
@@ -1482,7 +1493,7 @@ def _init_grid_pair(pair):
                     var = sum((p-avg)**2 for p in prices)/(len(prices)-1 or 1)
                     vol = (var**0.5)/avg if avg>0 else 0
                     spread = min(spread * (1 + vol * 10), spread * 3)  # max 3x
-        except: pass
+        except Exception: pass
     grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
     mid_idx = len(grids) // 2
     return {
@@ -2794,7 +2805,7 @@ class Handler(BaseHTTPRequestHandler):
         elif path=="/backtest":
             if not self._auth_or_401(): return
             try: data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
-            except: data = {}
+            except Exception: data = {}
             pair = data.get("pair", state.get("pair", "SOL/USDC"))
             strategy = data.get("strategy", "grid")
             # Load price data
@@ -2811,7 +2822,7 @@ class Handler(BaseHTTPRequestHandler):
                     for k in ohlc:
                         if k != "last":
                             prices = [{"time": int(p[0]), "value": float(p[4])} for p in ohlc[k][-200:]]
-                except: pass
+                except Exception: pass
             if not prices or len(prices) < 5:
                 self.respond(200,"application/json",json.dumps({"error":"Not enough price data"}).encode()); return
             # Simple grid backtest
@@ -2858,7 +2869,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_or_401(): return
             try:
                 data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
-            except:
+            except Exception:
                 self.respond(400,"application/json",json.dumps({"error":"Invalid JSON"}).encode()); return
             signal = data.get("signal","")
             wpair = data.get("pair",state.get("pair","SOL/USDC"))

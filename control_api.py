@@ -67,7 +67,7 @@ def update_state(**kwargs):
 def _authorized(req) -> bool:
     secret = os.environ.get("CONTROL_API_SECRET", "")
     if not secret:
-        return True  # no secret set = open (not recommended for prod)
+        return False  # fail-closed: secret is required for prod
     return req.headers.get("X-Control-Secret") == secret
 
 # ── Routes ────────────────────────────────────────────────────────────────────
