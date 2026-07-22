@@ -917,7 +917,8 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                 ata_pk, _ = Pubkey.find_program_address(seeds, ata_prog)
 
                 # Get blockhash
-                bh_r = requests.post("https://api.mainnet-beta.solana.com", json={
+                bh_rpc = SOLANA_RPC if SOLANA_RPC else (("https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY) if ALCHEMY_KEY else "https://api.mainnet-beta.solana.com")
+                bh_r = requests.post(bh_rpc, json={
                     "jsonrpc":"2.0","id":1,"method":"getLatestBlockhash",
                     "params":[{"commitment":"confirmed"}]
                 }, timeout=8)
@@ -969,20 +970,27 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                 log("ATA creation error: "+str(ate)[:80], "WARN")
                 return get_ata(wallet_addr, mint_addr)  # might exist now
 
-        input_ata  = get_ata(wallet, from_mint)
-        if not input_ata:
-            log("No ATA for input token "+from_token+", trying to create...", "WARN")
-            input_ata = create_ata_if_missing(wallet, from_mint)
-        if not input_ata:
-            log("Cannot swap — no input ATA for "+from_token, "WARN")
-            return False, 0.0
+        # Native SOL lives in wallet, not in a token account — use wallet address directly
+        if from_token == "SOL":
+            input_ata = wallet
+        else:
+            input_ata = get_ata(wallet, from_mint)
+            if not input_ata:
+                log("No ATA for input token "+from_token+", trying to create...", "WARN")
+                input_ata = create_ata_if_missing(wallet, from_mint)
+            if not input_ata:
+                log("Cannot swap — no input ATA for "+from_token, "WARN")
+                return False, 0.0
 
-        output_ata = get_ata(wallet, to_mint)
-        if not output_ata:
-            output_ata = create_ata_if_missing(wallet, to_mint)
-        if not output_ata:
-            log("Cannot swap — no output ATA for "+to_token, "WARN")
-            return False, 0.0
+        if to_token == "SOL":
+            output_ata = wallet
+        else:
+            output_ata = get_ata(wallet, to_mint)
+            if not output_ata:
+                output_ata = create_ata_if_missing(wallet, to_mint)
+            if not output_ata:
+                log("Cannot swap — no output ATA for "+to_token, "WARN")
+                return False, 0.0
 
         # Build Raydium swap transaction payload
         swap_payload = {
