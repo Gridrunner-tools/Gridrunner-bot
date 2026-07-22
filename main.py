@@ -1557,17 +1557,24 @@ def run_grid():
 
             # ── Grid re-centering ──
             if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
+                has_positions = bool(filled)
                 if not filled and price > grids[mid_idx]:
                     log("["+pair+"] Grid re-centering: no positions at $"+str(price))
                 else:
-                    log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
-                grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
-                mid_idx = len(grids) // 2
-                trailing_sell_active = False; trailing_high = 0.0
-                trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                state["partial_positions"] = {}
-                log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
-
+                    log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
+                if has_positions and price < grids[0]:
+                    new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                    for i in range(mid_idx + 1):
+                        grids[i] = new_grids[i]
+                    trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                    log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
+                else:
+                    grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                    mid_idx = len(grids) // 2
+                    trailing_sell_active = False; trailing_high = 0.0
+                    trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                    state["partial_positions"] = {}
+                    log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
             bal = get_balance()
             effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
             size = min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels
