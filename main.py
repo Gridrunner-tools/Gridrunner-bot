@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 Trading Bot — Full Dashboard
-CEX mode: API key trading on Binance/Bybit/OKX/KuCoin/LBank
-DEX mode: Wallet-based trading via Uniswap/1inch on any EVM chain
+DEX mode: Wallet-based spot grid trading on Solana via Raydium/Jupiter
 Price feeds: Kraken (no key needed)
 Strategies: DCA, Grid, Scalping, Copy Trading, Arbitrage
 """
@@ -53,7 +52,7 @@ state = {
     "strategy":      None,
     "mode":          None,
     "exchange":      cfg["exchange"],
-    "chain":         "ethereum",
+    "chain":         "solana",
     "pair":          cfg["pair"],
     "price":         0.0,
     "balance":       0.0,
@@ -568,14 +567,14 @@ def start_background_loops():
     def balance_loop():
         time.sleep(3)
         # Set initial mode hint from config, but dashboard selection overrides
-        if cfg["wallet"] and state["mode"] is None:
+        if state["mode"] is None:
             state["mode"] = "dex"
+        if state["chain"] is None or state["chain"] == "ethereum":
+            state["chain"] = "solana"
         while True:
             try:
-                m = state.get("mode", "cex")
-                if m == "cex" and cfg["api_key"]:
-                    cex_get_balance()
-                elif cfg["wallet"]:
+                m = state.get("mode", "dex")
+                if cfg["wallet"]:
                     dex_get_balance()
                 elif cfg["sol_wallet"]:
                     sol_get_balance()
@@ -1847,6 +1846,7 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
     state["mode"]=mode
     if exchange: state["exchange"]=exchange
     if chain: state["chain"]=chain
+    else: state["chain"]="solana"
     state["running"]=True
     state["error"]=None
     t=threading.Thread(target=STRATEGIES.get(strategy,run_dca),daemon=True)
@@ -1889,9 +1889,6 @@ h1{font-size:22px;font-weight:900;color:var(--text)}
 .sv.g{color:var(--accent)}.sv.r{color:var(--red)}
 .card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px}
 .ct{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--accent);text-transform:uppercase;margin-bottom:14px}
-.mode-tabs{display:flex;gap:0;margin-bottom:20px;border:1.5px solid var(--border);border-radius:10px;overflow:hidden}
-.mode-tab{flex:1;padding:12px;text-align:center;cursor:pointer;font-weight:700;font-size:13px;color:var(--dim);background:var(--card);transition:all .15s;border:none}
-.mode-tab.active{background:var(--accent)18;color:var(--accent)}
 .btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
 .btn{padding:9px 16px;border:1.5px solid var(--border);border-radius:8px;font-weight:700;font-size:12px;cursor:pointer;background:var(--card);color:var(--text2);transition:all .15s}
 .btn:hover{border-color:var(--accent);color:var(--text)}
@@ -1928,7 +1925,6 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 .arb-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
 .arb-spread{color:var(--accent);font-weight:800;font-size:14px}
 .dex-info{background:var(--purple)11;border:1px solid var(--purple)22;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--purple);line-height:1.6}
-.cex-info{background:var(--yellow)11;border:1px solid var(--yellow)22;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--yellow);line-height:1.6}
 .summary-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
 .summary-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
 .summary-card .label{font-size:9px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:1px}
@@ -1985,41 +1981,10 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   </div>
 
   <div class="card">
-    <div class="ct">Trading Mode</div>
-    <div class="mode-tabs">
-      <button class="mode-tab active" id="tab-cex" onclick="setMode('cex')">CEX — Exchange Trading</button>
-      <button class="mode-tab" id="tab-dex" onclick="setMode('dex')">DEX — Wallet Trading</button>
-    </div>
-
-    <div id="cex-panel">
-      <div class="cex-info">Trade on centralized exchanges using your API key and secret. Set these in Render environment variables.</div>
-      <div class="section-label">Exchange</div>
-      <select class="dd" id="exch-select" onchange="selectExch(this.value)">
-        <option value="">— Select Exchange —</option>
-        <option value="binance">Binance</option>
-        <option value="bybit">Bybit</option>
-        <option value="okx">OKX</option>
-        <option value="kucoin">KuCoin</option>
-        <option value="lbank">LBank</option>
-        <option value="kraken">Kraken</option>
-      </select>
-    </div>
-
-    <div id="dex-panel" style="display:none">
-      <div class="dex-info">Trade on-chain using your wallet. No API keys needed. Uses Uniswap + 1inch for EVM chains, Jupiter for Solana.</div>
-      <div class="section-label">Chain</div>
-      <select class="dd" id="chain-select" onchange="selectChain(this.value)">
-        <option value="">— Select Chain —</option>
-        <option value="ethereum">Ethereum</option>
-        <option value="bsc">BNB Chain</option>
-        <option value="base">Base</option>
-        <option value="arbitrum">Arbitrum</option>
-        <option value="polygon">Polygon</option>
-        <option value="solana">Solana &#9889;</option>
-      </select>
-      <div style="background:var(--accent)11;border:1px solid var(--accent)22;border-radius:8px;padding:10px 14px;margin-bottom:4px;font-size:12px;color:var(--accent)">
-        &#9889; <strong>Solana</strong> — gas &lt;$0.01 per trade, routed via Jupiter aggregator for best prices
-      </div>
+    <div class="ct">Trading</div>
+    <div class="dex-info">Spot grid trading on Solana DEXs (Raydium + Jupiter). Paste your Solana wallet key to start. No API keys needed.</div>
+    <div style="background:var(--accent)11;border:1px solid var(--accent)22;border-radius:8px;padding:10px 14px;margin-bottom:4px;font-size:12px;color:var(--accent)">
+      &#9889; <strong>Solana</strong> — gas &lt;$0.01 per trade, routed via Jupiter aggregator for best prices
     </div>
 
     <div class="section-label" style="margin-top:16px">Strategy</div>
@@ -2036,14 +2001,14 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div style="display:flex;gap:8px;margin-bottom:12px">
       <select class="dd" id="pair-select" onchange="selectPair(this.value)" style="flex:1;margin-bottom:0">
         <option value="">— Select Pair —</option>
-        <optgroup label="USDT Pairs" id="usdt-optgroup">
+        <optgroup label="USDT Pairs" id="usdt-optgroup" style="display:none">
           <option value="BTC/USDT">BTC/USDT</option>
           <option value="ETH/USDT">ETH/USDT</option>
           <option value="BNB/USDT">BNB/USDT</option>
           <option value="SOL/USDT">SOL/USDT</option>
           <option value="MATIC/USDT">MATIC/USDT</option>
         </optgroup>
-        <optgroup label="USDC Pairs" id="usdc-optgroup" style="display:none">
+        <optgroup label="USDC Pairs" id="usdc-optgroup">
           <option value="SOL/USDC">SOL/USDC</option>
           <option value="BTC/USDC">BTC/USDC</option>
           <option value="ETH/USDC">ETH/USDC</option>
@@ -2134,7 +2099,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 </div>
 
 <script>
-var sel = {mode:"cex", strat:null, pair:null, exch:null, chain:null};
+var sel = {mode:"dex", strat:null, pair:null, exch:null, chain:"solana"};
 var isDark = true;
 var tradeLog = [];
 var _lastTradeTime = null;
@@ -2349,7 +2314,7 @@ function exportCSV() {
 }
 
 function switchPair() {
-  var common = ["SOL/USDC","BTC/USDC","ETH/USDC","SOL/USDT","BTC/USDT","ETH/USDT"];
+  var common = ["SOL/USDC","BTC/USDC","ETH/USDC","JUP/USDC","BONK/USDC","WIF/USDC"];
   var current = sel.pair;
   if (!current) { showToast("Select a pair first", "error"); return; }
   var idx = common.indexOf(current);
@@ -2397,15 +2362,6 @@ function saveConfig() {
   }).catch(function() { showToast("Failed to save config", "error"); });
 }
 
-function setMode(m) {
-  sel.mode = m;
-  document.getElementById("tab-cex").className = "mode-tab" + (m=="cex"?" active":"");
-  document.getElementById("tab-dex").className = "mode-tab" + (m=="dex"?" active":"");
-  document.getElementById("cex-panel").style.display = m=="cex"?"block":"none";
-  document.getElementById("dex-panel").style.display = m=="dex"?"block":"none";
-  updateBtn();
-}
-
 function selectStrat(s) {
   if (!s) return;
   sel.strat = s;
@@ -2422,39 +2378,20 @@ function selectPair(p) {
   refresh();
 }
 
-function selectExch(e) {
-  if (!e) return;
-  sel.exch = e;
-  updateBtn();
-}
-
-function selectChain(c) {
-  if (!c) return;
-  sel.chain = c;
-  sel.pair = null;
-  document.getElementById("pair-select").value = "";
-  document.getElementById("usdt-optgroup").style.display = (c === "solana") ? "none" : "";
-  document.getElementById("usdc-optgroup").style.display = (c === "solana") ? "" : "none";
-  updateBtn();
-}
-
 function updateBtn() {
   var btn = document.getElementById("start-btn");
-  var cexReady = sel.mode == "cex" && sel.exch && sel.strat && sel.pair;
-  var dexReady = sel.mode == "dex" && sel.chain && sel.strat && sel.pair;
-  if (cexReady || dexReady) {
+  var ready = sel.strat && sel.pair;
+  if (ready) {
     btn.disabled = false;
     btn.textContent = "Start " + sel.strat.toUpperCase() + " on " + sel.pair;
   } else {
     btn.disabled = true;
-    btn.textContent = "Select options above";
+    btn.textContent = "Select strategy and pair above";
   }
 }
 
 function startBot() {
-  var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=" + sel.mode;
-  if (sel.mode == "cex" && sel.exch) params += "&exchange=" + sel.exch;
-  if (sel.mode == "dex" && sel.chain) params += "&chain=" + sel.chain;
+  var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
   apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
     document.getElementById("pause-btn").style.display = "inline-block";
@@ -2798,9 +2735,9 @@ class Handler(BaseHTTPRequestHandler):
             start_bot(
                 params.get("strategy",["dca"])[0],
                 params.get("pair",[cfg["pair"]])[0],
-                params.get("mode",["cex"])[0],
+                params.get("mode",["dex"])[0],
                 params.get("exchange",[cfg["exchange"]])[0],
-                params.get("chain",["ethereum"])[0],
+                params.get("chain",["solana"])[0],
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
