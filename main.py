@@ -89,6 +89,8 @@ state = {
     "positions_count": 0,
     "compound_profit":  0.0,
     "partial_positions": {},
+    "active_pairs":   [],
+    "grid_pairs":     {},
 }
 
 def send_telegram(msg):
@@ -1397,7 +1399,7 @@ def run_dca():
             size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
             if size > 1:
                 amt = round(size/price, 6)
-                if place_order(state["pair"],"buy",amt):
+                if place_order(pair,"buy",amt):
                     buy_prices.append(price)
                     state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                     record_trade("DCA-BUY",price,amt)
@@ -1435,67 +1437,92 @@ def run_dca():
             log("Daily loss limit reached — pausing 1hr", "WARN"); time.sleep(3600)
         time.sleep(60)
 
-def run_grid():
-    log("Grid started on "+state["pair"]+" ("+state["mode"].upper()+")")
-    price = get_price(state["pair"])
-    if price <= 0: log("Cannot get price","ERROR"); return
+def _init_grid_pair(pair):
+    """Initialize grid state for a pair, return dict with all local vars."""
+    price = get_price(pair)
+    if price <= 0: return None
     levels=5; spread=0.05
     grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
-    filled = {}
-    # Lower half = buy zone, upper half = sell zone
     mid_idx = len(grids) // 2
-    # Trailing take profit (sell)
-    trailing_pct = 0.5
-    trailing_high = 0.0
-    trailing_sell_active = False
-    # Trailing buy (buy on bounce)
-    trailing_low = 0.0
-    trailing_buy_active = False
-    dip_occurred = False
-    state["grid_levels"] = grids[:]
-    state["grid_buy_zone"] = grids[mid_idx]
-    state["grid_mid_idx"] = mid_idx
-    state["grid_filled"] = filled
-    state["grid_trailing_active"] = trailing_sell_active
-    state["grid_trailing_high"] = trailing_high
-    log("Grid levels: "+str(grids)+" buy_zone=<="+str(grids[mid_idx])+" trailing="+str(trailing_pct)+"%")
+    return {
+        "grids": grids, "mid_idx": mid_idx, "filled": {},
+        "trailing_pct": 0.5, "trailing_high": 0.0, "trailing_sell_active": False,
+        "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
+        "price": price, "levels": levels, "spread": spread,
+    }
+
+def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high):
+    """Sync per-pair grid state to state dict for dashboard display."""
+    gp = state["grid_pairs"].get(pair, {})
+    gp.update({
+        "grid_levels": grids[:], "grid_buy_zone": grids[mid_idx], "grid_mid_idx": mid_idx,
+        "grid_filled": {k: v for k, v in filled.items()},
+        "grid_trailing_active": trailing_sell_active, "grid_trailing_high": trailing_high,
+        "grids": grids[:], "filled": filled, "mid_idx": mid_idx,
+        "trailing_sell_active": trailing_sell_active, "trailing_high": trailing_high,
+    })
+    state["grid_pairs"][pair] = gp
+    # Also set top-level state for backward compat (shows active pair's data)
+    if state.get("pair") == pair:
+        state["grid_levels"] = grids[:]
+        state["grid_buy_zone"] = grids[mid_idx]
+        state["grid_mid_idx"] = mid_idx
+        state["grid_filled"] = filled
+        state["grid_trailing_active"] = trailing_sell_active
+        state["grid_trailing_high"] = trailing_high
+
+def run_grid():
+    pair = state.get("pair","SOL/USDC")
+    if pair not in state["active_pairs"]:
+        state["active_pairs"].append(pair)
+    # Initialize per-pair state for any new pair
+    for p in state["active_pairs"]:
+        if p not in state["grid_pairs"]:
+            gs = _init_grid_pair(p)
+            if gs:
+                state["grid_pairs"][p] = gs
+                log("Grid initialized for "+p+": "+str(gs["grids"]), "INFO")
+    if not state["active_pairs"]:
+        log("No active pairs to grid", "WARN"); return
+    log("Grid started on "+str(state["active_pairs"])+" ("+state["mode"].upper()+")")
+
     while state["running"] and state["strategy"]=="grid":
-        price = get_price(state["pair"])
-        if price <= 0: time.sleep(30); continue
+        for pair in list(state["active_pairs"]):
+            gs = state["grid_pairs"].get(pair)
+            if not gs: continue
+            grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
+            trailing_pct = gs["trailing_pct"]; trailing_high = gs["trailing_high"]
+            trailing_sell_active = gs["trailing_sell_active"]
+            trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
+            dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
 
-        # ── Pause check: wait while paused ──
-        while state["paused"]:
-            time.sleep(1)
-            price = get_price(state["pair"])
-            if price <= 0: time.sleep(5)
+            price = get_price(pair)
+            if price <= 0:
+                _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
+                time.sleep(5); continue
 
-        # ── Grid re-centering: if price drifts outside grid, rebuild around current price ──
-        if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
-            if not filled and price > grids[mid_idx]:
-                log("Grid re-centering: no positions at $"+str(price))
-            else:
-                log("Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
-            grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
-            mid_idx = len(grids) // 2
-            trailing_sell_active = False
-            trailing_high = 0.0
-            trailing_buy_active = False
-            trailing_low = 0.0
-            dip_occurred = False
-            state["grid_levels"] = grids[:]
-            state["grid_buy_zone"] = grids[mid_idx]
-            state["grid_mid_idx"] = mid_idx
-            state["grid_filled"] = filled
-            state["grid_trailing_active"] = trailing_sell_active
-            state["grid_trailing_high"] = trailing_high
-            state["partial_positions"] = {}
-            log("Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
-            # Don't clear filled positions — they'll be sold on next uptick
+            # ── Pause check: wait while paused ──
+            while state["paused"]:
+                time.sleep(1)
+                price = get_price(pair)
+                if price <= 0: break
 
-        bal = get_balance()
-        # Auto-compound: add compounded profits to available capital
-        effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
-        size = min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels
+            # ── Grid re-centering ──
+            if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
+                if not filled and price > grids[mid_idx]:
+                    log("["+pair+"] Grid re-centering: no positions at $"+str(price))
+                else:
+                    log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
+                grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                mid_idx = len(grids) // 2
+                trailing_sell_active = False; trailing_high = 0.0
+                trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                state["partial_positions"] = {}
+                log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+
+            bal = get_balance()
+            effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
+            size = min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels
         for i,g in enumerate(grids[:-1]):
             ng = grids[i+1]
             if g <= price < ng:
@@ -1520,7 +1547,7 @@ def run_grid():
                                 filled[i]={"price":price,"amount":amt}
                                 state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                 record_trade("GRID-BUY",price,amt)
-                                log("BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
+                                log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
                                 send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                 trailing_buy_active = False
                                 trailing_low = 0.0
@@ -1545,12 +1572,12 @@ def run_grid():
                         trailing_high = price
                         state["grid_trailing_active"] = trailing_sell_active
                         state["grid_trailing_high"] = trailing_high
-                        log("Trailing sell active at $"+str(price))
+                        log("["+pair+"] Trailing sell active at $"+str(price))
                     elif trailing_sell_active:
                         if price > trailing_high:
                             trailing_high = price
                             state["grid_trailing_high"] = trailing_high
-                            log("Trailing high updated to $"+str(price))
+                            log("["+pair+"] Trailing high updated to $"+str(price))
                     # Sell when price drops trailing_pct% below peak
                     if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
                         for buy_idx in sorted(filled.keys()):
@@ -1581,7 +1608,7 @@ def run_grid():
                                     sell_amt = amt  # sell everything left
                                     if partial_key in state["partial_positions"]:
                                         del state["partial_positions"][partial_key]
-                                if place_order(state["pair"],"sell",sell_amt):
+                                if place_order(pair,"sell",sell_amt):
                                     pnl=(price-buy_price)*sell_amt
                                     state["pnl"]+=pnl
                                     if cfg.get("auto_compound", True) and pnl > 0:
@@ -1611,9 +1638,17 @@ def run_grid():
                 else:
                     # Price back in buy zone — reset sell trailing
                     if trailing_sell_active:
-                        log("Trailing sell reset — price back in buy zone")
+                        log("["+pair+"] Trailing sell reset — price back in buy zone")
                         trailing_sell_active = False
                         trailing_high = 0.0
+            # Save per-pair state back
+            gs.update({
+                "grids": grids, "mid_idx": mid_idx, "filled": filled,
+                "trailing_high": trailing_high, "trailing_sell_active": trailing_sell_active,
+                "trailing_low": trailing_low, "trailing_buy_active": trailing_buy_active,
+                "dip_occurred": dip_occurred,
+            })
+            _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
         time.sleep(30)
 
 def run_scalp():
@@ -1703,6 +1738,7 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
 def stop_bot():
     state["running"]=False
     state["strategy"]=None
+    state["active_pairs"]=[]
     log("Bot stopped")
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
