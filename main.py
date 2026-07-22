@@ -2936,41 +2936,6 @@ class Handler(BaseHTTPRequestHandler):
             log("Bot "+("paused" if state["paused"] else "resumed"))
             self.respond(200,"application/json",json.dumps({"paused":state["paused"]}).encode())
             return
-        elif path=="/manual_trade":
-            if not self._auth_or_401(): return
-            try:
-                body_len = int(self.headers.get("Content-Length", 0))
-                raw = self.rfile.read(body_len) if body_len > 0 else b"{}"
-                trade_data = json.loads(raw)
-            except:
-                self.respond(400,"application/json",json.dumps({"error":"Invalid JSON"}).encode()); return
-            pair = trade_data.get("pair", state.get("pair", "SOL/USDC"))
-            side = trade_data.get("side", "buy")
-            usdc_amt = float(trade_data.get("amount_usdc", 10))
-            price = get_price(pair)
-            if price <= 0:
-                self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
-            if side == "buy":
-                token_amt = round(usdc_amt / price, 6)
-                ok = place_order(pair, "buy", token_amt)
-                if ok:
-                    record_trade("MANUAL-BUY", price, token_amt)
-                    log("[MANUAL] BUY "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
-                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair}).encode())
-                else:
-                    self.respond(500,"application/json",json.dumps({"error":"Buy order failed"}).encode())
-            else:
-                # Sell: convert USDC amount to token amount
-                token_amt = round(usdc_amt / price, 6)
-                ok = place_order(pair, "sell", token_amt)
-                if ok:
-                    received = token_amt * price
-                    record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2))
-                    log("[MANUAL] SELL "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
-                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"received":round(received,2)}).encode())
-                else:
-                    self.respond(500,"application/json",json.dumps({"error":"Sell order failed"}).encode())
-            return
         else:
             self.respond(404,"text/plain",b"Not found")
 
@@ -3005,6 +2970,33 @@ class Handler(BaseHTTPRequestHandler):
             state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
+        elif path == "/manual_trade":
+            if not self._auth_or_401(): return
+            pair = data.get("pair", state.get("pair", "SOL/USDC"))
+            side = data.get("side", "buy")
+            usdc_amt = float(data.get("amount_usdc", 10))
+            price = get_price(pair)
+            if price <= 0:
+                self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
+            if side == "buy":
+                token_amt = round(usdc_amt / price, 6)
+                ok = place_order(pair, "buy", token_amt)
+                if ok:
+                    record_trade("MANUAL-BUY", price, token_amt)
+                    log("[MANUAL] BUY "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
+                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair}).encode())
+                else:
+                    self.respond(500,"application/json",json.dumps({"error":"Buy order failed"}).encode())
+            else:
+                token_amt = round(usdc_amt / price, 6)
+                ok = place_order(pair, "sell", token_amt)
+                if ok:
+                    received = token_amt * price
+                    record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2))
+                    log("[MANUAL] SELL "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
+                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"received":round(received,2)}).encode())
+                else:
+                    self.respond(500,"application/json",json.dumps({"error":"Sell order failed"}).encode())
         else:
             self.respond(404,"text/plain",b"Not found")
     
