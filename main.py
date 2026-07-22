@@ -726,8 +726,9 @@ SOL_TOKENS = {
     "SPCX":  "SPCXxcqXj6e5dJDVNovHN8744zkbhM2bYudU45BimGb",
 }
 
-# Shared Solana RPC endpoints
-SOL_RPCS = [
+# Shared Solana RPC endpoints — set SOLANA_RPC env var to override all
+SOLANA_RPC = os.environ.get("SOLANA_RPC", "")
+SOL_RPCS = [SOLANA_RPC] if SOLANA_RPC else [
     "https://api.mainnet-beta.solana.com",
     "https://rpc.ankr.com/solana",
     "https://solana-rpc.publicnode.com",
