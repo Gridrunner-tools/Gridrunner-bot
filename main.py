@@ -1686,8 +1686,8 @@ def run_grid():
                                             state["compound_profit"] += pnl
                                         tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
                                         record_trade(tag,price,sell_amt,round(pnl,2))
-                                        log("SELL level "+str(buy_idx)+" @ $"+str(round(price,2))+" (peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2))+")")
-                                        log("TRADE SUMMARY: bought $"+str(round(buy_price,2))+" sold $"+str(round(price,2))+" peak $"+str(round(trailing_high,2))+" missed $"+str(round(trailing_high-price,2))+" PnL $"+str(round(pnl,2)))
+                                        log("["+pair+"] SELL "+str(round(sell_amt,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(buy_price,2))+" PnL $"+str(round(pnl,2))+")")
+                                        log("["+pair+"] TRADE SUMMARY: "+str(round(sell_amt,6))+" bought @ $"+str(round(buy_price,2))+" sold @ $"+str(round(price,2))+" | PnL $"+str(round(pnl,2)))
                                         send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                         if is_partial_sell and partial_key in state.get("partial_positions",{}):
                                             # Don't delete the position yet — still holding remainder
@@ -2049,10 +2049,13 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   <div class="card" id="config-card" style="display:none">
     <div class="ct">Configuration</div>
     <div class="config-grid">
-      <div class="config-field"><label>Max Leverage</label><input type="number" id="cfg-leverage" value="3" min="1" max="10"/></div>
-      <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="1000" min="0"/></div>
-      <div class="config-field"><label>Cooldown (sec)</label><input type="number" id="cfg-cooldown" value="30" min="5"/></div>
-      <div class="config-field"><label>Slippage %</label><input type="number" id="cfg-slippage" value="0.5" min="0.1" step="0.1"/></div>
+      <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="cfg-risk" value="2" min="0.1" max="100" step="0.1"/></div>
+      <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
+      <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
+      <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.5" min="0.1" max="10" step="0.1"/></div>
+      <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="50" min="0" max="100" step="5"/></div>
+      <div class="config-field"><label>Grid Spread (%)</label><input type="number" id="cfg-spread" value="5" min="1" max="30" step="0.5"/></div>
+      <div class="config-field"><label>Auto-Compound</label><select id="cfg-compound"><option value="true">On</option><option value="false">Off</option></select></div>
     </div>
     <div class="section-label">Quick Presets</div>
     <div class="preset-row">
@@ -2066,6 +2069,31 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   <div class="card" id="arb-card" style="display:none">
     <div class="ct">Arbitrage Opportunities</div>
     <div id="arb-list"><div style="color:var(--dim);font-size:13px">Scanning for opportunities...</div></div>
+  </div>
+
+  <div class="card" id="manual-trade-card">
+    <div class="ct">Manual Trade</div>
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px">
+        <label style="font-size:10px;color:var(--dim);font-weight:700;text-transform:uppercase">Pair</label>
+        <select id="mt-pair" class="dd" style="margin-bottom:0">
+          <option value="SOL/USDC">SOL/USDC</option>
+          <option value="BTC/USDC">BTC/USDC</option>
+          <option value="ETH/USDC">ETH/USDC</option>
+          <option value="JUP/USDC">JUP/USDC</option>
+          <option value="BONK/USDC">BONK/USDC</option>
+          <option value="WIF/USDC">WIF/USDC</option>
+          <option value="SPCX/USDC">SPCX/USDC</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:100px">
+        <label style="font-size:10px;color:var(--dim);font-weight:700;text-transform:uppercase">USDC Amount</label>
+        <input type="number" id="mt-amount" value="10" min="0.1" step="1" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;background:var(--card);color:var(--text)"/>
+      </div>
+      <button class="btn-start" onclick="manualBuy()" style="padding:10px 20px;font-size:13px;margin-right:4px">Buy</button>
+      <button class="btn-stop" onclick="manualSell()" style="padding:10px 20px;font-size:13px">Sell</button>
+    </div>
+    <div id="mt-result" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
   </div>
 
   <div class="card">
@@ -2200,7 +2228,10 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
 
   // Fixed 3px candles — always 3px, scroll to latest
   chart.applyOptions({ timeScale: { barSpacing: 3 } });
-  chart.timeScale().scrollToPosition(candles.length, false);
+  var vr = chart.timeScale().getVisibleLogicalRange();
+  if (!vr || vr.to >= candles.length - 3) {
+    chart.timeScale().scrollToPosition(candles.length, false);
+  }
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
@@ -2315,15 +2346,17 @@ function switchPair() {
 
 function applyPreset(name) {
   var presets = {
-    conservative: {leverage: 2, maxpos: 500, cooldown: 60, slippage: 0.3},
-    moderate: {leverage: 3, maxpos: 1000, cooldown: 30, slippage: 0.5},
-    aggressive: {leverage: 5, maxpos: 2000, cooldown: 15, slippage: 1.0}
+    conservative: {risk: 1, maxpos: 250, stoploss: 6, trailing: 0.3, partial: 25, spread: 3},
+    moderate: {risk: 2, maxpos: 500, stoploss: 8, trailing: 0.5, partial: 50, spread: 5},
+    aggressive: {risk: 5, maxpos: 1000, stoploss: 12, trailing: 1.0, partial: 75, spread: 8}
   };
   var p = presets[name];
-  document.getElementById("cfg-leverage").value = p.leverage;
+  document.getElementById("cfg-risk").value = p.risk;
   document.getElementById("cfg-maxpos").value = p.maxpos;
-  document.getElementById("cfg-cooldown").value = p.cooldown;
-  document.getElementById("cfg-slippage").value = p.slippage;
+  document.getElementById("cfg-stoploss").value = p.stoploss;
+  document.getElementById("cfg-trailing").value = p.trailing;
+  document.getElementById("cfg-partial").value = p.partial;
+  document.getElementById("cfg-spread").value = p.spread;
   document.querySelectorAll(".preset-btn").forEach(function(b) { b.classList.remove("active"); });
   event.target.classList.add("active");
   showToast("Preset '" + name + "' applied", "info");
@@ -2331,10 +2364,13 @@ function applyPreset(name) {
 
 function saveConfig() {
   var cfg = {
-    max_leverage: parseInt(document.getElementById("cfg-leverage").value) || 3,
-    max_position: parseInt(document.getElementById("cfg-maxpos").value) || 1000,
-    cooldown: parseInt(document.getElementById("cfg-cooldown").value) || 30,
-    slippage: parseFloat(document.getElementById("cfg-slippage").value) || 0.5
+    risk_pct: parseFloat(document.getElementById("cfg-risk").value) || 2,
+    max_pos: parseInt(document.getElementById("cfg-maxpos").value) || 500,
+    grid_stop_loss_pct: parseFloat(document.getElementById("cfg-stoploss").value) || 8,
+    trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.5,
+    partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
+    base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
+    auto_compound: document.getElementById("cfg-compound").value === "true"
   };
   apiFetch("/config", {
     method: "POST",
@@ -2465,6 +2501,52 @@ function runBacktest() {
       }
     })
     .catch(function(e) { showToast("Backtest failed: " + e, "error"); });
+}
+
+function manualBuy() {
+  var pair = document.getElementById("mt-pair").value;
+  var amt = parseFloat(document.getElementById("mt-amount").value) || 10;
+  if (amt <= 0) { showToast("Enter amount > 0", "error"); return; }
+  document.getElementById("mt-result").innerHTML = '<span style="color:var(--yellow)">Buying ' + amt + ' USDC of ' + pair + '...</span>';
+  apiFetch("/manual_trade", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pair: pair, side: "buy", amount_usdc: amt})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--accent)">✓ Bought ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + '</span>';
+      showToast("Buy executed: " + d.amount + " " + pair.split('/')[0], "trade");
+    } else {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ ' + (d.error || "Buy failed") + '</span>';
+      showToast("Buy failed: " + (d.error || "unknown"), "error");
+    }
+  }).catch(function(e) {
+    document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ Error: ' + e + '</span>';
+    showToast("Buy error", "error");
+  });
+}
+
+function manualSell() {
+  var pair = document.getElementById("mt-pair").value;
+  var amt = parseFloat(document.getElementById("mt-amount").value) || 10;
+  if (amt <= 0) { showToast("Enter amount > 0", "error"); return; }
+  document.getElementById("mt-result").innerHTML = '<span style="color:var(--yellow)">Selling ' + amt + ' USDC worth of ' + pair + '...</span>';
+  apiFetch("/manual_trade", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pair: pair, side: "sell", amount_usdc: amt})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--accent)">✓ Sold ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + ' | Received: $' + d.received.toFixed(2) + '</span>';
+      showToast("Sell executed: $" + d.received.toFixed(2), "trade");
+    } else {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ ' + (d.error || "Sell failed") + '</span>';
+      showToast("Sell failed: " + (d.error || "unknown"), "error");
+    }
+  }).catch(function(e) {
+    document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ Error: ' + e + '</span>';
+    showToast("Sell error", "error");
+  });
 }
 
 function togglePaper() {
@@ -2633,10 +2715,13 @@ function refresh() {
 
     // Update config display
     if (d.config) {
-      document.getElementById("cfg-leverage").value = d.config.max_leverage || 3;
-      document.getElementById("cfg-maxpos").value = d.config.max_position || 1000;
-      document.getElementById("cfg-cooldown").value = d.config.cooldown || 30;
-      document.getElementById("cfg-slippage").value = d.config.slippage || 0.5;
+      document.getElementById("cfg-risk").value = d.config.risk_pct || 2;
+      document.getElementById("cfg-maxpos").value = d.config.max_pos || 500;
+      document.getElementById("cfg-stoploss").value = d.config.grid_stop_loss_pct || 8;
+      document.getElementById("cfg-trailing").value = d.config.trailing_pct || 0.5;
+      document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
+      document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
+      document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
     }
   }).catch(console.error);
 }
@@ -2851,6 +2936,41 @@ class Handler(BaseHTTPRequestHandler):
             log("Bot "+("paused" if state["paused"] else "resumed"))
             self.respond(200,"application/json",json.dumps({"paused":state["paused"]}).encode())
             return
+        elif path=="/manual_trade":
+            if not self._auth_or_401(): return
+            try:
+                body_len = int(self.headers.get("Content-Length", 0))
+                raw = self.rfile.read(body_len) if body_len > 0 else b"{}"
+                trade_data = json.loads(raw)
+            except:
+                self.respond(400,"application/json",json.dumps({"error":"Invalid JSON"}).encode()); return
+            pair = trade_data.get("pair", state.get("pair", "SOL/USDC"))
+            side = trade_data.get("side", "buy")
+            usdc_amt = float(trade_data.get("amount_usdc", 10))
+            price = get_price(pair)
+            if price <= 0:
+                self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
+            if side == "buy":
+                token_amt = round(usdc_amt / price, 6)
+                ok = place_order(pair, "buy", token_amt)
+                if ok:
+                    record_trade("MANUAL-BUY", price, token_amt)
+                    log("[MANUAL] BUY "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
+                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair}).encode())
+                else:
+                    self.respond(500,"application/json",json.dumps({"error":"Buy order failed"}).encode())
+            else:
+                # Sell: convert USDC amount to token amount
+                token_amt = round(usdc_amt / price, 6)
+                ok = place_order(pair, "sell", token_amt)
+                if ok:
+                    received = token_amt * price
+                    record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2))
+                    log("[MANUAL] SELL "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
+                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"received":round(received,2)}).encode())
+                else:
+                    self.respond(500,"application/json",json.dumps({"error":"Sell order failed"}).encode())
+            return
         else:
             self.respond(404,"text/plain",b"Not found")
 
@@ -2866,18 +2986,23 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/config":
             if not self._auth_or_401(): return
-            for key in ["max_leverage", "max_position", "cooldown", "slippage", "auto_compound", "partial_sell_pct"]:
+            config_keys = ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
+            bool_keys = {"auto_compound"}
+            float_keys = {"risk_pct", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
+            for key in config_keys:
                 if key in data:
-                    if key in ("auto_compound",):
+                    if key in bool_keys:
                         cfg[key] = str(data[key]).lower() in ("true","1","yes")
-                    elif key in ("partial_sell_pct",):
+                    elif key in float_keys:
                         try:
                             cfg[key] = float(data[key])
                         except (ValueError, TypeError) as e:
                             log("Config "+key+" parse error: "+str(e), "WARN")
                     else:
                         cfg[key] = data[key]
-            state["config"] = {k: cfg.get(k) for k in ["max_leverage", "max_position", "cooldown", "slippage", "auto_compound", "partial_sell_pct", "dynamic_spread", "base_spread"] if cfg.get(k) is not None}
+            # Map saveConfig keys to internal cfg keys
+            if "max_pos" in data: cfg["max_pos"] = float(data["max_pos"])
+            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         else:
