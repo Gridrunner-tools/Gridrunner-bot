@@ -1181,13 +1181,21 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
 
         tx_sig = result.get("result","")
         if tx_sig:
-            # Verify confirmation
-            time.sleep(2)
-            verify_payload = {"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[[tx_sig]]}
-            vr = requests.post(send_rpc, json=verify_payload, timeout=8)
-            vdata = vr.json()
-            status = vdata.get("result",{}).get("value",[None])[0]
-            if status and status.get("confirmationStatus") in ("confirmed","finalized"):
+            # Retry confirmation up to 15s
+            tx_ok = False
+            for attempt in range(5):
+                time.sleep(3)
+                try:
+                    verify_payload = {"jsonrpc":"2.0","id":1,"method":"getSignatureStatuses","params":[[tx_sig]]}
+                    vr = requests.post(send_rpc, json=verify_payload, timeout=8)
+                    vdata = vr.json()
+                    status = vdata.get("result",{}).get("value",[None])[0]
+                    if status and status.get("confirmationStatus") in ("confirmed","finalized") and status.get("err") is None:
+                        tx_ok = True
+                        break
+                except Exception:
+                    pass
+            if tx_ok:
                 log("SWAP CONFIRMED: "+tx_sig[:20]+"... "+from_token+"→"+to_token+via)
                 trade = {"time":time.strftime("%H:%M:%S"),"side":"LIVE-"+side+via,
                          "price":price,"amount":out_human,"router":"Jupiter",
