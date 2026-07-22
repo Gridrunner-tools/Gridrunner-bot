@@ -416,6 +416,7 @@ CHAIN_CONFIG = {
     "base":     {"chain_id":8453, "name":"Base"},
     "arbitrum": {"chain_id":42161,"name":"Arbitrum"},
     "polygon":  {"chain_id":137,  "name":"Polygon"},
+    "monad":    {"chain_id":10143,"name":"Monad", "rpc":"https://rpc.monad.xyz", "native":"MON"},
 }
 
 TOKENS = {
@@ -424,11 +425,12 @@ TOKENS = {
     "base":     {"USDT":"0xfde4C96c8593536E31F229EA8f37b2ADa2699bb2","WETH":"0x4200000000000000000000000000000000000006"},
     "arbitrum": {"USDT":"0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9","WETH":"0x82aF49447D8a07e3bd95BD0d56f35241523fBab1"},
     "polygon":  {"USDT":"0xc2132D05D31c914a87C6611C10748AEb04B58e8F","WMATIC":"0x0d500B1d8E8eF31E21C99d1Db9A6444d3ADf1270"},
+    "monad":    {"USDT":"0x...","WMON":"0x..."},  # placeholder — Monad token addresses TBD
 }
 
 def dex_get_quote_1inch(chain, from_token, to_token, amount_wei):
     try:
-        chain_ids = {"ethereum":1,"bsc":56,"base":8453,"arbitrum":42161,"polygon":137}
+        chain_ids = {"ethereum":1,"bsc":56,"base":8453,"arbitrum":42161,"polygon":137,"monad":10143}
         cid = chain_ids.get(chain, 1)
         r = requests.get(
             "https://api.1inch.dev/swap/v6.0/"+str(cid)+"/quote",
@@ -442,7 +444,7 @@ def dex_get_quote_1inch(chain, from_token, to_token, amount_wei):
 
 def dex_get_quote_uniswap(chain, from_token, to_token, amount_wei):
     try:
-        chain_ids = {"ethereum":1,"bsc":56,"base":8453,"arbitrum":42161,"polygon":137}
+        chain_ids = {"ethereum":1,"bsc":56,"base":8453,"arbitrum":42161,"polygon":137,"monad":10143}
         cid = chain_ids.get(chain, 1)
         r = requests.get(
             "https://api.uniswap.org/v1/quote",
@@ -1443,7 +1445,19 @@ def _init_grid_pair(pair):
     """Initialize grid state for a pair, return dict with all local vars."""
     price = get_price(pair)
     if price <= 0: return None
-    levels=5; spread=0.05
+    levels=5; spread=cfg.get("base_spread", 0.05)
+    # Dynamic spread: widen in volatile markets
+    if cfg.get("dynamic_spread", True):
+        try:
+            ph = state.get("price_history", [])
+            if len(ph) >= 20:
+                prices = [p["value"] for p in ph[-20:] if p.get("value")]
+                if prices:
+                    avg = sum(prices)/len(prices)
+                    var = sum((p-avg)**2 for p in prices)/(len(prices)-1 or 1)
+                    vol = (var**0.5)/avg if avg>0 else 0
+                    spread = min(spread * (1 + vol * 10), spread * 3)  # max 3x
+        except: pass
     grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
     mid_idx = len(grids) // 2
     return {
@@ -1836,6 +1850,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div style="display:flex;gap:6px">
       <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
       <button class="btn" onclick="exportCSV()" style="font-size:11px">&#11015; CSV</button>
+      <button class="btn" onclick="runBacktest()" style="font-size:11px">📊 Backtest</button>
     </div>
   </div>
 
@@ -2557,6 +2572,68 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_or_401(): return
             stop_bot()
             self.respond(200,"application/json",b'{"ok":true}')
+        elif path=="/backtest":
+            try: data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
+            except: data = {}
+            pair = data.get("pair", state.get("pair", "SOL/USDC"))
+            strategy = data.get("strategy", "grid")
+            # Load price data
+            prices = []
+            if state.get("price_history") and len(state["price_history"]) > 5:
+                prices = state["price_history"]
+            else:
+                # Fallback: fetch from Kraken
+                try:
+                    r = requests.get("https://api.kraken.com/0/public/OHLC", params={
+                        "pair": pair.replace("/",""), "interval": 5
+                    }, timeout=10)
+                    ohlc = r.json().get("result", {})
+                    for k in ohlc:
+                        if k != "last":
+                            prices = [{"time": int(p[0])*1000, "value": float(p[4])} for p in ohlc[k][-200:]]
+                except: pass
+            if not prices or len(prices) < 5:
+                self.respond(200,"application/json",json.dumps({"error":"Not enough price data"}).encode()); return
+            # Simple grid backtest
+            trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
+            levels=5; spread_val=cfg.get("base_spread",0.05)
+            base_price = prices[0]["value"]
+            grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
+            mid_idx = len(grids)//2; filled = {}
+            for pt in prices[1:]:
+                pr = pt["value"]
+                if pr <= 0: continue
+                # Re-center check
+                if pr < grids[0]*0.98 or pr > grids[-1]*1.02:
+                    base_price = pr
+                    grids = [round(pr*(1-spread_val)+i*(pr*spread_val*2/levels),4) for i in range(levels+1)]
+                    mid_idx = len(grids)//2
+                for i,g in enumerate(grids[:-1]):
+                    ng = grids[i+1]
+                    if g <= pr < ng:
+                        is_buy = i < mid_idx
+                        if is_buy and i not in filled:
+                            filled[i] = {"price":pr,"amount":1}
+                        elif not is_buy:
+                            for bi in sorted(filled.keys()):
+                                if bi < i:
+                                    bp = filled[bi]["price"]
+                                    pnl = pr - bp
+                                    pnl_total += pnl; equity += pnl
+                                    if equity > peak_equity: peak_equity = equity
+                                    dd = peak_equity - equity
+                                    if dd > max_dd: max_dd = dd
+                                    if pnl > 0: wins += 1
+                                    trades.append({"action":"sell","price":pr,"buy_price":bp,"pnl":round(pnl,2),"time":pt["time"]})
+                                    del filled[bi]; break
+            result = {
+                "total_trades": len(trades),
+                "win_rate": round(wins/max(len(trades),1)*100,1),
+                "total_pnl": round(pnl_total,2),
+                "max_drawdown": round(max_dd,2),
+                "trades": trades[-20:]
+            }
+            self.respond(200,"application/json",json.dumps(result).encode())
         elif path=="/debug_orca":
             if not self._auth_or_401(): return
             try:
@@ -2614,7 +2691,7 @@ class Handler(BaseHTTPRequestHandler):
                             log("Config "+key+" parse error: "+str(e), "WARN")
                     else:
                         cfg[key] = data[key]
-            state["config"] = {k: cfg.get(k) for k in ["max_leverage", "max_position", "cooldown", "slippage", "auto_compound", "partial_sell_pct"] if cfg.get(k) is not None}
+            state["config"] = {k: cfg.get(k) for k in ["max_leverage", "max_position", "cooldown", "slippage", "auto_compound", "partial_sell_pct", "dynamic_spread", "base_spread"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         else:
