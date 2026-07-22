@@ -763,25 +763,37 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
 
         # ── ATA helpers ────────────────────────────────────────────────────
         def get_ata(wallet_addr, mint_addr):
-            """Find existing Associated Token Account for a wallet+mint."""
-            rpcs = list(SOL_RPCS)
-            if ALCHEMY_KEY:
-                rpcs = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + rpcs
-            payload = {
-                "jsonrpc":"2.0","id":1,
-                "method":"getTokenAccountsByOwner",
-                "params":[wallet_addr, {"mint":mint_addr}, {"encoding":"jsonParsed"}]
-            }
-            for rpc in rpcs:
-                try:
-                    r = requests.post(rpc, json=payload, timeout=8)
-                    accs = r.json().get("result",{}).get("value",[])
-                    if accs:
-                        return accs[0].get("pubkey")
-                except Exception as e:
-                    log("ATA error: "+str(e), "WARN")
-                    continue
-            return None
+            """Find ATA by computing PDA locally, then checking with getAccountInfo."""
+            try:
+                from solders.pubkey import Pubkey
+                wallet_pk = Pubkey.from_string(wallet_addr)
+                mint_pk   = Pubkey.from_string(mint_addr)
+                token_prog = Pubkey.from_string("TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA")
+                ata_prog   = Pubkey.from_string("ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJe1bsU")
+                seeds = [bytes(wallet_pk), bytes(token_prog), bytes(mint_pk)]
+                ata_pk, _ = Pubkey.find_program_address(seeds, ata_prog)
+                ata_str = str(ata_pk)
+                # Check if ATA exists with lightweight getAccountInfo call
+                rpcs = list(SOL_RPCS)
+                if ALCHEMY_KEY:
+                    rpcs = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + rpcs
+                payload = {"jsonrpc":"2.0","id":1,"method":"getAccountInfo","params":[ata_str,{"encoding":"jsonParsed"}]}
+                for rpc in rpcs:
+                    try:
+                        r = requests.post(rpc, json=payload, timeout=8)
+                        result = r.json().get("result",{})
+                        if result.get("value"):
+                            return ata_str
+                        # Account doesn't exist yet
+                        if result and result.get("value") is None:
+                            return None
+                    except Exception as e:
+                        log("ATA lookup error: "+str(e)[:80], "WARN")
+                        continue
+                return None
+            except Exception as e:
+                log("ATA PDA error: "+str(e)[:80], "WARN")
+                return None
 
         def create_ata_if_missing(wallet_addr, mint_addr):
             """Create ATA on-chain if missing, return its address."""
