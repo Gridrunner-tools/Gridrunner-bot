@@ -1376,9 +1376,13 @@ def place_order(pair, side, amount):
             if side in ("buy","buy_market"):
                 # amount is token quantity, jupiter_swap needs USDC cost
                 cost = amount * price
-                return jupiter_swap(stablecoin, token, cost, price, dex="Raydium")
+                result = jupiter_swap(stablecoin, token, cost, price, dex="Raydium")
             else:
-                return jupiter_swap(token, stablecoin, amount, price, dex="Raydium")
+                result = jupiter_swap(token, stablecoin, amount, price, dex="Raydium")
+            # jupiter_swap returns (success_bool, amount) tuple — unpack it
+            if isinstance(result, tuple):
+                return result[0]
+            return bool(result)
         else:
             # EVM chains: use 1inch/Uniswap
             tokens = TOKENS.get(chain, {})
