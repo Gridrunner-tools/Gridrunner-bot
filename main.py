@@ -1539,7 +1539,7 @@ def run_grid():
             gs = state["grid_pairs"].get(pair)
             if not gs: continue
             grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
-            trailing_pct = gs["trailing_pct"]; trailing_high = gs["trailing_high"]
+            trailing_pct = cfg.get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
             trailing_sell_active = gs["trailing_sell_active"]
             trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
