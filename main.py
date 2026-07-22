@@ -2340,6 +2340,8 @@ function selectPair(p) {
   if (!p) return;
   sel.pair = p;
   updateBtn();
+  // Immediately refresh grid details for selected pair
+  refresh();
 }
 
 function selectExch(e) {
@@ -2455,10 +2457,24 @@ function refresh() {
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     var on = d.running;
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
-    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + d.pair + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
+    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + d.price.toFixed(4) : "—";
     if (d.price_history && d.price_history.length > 1) {
-      updateChart(d.price_history, d.grid_levels, d.grid_buy_zone, d.pair);
+      // Show grid for currently selected pair
+      var viewPair = sel.pair || d.pair || "SOL/USDC";
+      var gp = d.grid_pairs && d.grid_pairs[viewPair];
+      var levels = gp ? gp.grids : d.grid_levels;
+      var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
+      updateChart(d.price_history, levels, buyZone, viewPair);
+      // Override grid details for selected pair
+      if (gp) {
+        d.grid_levels = gp.grids;
+        d.grid_buy_zone = gp.grids[gp.mid_idx];
+        d.grid_filled = gp.filled;
+        d.grid_mid_idx = gp.mid_idx;
+        d.grid_trailing_active = gp.trailing_sell_active;
+        d.grid_trailing_high = gp.trailing_high;
+      }
     }
     document.getElementById("s-balance").textContent = d.balance > 0 ? "$" + d.balance.toFixed(2) : "—";
     document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + d.sol_usdc.toFixed(2) + " USDT: $" + d.sol_usdt.toFixed(2) + ")" : "—";
