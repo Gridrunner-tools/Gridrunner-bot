@@ -689,12 +689,8 @@ def start_background_loops():
             time.sleep(120)
 
     def arb_loop():
-        while True:
-            try:
-                scan_arbitrage()
-            except Exception as e:
-                log("arb loop error: "+str(e), "WARN")
-            time.sleep(120)
+        # Disabled — DexPaprika deprecated (410)
+        pass
 
     threading.Thread(target=price_loop, daemon=True).start()
     threading.Thread(target=balance_loop, daemon=True).start()
