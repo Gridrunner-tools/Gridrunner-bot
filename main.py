@@ -2384,7 +2384,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <button class="btn-start" id="start-btn" onclick="startBot()" disabled>Select options above</button>
       <button class="btn-stop" onclick="stopBot()">&#9209; Stop</button>
       <button class="btn-pause" id="pause-btn" onclick="pauseBot()" style="display:none">⏸ Pause</button>
-      <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)44;padding:13px 20px">📋 Paper: ON</button>
+      <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)44;padding:13px 20px">📋 Paper: —</button>
     </div>
   </div>
 
@@ -2929,6 +2929,13 @@ function refresh() {
     document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + d.sol_usdc.toFixed(2) + " USDT: $" + d.sol_usdt.toFixed(2) + ")" : "—";
     document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
     document.getElementById("s-mode").style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
+    var pb = document.getElementById("paper-btn");
+    if (pb) {
+      pb.textContent = "📋 Paper: " + (d.paper_trading ? "ON" : "OFF");
+      pb.style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
+      pb.style.borderColor = d.paper_trading ? "var(--yellow)44" : "var(--red)44";
+      pb.style.background = d.paper_trading ? "var(--yellow)18" : "var(--red)18";
+    }
     document.getElementById("s-pnl").innerHTML = d.pnl != null ? pnlHtml(d.pnl) : "$0.00";
     document.getElementById("s-pos").textContent = d.positions != null && d.positions.length != null ? d.positions.length : 0;
 
