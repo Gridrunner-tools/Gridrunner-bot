@@ -2404,7 +2404,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   <div class="card" id="config-card" style="display:none">
     <div class="ct">Configuration</div>
     <div class="config-grid">
-      <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="cfg-risk" value="2" min="0.1" max="100" step="0.1"/></div>
+      <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="cfg-risk" value="" min="0.1" max="100" step="0.1" placeholder="Loaded from state..."/></div>
       <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
       <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
       <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.5" min="0.1" max="10" step="0.1"/></div>
@@ -2753,7 +2753,7 @@ function applyPreset(name) {
 
 function saveConfig() {
   var cfg = {
-    risk_pct: parseFloat(document.getElementById("cfg-risk").value) || 2,
+    risk_pct: parseFloat(document.getElementById("cfg-risk").value) || null,
     max_pos: parseInt(document.getElementById("cfg-maxpos").value) || 500,
     grid_stop_loss_pct: parseFloat(document.getElementById("cfg-stoploss").value) || 8,
     trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.5,
@@ -3455,7 +3455,7 @@ class Handler(BaseHTTPRequestHandler):
             bool_keys = {"auto_compound"}
             float_keys = {"risk_pct", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
             for key in config_keys:
-                if key in data:
+                if key in data and data[key] is not None:
                     if key in bool_keys:
                         cfg[key] = str(data[key]).lower() in ("true","1","yes")
                     elif key in float_keys:
