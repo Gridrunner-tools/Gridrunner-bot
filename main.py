@@ -2568,8 +2568,11 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  chart.applyOptions({ timeScale: { barSpacing: 3 } });
-  chart.timeScale().scrollToPosition(candles.length, false);
+  // Lock right edge — prevent overnight drift
+  chart.timeScale().setVisibleLogicalRange({
+    from: Math.max(0, candles.length - 60),
+    to: candles.length + 1
+  });
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
