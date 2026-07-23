@@ -187,7 +187,7 @@ state = {
     "best_trade":    None,
     "trades_list":   [],
     "positions_list": [],
-    "config":        {"max_leverage": 3, "max_position": 1000, "cooldown": 30, "slippage": 0.5},
+    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
     "last_trade":    None,
     "price_history": [],
     "grid_levels":   [],
