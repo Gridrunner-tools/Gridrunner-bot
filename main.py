@@ -19,7 +19,7 @@ TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, 
 
 
 # ── License Validation ──────────────────────────────────────────────────────────
-LICENSE_URL = "https://raw.githubusercontent.com/gridrunner-tools/my-trading-bot/release/keys.json"
+LICENSE_URL = "https://raw.githubusercontent.com/gridrunner-tools/gridrunner-bot/release/keys.json"
 LICENSE_CACHE_FILE = ".license_cache"
 GRACE_HOURS = 48
 
