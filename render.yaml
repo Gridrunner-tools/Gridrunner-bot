@@ -18,7 +18,7 @@ services:
       - key: SOLANA_PRIVATE_KEY
         sync: false
       - key: PAPER_TRADING
-        value: "true"
+        value: "false"
       - key: API_SECRET
         sync: false
       - key: TG_BOT_TOKEN
