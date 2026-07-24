@@ -2813,15 +2813,23 @@ function selectPair(p) {
 
 function updateBtn() {
   var btn = document.getElementById("start-btn");
-  var ready = sel.strat && sel.pair;
+  // Fall back to reading dropdowns directly if sel not set
+  var st = sel.strat || document.getElementById("strat-select").value;
+  var pr = sel.pair || document.getElementById("pair-select").value;
+  var ready = st && pr;
   if (ready) {
+    sel.strat = st; sel.pair = pr;
     btn.disabled = false;
-    btn.textContent = "Start " + sel.strat.toUpperCase() + " on " + sel.pair;
+    btn.textContent = "Start " + st.toUpperCase() + " on " + pr;
   } else {
     btn.disabled = true;
     btn.textContent = "Select strategy and pair above";
   }
 }
+
+// Also enable button on ANY dropdown change
+document.getElementById("strat-select").addEventListener("change", updateBtn);
+document.getElementById("pair-select").addEventListener("change", updateBtn);
 
 function startBot() {
   var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
