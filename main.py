@@ -3200,6 +3200,20 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_or_401(): return
             stop_bot()
             self.respond(200,"application/json",b'{"ok":true}')
+        elif path=="/kill":
+            if not self._auth_or_401(): return
+            closed = 0; total_val = 0.0
+            for pair in list(state.get("active_pairs",[])):
+                gs = state["grid_pairs"].get(pair,{})
+                filled = gs.get("filled",{})
+                for idx, pos in list(filled.items()):
+                    if place_order(pair, "sell", pos["amount"]):
+                        total_val += pos["amount"] * pos.get("price", 0)
+                        closed += 1
+                        del filled[idx]
+            state["running"] = False
+            state["active_pairs"] = []
+            self.respond(200,"application/json",json.dumps({"closed":closed,"total_value":round(total_val,2)}).encode())
         elif path=="/backtest":
             if not self._auth_or_401(): return
             try: data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
