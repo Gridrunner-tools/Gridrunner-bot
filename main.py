@@ -1472,7 +1472,7 @@ def execute_arbitrage(opp):
         log("[PAPER] ARB: "+token+" buy on "+buy_from+" @ $"+str(price)+
             " → sell on "+sell_on+" @ $"+str(opp["sell_price"])+
             " spread "+str(spread)+"% est $"+str(est_profit))
-        record_trade("[PAPER] ARB", price, amt, round(est_profit,2))
+        record_trade("[PAPER] ARB", price, amt, round(est_profit,2), pair=pair)
         state["pnl"] += est_profit * 0.7
         return True
 
@@ -1480,7 +1480,7 @@ def execute_arbitrage(opp):
         # EVM arb — basic implementation
         result = place_order(pair, "buy", amt)
         if result:
-            record_trade("ARB "+buy_from+"→"+sell_on, price, amt, round(est_profit,2))
+            record_trade("ARB "+buy_from+"→"+sell_on, price, amt, round(est_profit,2), pair=pair)
         return bool(result)
 
     # ── Solana live two-leg arbitrage ─────────────────────────────────────────
@@ -1514,7 +1514,7 @@ def execute_arbitrage(opp):
             record_trade(
                 "ARB "+buy_from+"→"+sell_on,
                 price, token_received,
-                round(actual_profit, 4)
+                round(actual_profit, 4), pair=pair
             )
             log("ARB complete — spent $"+str(round(size,4))+
                 " received $"+str(round(usdc_received,4))+
@@ -1523,7 +1523,7 @@ def execute_arbitrage(opp):
             return True
         else:
             log("ARB sell leg failed — holding "+str(round(token_received,6))+" "+token, "WARN")
-            record_trade("ARB-BUY-ONLY (sell failed)", price, token_received, None)
+            record_trade("ARB-BUY-ONLY (sell failed)", price, token_received, None, pair=pair)
             state["trading_lock"] = False
             return False
 
@@ -1599,14 +1599,15 @@ def log_trade_to_file(entry):
     except Exception:
         pass
 
-def record_trade(side, price, amount, pnl=None):
-    trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl,"pair":state.get("pair","")}
+def record_trade(side, price, amount, pnl=None, pair=None):
+    _pair = pair if pair else state.get("pair","")
+    trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl,"pair":_pair}
     with _state_lock:
         state["trades"].append(trade)
         if len(state["trades"]) > 500:
             state["trades"] = state["trades"][-500:]
-        state["last_trade"] = {"action": side, "pair": state["pair"], "price": price, "time": time.time()}
-        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair", state.get("pair",""))} for t in state["trades"][-50:]]
+        state["last_trade"] = {"action": side, "pair": _pair, "price": price, "time": time.time()}
+        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
     # Persist to file
     log_trade_to_file({"event":"TRADE","time":trade["time"],"side":side,"pair":trade["pair"],"price":price,"amount":amount,"pnl":pnl})
 
@@ -1693,7 +1694,7 @@ def run_dca():
                 if place_order(pair,"buy",amt):
                     buy_prices.append(price)
                     state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
-                    record_trade("DCA-BUY",price,amt)
+                    record_trade("DCA-BUY",price,amt, pair=pair)
                     log("DCA BUY "+str(amt)+" @ $"+str(price))
         else:
             avg = sum(buy_prices)/len(buy_prices)
@@ -1704,7 +1705,7 @@ def run_dca():
                 if place_order(pair,"sell",total):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
-                    record_trade("SELL",price,total,round(pnl,2))
+                    record_trade("SELL",price,total,round(pnl,2), pair=pair)
                     log("DCA SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
                     buy_prices.clear(); state["positions"].clear()
             elif loss >= cfg["stop_loss"]:
@@ -1712,7 +1713,7 @@ def run_dca():
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
                     state["daily_loss"] += abs(pnl)
-                    record_trade("STOP",price,total,round(pnl,2))
+                    record_trade("STOP",price,total,round(pnl,2), pair=pair)
                     log("STOP LOSS @ $"+str(price), "WARN")
                     buy_prices.clear(); state["positions"].clear()
             elif loss >= 2 and state["daily_loss"] < cfg["max_loss"]:
@@ -1722,7 +1723,7 @@ def run_dca():
                     if place_order(pair,"buy",amt):
                         buy_prices.append(price)
                         state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
-                        record_trade("DCA-BUY",price,amt)
+                        record_trade("DCA-BUY",price,amt, pair=pair)
                         log("DCA averaging down @ $"+str(price))
         if state["daily_loss"] >= cfg["max_loss"]:
             log("Daily loss limit reached — pausing 1hr", "WARN"); time.sleep(3600)
@@ -1865,7 +1866,7 @@ def run_grid():
                                 if place_order(pair,"buy",amt):
                                     filled[i]={"price":price,"amount":amt}
                                     state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
-                                    record_trade("GRID-BUY",price,amt)
+                                    record_trade("GRID-BUY",price,amt, pair=pair)
                                     log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
                                     send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                     trailing_buy_active = False
@@ -1894,7 +1895,7 @@ def run_grid():
                             if place_order(pair,"sell",sl_amt):
                                 sl_pnl = (price - sl_bp) * sl_amt
                                 state["pnl"] += sl_pnl
-                                record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2))
+                                record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2), pair=pair)
                                 log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
                                 del filled[sl_buy_idx]
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
@@ -1948,7 +1949,7 @@ def run_grid():
                                         if cfg.get("auto_compound", True) and pnl > 0:
                                             state["compound_profit"] += pnl
                                         tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
-                                        record_trade(tag,price,sell_amt,round(pnl,2))
+                                        record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)
                                         log("["+pair+"] SELL "+str(round(sell_amt,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(buy_price,2))+" PnL $"+str(round(pnl,2))+")")
                                         log("["+pair+"] TRADE SUMMARY: "+str(round(sell_amt,6))+" bought @ $"+str(round(buy_price,2))+" sold @ $"+str(round(price,2))+" | PnL $"+str(round(pnl,2)))
                                         send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
@@ -2029,7 +2030,7 @@ def run_scalp():
             if place_order(pair,"buy",amt):
                 position={"price":price,"amount":amt}
                 state["positions"]=[{"price":price,"amount":amt,"strategy":"Scalp"}]
-                record_trade("SCALP-BUY",price,amt)
+                record_trade("SCALP-BUY",price,amt, pair=pair)
                 log("Scalp BUY @ $"+str(price))
         elif position:
             gain=(price-position["price"])/position["price"]*100
@@ -2039,7 +2040,7 @@ def run_scalp():
                     pnl=(price-position["price"])*position["amount"]
                     state["pnl"]+=pnl
                     if pnl<0: state["daily_loss"]+=abs(pnl)
-                    record_trade("SCALP-SELL",price,position["amount"],round(pnl,2))
+                    record_trade("SCALP-SELL",price,position["amount"],round(pnl,2), pair=pair)
                     log("Scalp SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
                     position=None; state["positions"]=[]
         time.sleep(10)
@@ -2115,7 +2116,7 @@ def run_rsi_ema():
                 amt = round(order_size / price, 6)
                 if place_order(pair, "buy", amt):
                     state["positions"].append({"price": price, "amount": amt, "strategy": "RSI-EMA"})
-                    record_trade("RSI-BUY", price, amt)
+                    record_trade("RSI-BUY", price, amt, pair=pair)
                     has_position = True
                     entry_price = price
                     log("[RSI-EMA] BUY " + pair + " @ $" + str(round(price, 2)) + " | RSI=" + str(round(rsi_now, 1)) + " crossover")
@@ -2151,7 +2152,7 @@ def run_rsi_ema():
                     amt = state["positions"][-1]["amount"] if state["positions"] else round(order_size / entry_price, 6)
                     if place_order(pair, "sell", amt):
                         pnl = (price - entry_price) * amt
-                        record_trade("RSI-SELL", price, amt, pnl)
+                        record_trade("RSI-SELL", price, amt, pnl, pair=pair)
                         log("[RSI-EMA] SELL " + pair + " @ $" + str(round(price, 2)) + " | PnL $" + str(round(pnl, 2)) + " | " + reason)
                         has_position = False
                         entry_price = 0
@@ -2187,7 +2188,7 @@ def run_bbands():
                 amt = round(order_size / price, 6)
                 if place_order(pair, "buy", amt):
                     state["positions"].append({"price": price, "amount": amt, "strategy": "Bollinger"})
-                    record_trade("BB-BUY", price, amt)
+                    record_trade("BB-BUY", price, amt, pair=pair)
                     has_position = True
                     entry_price = price
                     log("[BBANDS] BUY " + pair + " @ $" + str(round(price, 2)) + " | lower band $" + str(round(lower_now, 2)))
@@ -2217,7 +2218,7 @@ def run_bbands():
                     amt = state["positions"][-1]["amount"] if state["positions"] else round(order_size / entry_price, 6)
                     if place_order(pair, "sell", amt):
                         pnl = (price - entry_price) * amt
-                        record_trade("BB-SELL", price, amt, pnl)
+                        record_trade("BB-SELL", price, amt, pnl, pair=pair)
                         log("[BBANDS] SELL " + pair + " @ $" + str(round(price, 2)) + " | PnL $" + str(round(pnl, 2)) + " | " + reason)
                         has_position = False
                         entry_price = 0
@@ -3215,7 +3216,7 @@ class Handler(BaseHTTPRequestHandler):
                 b"self.addEventListener('activate',function(e){e.waitUntil(clients.claim())});"
                 b"self.addEventListener('fetch',function(e){e.respondWith(fetch(e.request).catch(function(){return caches.match(e.request)}))})")
         elif path=="/state":
-            state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair", state.get("pair",""))} for t in state["trades"][-50:]]
+            state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))
             if not self._check_auth():
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
@@ -3349,7 +3350,7 @@ class Handler(BaseHTTPRequestHandler):
                         if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
-                            record_trade("WEBHOOK-BUY",wprice,amt)
+                            record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
                             log("[WEBHOOK] Forced buy "+wpair+" @ $"+str(round(wprice,2)))
                             break
                 self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair}).encode())
@@ -3364,7 +3365,7 @@ class Handler(BaseHTTPRequestHandler):
                     if place_order(wpair,"sell",amt):
                         pnl = (sp - bp) * amt
                         state["pnl"] += pnl
-                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2))
+                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)
                         log("[WEBHOOK] Forced sell "+wpair+" @ $"+str(round(sp,2)))
                         sold += 1
                 state["grid_pairs"][wpair]["filled"] = {}
@@ -3447,7 +3448,7 @@ class Handler(BaseHTTPRequestHandler):
                         if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
-                            record_trade("WEBHOOK-BUY",wprice,amt)
+                            record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
                             log("[WEBHOOK] Forced buy "+wpair+" @ $"+str(round(wprice,2)))
                             break
                 self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair}).encode())
@@ -3462,7 +3463,7 @@ class Handler(BaseHTTPRequestHandler):
                     if place_order(wpair,"sell",amt):
                         pnl = (sp - bp) * amt
                         state["pnl"] += pnl
-                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2))
+                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)
                         log("[WEBHOOK] Forced sell "+wpair+" @ $"+str(round(sp,2)))
                         sold += 1
                 state["grid_pairs"][wpair]["filled"] = {}
@@ -3583,7 +3584,7 @@ class Handler(BaseHTTPRequestHandler):
                 token_amt = round(usdc_amt / price, 6)
                 ok = place_order(pair, "buy", token_amt)
                 if ok:
-                    record_trade("MANUAL-BUY", price, token_amt)
+                    record_trade("MANUAL-BUY", price, token_amt, pair=pair)
                     log("[MANUAL] BUY "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
                     self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair}).encode())
                 else:
@@ -3593,7 +3594,7 @@ class Handler(BaseHTTPRequestHandler):
                 ok = place_order(pair, "sell", token_amt)
                 if ok:
                     received = token_amt * price
-                    record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2))
+                    record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2), pair=pair)
                     log("[MANUAL] SELL "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
                     self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"received":round(received,2)}).encode())
                 else:
@@ -3622,7 +3623,7 @@ class Handler(BaseHTTPRequestHandler):
                         if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
-                            record_trade("WEBHOOK-BUY",wprice,amt)
+                            record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
                             log("[WEBHOOK] Forced buy "+wpair+" @ $"+str(round(wprice,2)))
                             break
                 self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair}).encode())
@@ -3637,7 +3638,7 @@ class Handler(BaseHTTPRequestHandler):
                     if place_order(wpair,"sell",amt):
                         pnl = (sp - bp) * amt
                         state["pnl"] += pnl
-                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2))
+                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)
                         log("[WEBHOOK] Forced sell "+wpair+" @ $"+str(round(sp,2)))
                         sold += 1
                 state["grid_pairs"][wpair]["filled"] = {}
