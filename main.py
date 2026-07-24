@@ -336,8 +336,44 @@ def get_price_raydium(pair):
         log("Raydium price error: "+str(ex), "WARN")
     return 0.0
 
+def get_price_jupiter(pair):
+    """Get price from Jupiter quote API (works for any token on Solana)."""
+    try:
+        token = pair.split("/")[0].upper()
+        token_mint = SOL_TOKENS.get(token)
+        if not token_mint:
+            # Try to find mint via Jupiter token list
+            try:
+                r = requests.get("https://token.jup.ag/all", timeout=5)
+                for t in r.json():
+                    if t.get("symbol","").upper() == token:
+                        token_mint = t["address"]
+                        SOL_TOKENS[token] = token_mint
+                        log(f"Found {token} mint via Jupiter: {token_mint[:8]}...")
+                        break
+            except: pass
+        if not token_mint:
+            return 0.0
+        usdc_mint = SOL_TOKENS.get("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        decimals = TOKEN_DECIMALS.get(token, 6)
+        amount = 10 ** decimals  # 1 full token
+        url = f"https://quote-api.jup.ag/v6/quote?inputMint={token_mint}&outputMint={usdc_mint}&amount={amount}&slippageBps=100"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if data.get("outAmount"):
+            price = int(data["outAmount"]) / 10**6
+            if price > 0:
+                return price
+    except Exception as ex:
+        log("Jupiter price error: "+str(ex), "WARN")
+    return 0.0
+
 def get_price(pair):
     price = get_price_raydium(pair)
+    if price > 0:
+        state["price"] = price
+        return price
+    price = get_price_jupiter(pair)
     if price > 0:
         state["price"] = price
         return price
