@@ -45,8 +45,33 @@ def validate_license():
     """
     license_key = os.environ.get("LICENSE_KEY", "").strip()
     if not license_key:
-        print("LICENSE_KEY not set — running in DEMO mode (paper trading only)")
-        return True, {"valid": True, "type": "demo", "expires": None, "days_remaining": None}
+        # Auto-trial: 7 days free from first run
+        trial_file = "trial.json"
+        try:
+            if os.path.exists(trial_file):
+                with open(trial_file) as f:
+                    trial = json.load(f)
+                trial_start = datetime.fromisoformat(trial["start"])
+                trial_end = trial_start + timedelta(days=7)
+                now = datetime.now(timezone.utc)
+                days_left = (trial_end - now).days
+                if now < trial_end:
+                    print(f"TRIAL ACTIVE — {days_left} day(s) remaining (ends {trial_end.strftime('%Y-%m-%d')})")
+                    return True, {"valid": True, "type": "trial", "expires": trial_end.isoformat(), "days_remaining": max(0, days_left)}
+                else:
+                    print(f"TRIAL EXPIRED — ended {trial_end.strftime('%Y-%m-%d')}. Buy a license to continue live trading.")
+                    return False, {"valid": False, "type": "trial_expired", "expires": trial_end.isoformat(), "days_remaining": 0, "error": "Trial expired. Purchase a license key to continue."}
+            else:
+                # First run — start trial
+                trial_start = datetime.now(timezone.utc)
+                trial_end = trial_start + timedelta(days=7)
+                with open(trial_file, "w") as f:
+                    json.dump({"start": trial_start.isoformat(), "end": trial_end.isoformat()}, f)
+                print(f"TRIAL STARTED — 7 days free. Expires {trial_end.strftime('%Y-%m-%d')}")
+                return True, {"valid": True, "type": "trial", "expires": trial_end.isoformat(), "days_remaining": 7}
+        except Exception as e:
+            print(f"Trial error: {e}")
+            return True, {"valid": True, "type": "demo", "expires": None, "days_remaining": None}
 
     # Try to fetch the keys file
     keys_data = None
@@ -3633,9 +3658,8 @@ if __name__=="__main__":
     state["license_days_left"] = linfo.get("days_remaining")
     if not valid:
         error_msg = linfo.get("error", "License validation failed")
-        log(f"LICENSE INVALID — {error_msg}. Bot will not start.", "ERROR")
-        import sys
-        sys.exit(1)
+        log(f"LICENSE INVALID — {error_msg}. Live trading disabled. Paper mode only.", "WARN")
+        state["paper_trading"] = True  # force paper-only
     start_background_loops()
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
