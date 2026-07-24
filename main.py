@@ -368,12 +368,43 @@ def get_price_jupiter(pair):
         log("Jupiter price error: "+str(ex), "WARN")
     return 0.0
 
+def get_price_dexscreener(pair):
+    """Get price from DexScreener API (works for obscure meme coins)."""
+    try:
+        token = pair.split("/")[0].upper()
+        token_mint = SOL_TOKENS.get(token)
+        if not token_mint:
+            return 0.0
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{token_mint}"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        pairs = data.get("pairs", [])
+        if pairs:
+            # Find the best USDC pair by liquidity
+            best = None
+            for p in pairs:
+                if p.get("quoteToken",{}).get("symbol","") in ("USDC","USDT","SOL"):
+                    liq = float(p.get("liquidity",{}).get("usd",0))
+                    if best is None or liq > float(best.get("liquidity",{}).get("usd",0)):
+                        best = p
+            if best:
+                price = float(best.get("priceUsd", 0))
+                if price > 0:
+                    return price
+    except Exception as ex:
+        log("DexScreener price error: "+str(ex), "WARN")
+    return 0.0
+
 def get_price(pair):
     price = get_price_raydium(pair)
     if price > 0:
         state["price"] = price
         return price
     price = get_price_jupiter(pair)
+    if price > 0:
+        state["price"] = price
+        return price
+    price = get_price_dexscreener(pair)
     if price > 0:
         state["price"] = price
         return price
