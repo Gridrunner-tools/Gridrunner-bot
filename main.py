@@ -19,7 +19,7 @@ TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, 
 
 
 # ── License Validation ──────────────────────────────────────────────────────────
-LICENSE_URL = "https://raw.githubusercontent.com/gridrunner-tools/my-trading-bot/release/keys.json"
+LICENSE_URL = "https://raw.githubusercontent.com/gridrunner-tools/gridrunner-bot/release/keys.json"
 LICENSE_CACHE_FILE = ".license_cache"
 GRACE_HOURS = 48
 
@@ -45,20 +45,64 @@ def validate_license():
     """
     license_key = os.environ.get("LICENSE_KEY", "").strip()
     if not license_key:
-        print("LICENSE_KEY not set — running in DEMO mode (paper trading only)")
-        return True, {"valid": True, "type": "demo", "expires": None, "days_remaining": None}
+        # Auto-trial: 7 days free from first run
+        trial_file = "trial.json"
+        try:
+            if os.path.exists(trial_file):
+                with open(trial_file) as f:
+                    trial = json.load(f)
+                trial_start = datetime.fromisoformat(trial.get("start", "2000-01-01T00:00:00+00:00"))
+                trial_end = trial_start + timedelta(days=7)
+                # Verify hash hasn't been tampered with
+                expected_hash = hashlib.sha256(trial_start.isoformat().encode()).hexdigest()[:16]
+                if trial.get("hash") != expected_hash:
+                    print("TRIAL DATA TAMPERED — forcing paper-only mode")
+                    return False, {"valid": False, "type": "tampered", "expires": None, "days_remaining": 0, "error": "Trial data tampered. Purchase a license."}
+                now = datetime.now(timezone.utc)
+                days_left = (trial_end - now).days
+                if now < trial_end:
+                    print(f"TRIAL ACTIVE — {days_left} day(s) remaining (ends {trial_end.strftime('%Y-%m-%d')})")
+                    return True, {"valid": True, "type": "trial", "expires": trial_end.isoformat(), "days_remaining": max(0, days_left)}
+                else:
+                    print(f"TRIAL EXPIRED — ended {trial_end.strftime('%Y-%m-%d')}. Buy a license to continue live trading.")
+                    return False, {"valid": False, "type": "trial_expired", "expires": trial_end.isoformat(), "days_remaining": 0, "error": "Trial expired. Purchase a license key to continue."}
+            else:
+                # First run — start trial. Fetch remote time to prevent clock manipulation.
+                trial_start = datetime.now(timezone.utc)
+                try:
+                    r = requests.get("https://api.kraken.com/0/public/Time", timeout=5)
+                    if r.status_code == 200:
+                        unixtime = r.json().get("result",{}).get("unixtime", 0)
+                        if unixtime > 0:
+                            trial_start = datetime.fromtimestamp(unixtime, tz=timezone.utc)
+                except Exception:
+                    pass  # fall back to local time if network fails
+                trial_end = trial_start + timedelta(days=7)
+                # Store obfuscated: hash the start time so tampering is detectable
+                trial_hash = hashlib.sha256(trial_start.isoformat().encode()).hexdigest()[:16]
+                with open(trial_file, "w") as f:
+                    json.dump({"start": trial_start.isoformat(), "end": trial_end.isoformat(), "hash": trial_hash}, f)
+                print(f"TRIAL STARTED — 7 days free. Expires {trial_end.strftime('%Y-%m-%d')}")
+                return True, {"valid": True, "type": "trial", "expires": trial_end.isoformat(), "days_remaining": 7}
+        except Exception as e:
+            print(f"Trial error: {e}")
+            return True, {"valid": True, "type": "demo", "expires": None, "days_remaining": None}
 
     # Try to fetch the keys file
     keys_data = None
     fetch_ok = False
-    try:
-        import urllib.request
-        req = urllib.request.Request(LICENSE_URL, headers={"User-Agent": "LeverBot/1.0"})
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            keys_data = json.loads(resp.read().decode())
-        fetch_ok = True
-    except Exception as e:
-        print(f"License fetch failed: {e}")
+    for attempt in range(3):
+        try:
+            import urllib.request
+            req = urllib.request.Request(LICENSE_URL, headers={"User-Agent": "GridRunner/1.0"})
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                keys_data = json.loads(resp.read().decode())
+            fetch_ok = True
+            break
+        except Exception as e:
+            wait = 2 ** attempt
+            print(f"License fetch attempt {attempt+1} failed: {e} — retrying in {wait}s")
+            time.sleep(wait)
 
     if not fetch_ok or keys_data is None:
         # Grace period: check cache
@@ -2227,7 +2271,13 @@ DASHBOARD = '''<!DOCTYPE html>
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>Trading Bot Dashboard</title>
+<title>GridRunner — Trading Dashboard</title>
+<link rel="manifest" href="/manifest.json"/>
+<meta name="theme-color" content="#0a0a1a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="GridRunner"/>
+<link rel="apple-touch-icon" href="/logo.jpeg"/>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 :root{--bg:#080808;--card:#111;--border:#1a1a1a;--text:#eee;--text2:#888;--dim:#444;--accent:#00ff9d;--red:#ff6b6b;--blue:#4dabf7;--purple:#cc99ff;--yellow:#ffd43b}
@@ -2788,15 +2838,23 @@ function selectPair(p) {
 
 function updateBtn() {
   var btn = document.getElementById("start-btn");
-  var ready = sel.strat && sel.pair;
+  // Fall back to reading dropdowns directly if sel not set
+  var st = sel.strat || document.getElementById("strat-select").value;
+  var pr = sel.pair || document.getElementById("pair-select").value;
+  var ready = st && pr;
   if (ready) {
+    sel.strat = st; sel.pair = pr;
     btn.disabled = false;
-    btn.textContent = "Start " + sel.strat.toUpperCase() + " on " + sel.pair;
+    btn.textContent = "Start " + st.toUpperCase() + " on " + pr;
   } else {
     btn.disabled = true;
     btn.textContent = "Select strategy and pair above";
   }
 }
+
+// Also enable button on ANY dropdown change
+document.getElementById("strat-select").addEventListener("change", updateBtn);
+document.getElementById("pair-select").addEventListener("change", updateBtn);
 
 function startBot() {
   var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
@@ -3138,6 +3196,23 @@ class Handler(BaseHTTPRequestHandler):
 
         if path=="/":
             self.respond(200,"text/html",DASHBOARD.replace("{API_SECRET}", os.environ.get("API_SECRET","")).encode())
+        elif path=="/logo.jpeg":
+            try:
+                with open("logo.jpeg","rb") as f: logo_data=f.read()
+                self.respond(200,"image/jpeg",logo_data)
+            except: self.respond(404,"text/plain",b"logo not found")
+        elif path=="/manifest.json":
+            manifest = json.dumps({
+                "name":"GridRunner","short_name":"GridRunner","start_url":"/","display":"standalone",
+                "background_color":"#0a0a1a","theme_color":"#0a0a1a",
+                "icons":[{"src":"/logo.jpeg","sizes":"512x512","type":"image/jpeg","purpose":"any maskable"}]
+            })
+            self.respond(200,"application/json",manifest.encode())
+        elif path=="/sw.js":
+            self.respond(200,"application/javascript",
+                b"self.addEventListener('install',function(e){self.skipWaiting()});"
+                b"self.addEventListener('activate',function(e){e.waitUntil(clients.claim())});"
+                b"self.addEventListener('fetch',function(e){e.respondWith(fetch(e.request).catch(function(){return caches.match(e.request)}))})")
         elif path=="/state":
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair", state.get("pair",""))} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))
@@ -3167,6 +3242,20 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_or_401(): return
             stop_bot()
             self.respond(200,"application/json",b'{"ok":true}')
+        elif path=="/kill":
+            if not self._auth_or_401(): return
+            closed = 0; total_val = 0.0
+            for pair in list(state.get("active_pairs",[])):
+                gs = state["grid_pairs"].get(pair,{})
+                filled = gs.get("filled",{})
+                for idx, pos in list(filled.items()):
+                    if place_order(pair, "sell", pos["amount"]):
+                        total_val += pos["amount"] * pos.get("price", 0)
+                        closed += 1
+                        del filled[idx]
+            state["running"] = False
+            state["active_pairs"] = []
+            self.respond(200,"application/json",json.dumps({"closed":closed,"total_value":round(total_val,2)}).encode())
         elif path=="/backtest":
             if not self._auth_or_401(): return
             try: data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
@@ -3633,9 +3722,8 @@ if __name__=="__main__":
     state["license_days_left"] = linfo.get("days_remaining")
     if not valid:
         error_msg = linfo.get("error", "License validation failed")
-        log(f"LICENSE INVALID — {error_msg}. Bot will not start.", "ERROR")
-        import sys
-        sys.exit(1)
+        log(f"LICENSE INVALID — {error_msg}. Live trading disabled. Paper mode only.", "WARN")
+        state["paper_trading"] = True  # force paper-only
     start_background_loops()
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
