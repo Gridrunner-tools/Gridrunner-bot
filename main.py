@@ -1,3 +1,4 @@
+# GridRunner v2 — multi-chart + all fixes
 #!/usr/bin/env python3
 """
 Trading Bot — Full Dashboard
