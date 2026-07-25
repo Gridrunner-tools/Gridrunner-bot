@@ -3096,14 +3096,16 @@ function refresh() {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
     } else {
-      // Clean up cards for pairs no longer active
-      var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
-      var activeSet = {};
-      d.active_pairs.forEach(function(p) { activeSet[p] = true; });
-      allCards.forEach(function(card) {
-        var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
-        if (!activeSet[cardPair]) card.remove();
-      });
+      // Clean up cards for pairs no longer active (only if we have pair data)
+      if (d.active_pairs && d.active_pairs.length) {
+        var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
+        var activeSet = {};
+        d.active_pairs.forEach(function(p) { activeSet[p] = true; });
+        allCards.forEach(function(card) {
+          var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
+          if (!activeSet[cardPair]) card.remove();
+        });
+      }
       var multiPairs = d.active_pairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
