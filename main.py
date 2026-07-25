@@ -3089,6 +3089,13 @@ function refresh() {
     if (multiPair) {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
+      // Remember we're in multi mode so single auth failure won't flicker back
+      window._wasMulti = true;
+    } else if (window._wasMulti && d.active_pairs && d.active_pairs.length >= 1) {
+      // Stay in multi mode if we were previously multi and still have pairs
+      if (singleRow) singleRow.style.display = "none";
+      if (chartsWrap) chartsWrap.style.display = "flex";
+    } else {
       // Clean up cards for pairs no longer active
       var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
       var activeSet = {};
@@ -3176,7 +3183,7 @@ function refresh() {
           infoEl.innerHTML = html;
         }
       });
-    } else {
+      window._wasMulti = false;
       if (singleRow) singleRow.style.display = "flex";
       if (chartsWrap) chartsWrap.style.display = "none";
     }
