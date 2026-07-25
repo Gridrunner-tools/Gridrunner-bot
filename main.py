@@ -337,8 +337,75 @@ def get_price_raydium(pair):
         log("Raydium price error: "+str(ex), "WARN")
     return 0.0
 
+def get_price_jupiter(pair):
+    """Get price from Jupiter quote API (works for any token on Solana)."""
+    try:
+        token = pair.split("/")[0].upper()
+        token_mint = SOL_TOKENS.get(token)
+        if not token_mint:
+            try:
+                r = requests.get("https://token.jup.ag/all", timeout=5)
+                for t in r.json():
+                    if t.get("symbol","").upper() == token:
+                        token_mint = t["address"]
+                        SOL_TOKENS[token] = token_mint
+                        log(f"Found {token} mint via Jupiter: {token_mint[:8]}...")
+                        break
+            except: pass
+        if not token_mint:
+            return 0.0
+        usdc_mint = SOL_TOKENS.get("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        decimals = TOKEN_DECIMALS.get(token, 6)
+        amount = 10 ** decimals
+        url = f"https://quote-api.jup.ag/v6/quote?inputMint={token_mint}&outputMint={usdc_mint}&amount={amount}&slippageBps=100"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if data.get("outAmount"):
+            price = int(data["outAmount"]) / 10**6
+            if price > 0:
+                return price
+    except Exception as ex:
+        log("Jupiter price error: "+str(ex), "WARN")
+    return 0.0
+
+def get_price_dexscreener(pair):
+    """Get price from DexScreener API (works for obscure meme coins)."""
+    try:
+        token = pair.split("/")[0].upper()
+        token_mint = SOL_TOKENS.get(token)
+        if not token_mint:
+            return 0.0
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{token_mint}"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        pairs_resp = data.get("pairs", [])
+        if pairs_resp:
+            best = None
+            for p in pairs_resp:
+                if p.get("quoteToken",{}).get("symbol","") in ("USDC","USDT","SOL"):
+                    liq = float(p.get("liquidity",{}).get("usd",0))
+                    if best is None or liq > float(best.get("liquidity",{}).get("usd",0)):
+                        best = p
+            if best:
+                price = float(best.get("priceUsd", 0))
+                if price > 0:
+                    return price
+    except Exception as ex:
+        log("DexScreener price error: "+str(ex), "WARN")
+    return 0.0
+
+def get_price_jup_dex(pair):
+    price = get_price_jupiter(pair)
+    if price > 0:
+        state["price"] = price
+        return price
+    return get_price_dexscreener(pair)
 def get_price(pair):
     price = get_price_raydium(pair)
+    if price > 0:
+        state["price"] = price
+        return price
+    price = get_price_jup_dex(pair)
     if price > 0:
         state["price"] = price
         return price
@@ -1572,10 +1639,12 @@ def place_order(pair, side, amount):
                 # amount is token quantity, jupiter_swap needs USDC cost
                 cost = amount * price
                 log(f"place_order BUY: amt={amount} price={price} cost={cost} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"BUY","pair":pair,"amount":amount,"price":price,"cost":cost})
-                result = jupiter_swap(stablecoin, token, cost, price, dex="Raydium")
+                swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
+                result = jupiter_swap(stablecoin, token, cost, price, dex=swap_dex)
             else:
                 log(f"place_order SELL: amt={amount} price={price} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"SELL","pair":pair,"amount":amount,"price":price})
-                result = jupiter_swap(token, stablecoin, amount, price, dex="Raydium")
+                swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
+                result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex)
             # jupiter_swap returns (success_bool, amount) tuple — unpack it
             if isinstance(result, tuple):
                 return result[0]
@@ -1990,14 +2059,18 @@ def run_grid():
                 state["daily_pnl"] = 0.0
                 state["last_midnight"] = today_midnight
             # Track peak balance
-            b = get_balance()
-            if b > state.get("peak_balance", 0):
-                state["peak_balance"] = b
+            usdc_bal = get_balance()
+            total_val = usdc_bal
+            for gp_name, gp_data in state.get("grid_pairs", {}).items():
+                for idx, pos in gp_data.get("filled", {}).items():
+                    total_val += pos.get("amount", 0) * pos.get("price", 0)
+            if total_val > state.get("peak_balance", 0):
+                state["peak_balance"] = total_val
             # Drawdown check
             dd_pct = cfg.get("max_drawdown_pct", 20)
             pk = state.get("peak_balance", 0)
-            if pk > 0 and b < pk * (1 - dd_pct/100):
-                log("DRAWDOWN STOP: balance $"+str(round(b,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
+            if pk > 0 and total_val < pk * (1 - dd_pct/100):
+                log("DRAWDOWN STOP: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
                 state["running"] = False
                 state["strategy"] = None
                 state["emergency_stop"] = True
@@ -3015,6 +3088,14 @@ function refresh() {
     if (multiPair) {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
+      // Clean up cards for pairs no longer active
+      var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
+      var activeSet = {};
+      d.active_pairs.forEach(function(p) { activeSet[p] = true; });
+      allCards.forEach(function(card) {
+        var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
+        if (!activeSet[cardPair]) card.remove();
+      });
       var multiPairs = d.active_pairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
@@ -3028,11 +3109,14 @@ function refresh() {
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
-          // Create chart
-          try {
-            var chartEl = document.getElementById(cardId + "-chart");
-            var ch = LightweightCharts.createChart(chartEl, {
-              width: chartEl.clientWidth || 350, height: 200,
+          // Create chart after DOM layout (ensures proper width)
+          setTimeout(function() {
+            try {
+              var chartEl = document.getElementById(cardId + "-chart");
+              if (!chartEl) return;
+              var w = chartEl.clientWidth || 380;
+              var ch = LightweightCharts.createChart(chartEl, {
+                width: w, height: 200,
               layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
               grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
               timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
@@ -3043,29 +3127,53 @@ function refresh() {
               upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
               wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
             });
-          } catch(e) { console.log("Chart error for " + pair, e); }
+            } catch(e) { console.log("Chart error for " + pair, e); }
+          }, 50);
         }
         // Update chart data
         var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
-        if (ph.length > 1 && card._series) {
+        if (card._series) {
           var chartData = [];
-          for (var j = 0; j < ph.length; j++) {
-            var p = ph[j];
-            var o = j > 0 ? ph[j-1].value : p.value;
-            chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+          if (ph.length >= 1) {
+            for (var j = 0; j < ph.length; j++) {
+              var p = ph[j];
+              var o = j > 0 ? ph[j-1].value : p.value;
+              chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+            }
+            // If only 1 point, duplicate it so candles render
+            if (ph.length === 1) {
+              chartData.push({time: ph[0].time - 1, open: ph[0].value, high: ph[0].value, low: ph[0].value, close: ph[0].value});
+            }
           }
-          card._series.setData(chartData);
+          if (chartData.length) card._series.setData(chartData);
         }
         // Update price
         var lastPrice = ph.length ? ph[ph.length-1].value : (d.price || 0);
         var priceEl = document.getElementById(cardId + "-price");
-        if (priceEl && lastPrice) priceEl.textContent = "$" + (typeof lastPrice === "number" ? lastPrice.toFixed(6) : lastPrice);
-        // Update info
+        if (priceEl && lastPrice !== undefined && lastPrice !== null) priceEl.textContent = "$" + (typeof lastPrice === "number" ? lastPrice.toFixed(6) : lastPrice);
+        // Update info with full grid details
         var gp = d.grid_pairs && d.grid_pairs[pair];
         var infoEl = document.getElementById(cardId + "-info");
-        if (infoEl && gp) {
+        if (infoEl && gp && gp.grids) {
+          var gl = gp.grids;
+          var midIdx = gp.mid_idx != null ? gp.mid_idx : Math.floor(gl.length / 2);
           var fc = gp.filled ? Object.keys(gp.filled).length : 0;
-          infoEl.innerHTML = "Levels: " + (gp.grids ? gp.grids.length : 0) + " | Filled: " + fc + " | Buy: ≤$" + (gp.grids[gp.mid_idx]||0).toFixed(4) + " | Sell: >$" + (gp.grids[gp.mid_idx]||0).toFixed(4);
+          var curP = lastPrice || 0;
+          var trailActive = gp.trailing_sell_active || false;
+          var html = '<div style="font-size:11px;margin-top:8px">';
+          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + '</span>';
+          if (trailActive) html += ' <span style="color:#ff6b6b">⚠ Trailing</span>';
+          html += '<div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:2px;font-size:10px">';
+          for (var i = 0; i < gl.length; i++) {
+            var isFilled = gp.filled && gp.filled[i] != null;
+            var isMid = i === midIdx;
+            var isBuy = i < midIdx;
+            var color = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
+            var marker = isFilled ? "●" : isMid ? "◇" : isBuy ? "△" : "▽";
+            html += '<span style="color:' + color + '">' + marker + '$' + gl[i].toFixed(2) + '</span>';
+          }
+          html += '</div></div>';
+          infoEl.innerHTML = html;
         }
       });
     } else {
