@@ -3110,12 +3110,11 @@ function refresh() {
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
-          // Create chart after DOM layout (ensures proper width)
-          setTimeout(function() {
-            try {
-              var chartEl = document.getElementById(cardId + "-chart");
-              if (!chartEl) return;
-              var w = chartEl.clientWidth || 380;
+          // Create chart immediately
+          try {
+            var chartEl = document.getElementById(cardId + "-chart");
+            if (chartEl) {
+              var w = Math.max(chartEl.clientWidth || 380, 380);
               var ch = LightweightCharts.createChart(chartEl, {
                 width: w, height: 200,
               layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
@@ -3128,8 +3127,8 @@ function refresh() {
               upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
               wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
             });
-            } catch(e) { console.log("Chart error for " + pair, e); }
-          }, 50);
+            }
+          } catch(e) { console.log("Chart error for " + pair, e); }
         }
         // Update chart data
         var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
