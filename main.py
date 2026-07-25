@@ -3060,12 +3060,29 @@ function refresh() {
         var lastPrice = ph.length ? ph[ph.length-1].value : (d.price || 0);
         var priceEl = document.getElementById(cardId + "-price");
         if (priceEl && lastPrice) priceEl.textContent = "$" + (typeof lastPrice === "number" ? lastPrice.toFixed(6) : lastPrice);
-        // Update info
+        // Update info with full grid details
         var gp = d.grid_pairs && d.grid_pairs[pair];
         var infoEl = document.getElementById(cardId + "-info");
-        if (infoEl && gp) {
+        if (infoEl && gp && gp.grids) {
+          var gl = gp.grids;
+          var midIdx = gp.mid_idx != null ? gp.mid_idx : Math.floor(gl.length / 2);
           var fc = gp.filled ? Object.keys(gp.filled).length : 0;
-          infoEl.innerHTML = "Levels: " + (gp.grids ? gp.grids.length : 0) + " | Filled: " + fc + " | Buy: ≤$" + (gp.grids[gp.mid_idx]||0).toFixed(4) + " | Sell: >$" + (gp.grids[gp.mid_idx]||0).toFixed(4);
+          var curP = lastPrice || 0;
+          var trailActive = gp.trailing_sell_active || false;
+          var html = '<div style="font-size:11px;margin-top:8px">';
+          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + '</span>';
+          if (trailActive) html += ' <span style="color:#ff6b6b">⚠ Trailing</span>';
+          html += '<div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:2px;font-size:10px">';
+          for (var i = 0; i < gl.length; i++) {
+            var isFilled = gp.filled && gp.filled[i] != null;
+            var isMid = i === midIdx;
+            var isBuy = i < midIdx;
+            var color = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
+            var marker = isFilled ? "●" : isMid ? "◇" : isBuy ? "△" : "▽";
+            html += '<span style="color:' + color + '">' + marker + '$' + gl[i].toFixed(2) + '</span>';
+          }
+          html += '</div></div>';
+          infoEl.innerHTML = html;
         }
       });
     } else {
