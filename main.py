@@ -3065,7 +3065,7 @@ function refresh() {
         var infoEl = document.getElementById(cardId + "-info");
         if (infoEl && gp) {
           var fc = gp.filled ? Object.keys(gp.filled).length : 0;
-          infoEl.innerHTML = "Levels: " + gp.grids.length + " | Filled: " + fc + " | Buy: ≤$" + (gp.grids[gp.mid_idx]||0).toFixed(4) + " | Sell: >$" + (gp.grids[gp.mid_idx]||0).toFixed(4);
+          infoEl.innerHTML = "Levels: " + (gp.grids ? gp.grids.length : 0) + " | Filled: " + fc + " | Buy: ≤$" + (gp.grids[gp.mid_idx]||0).toFixed(4) + " | Sell: >$" + (gp.grids[gp.mid_idx]||0).toFixed(4);
         }
       });
     } else {
