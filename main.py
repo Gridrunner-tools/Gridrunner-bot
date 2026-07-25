@@ -3437,6 +3437,11 @@ class Handler(BaseHTTPRequestHandler):
                 b"self.addEventListener('install',function(e){self.skipWaiting()});"
                 b"self.addEventListener('activate',function(e){e.waitUntil(clients.claim())});"
                 b"self.addEventListener('fetch',function(e){e.respondWith(fetch(e.request).catch(function(){return caches.match(e.request)}))})")
+        elif path=="/setup.html":
+            try:
+                with open("setup.html","rb") as f: setup_data=f.read()
+                self.respond(200,"text/html",setup_data)
+            except: self.respond(404,"text/plain",b"setup guide not found")
         elif path=="/state":
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))

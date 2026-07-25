@@ -1,0 +1,114 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><title>GridRunner Setup</title>
+<style>body{font-family:-apple-system,sans-serif;max-width:700px;margin:40px auto;padding:20px;background:#0a0a1a;color:#ddd;line-height:1.6}
+h1{color:#a855f7}h2{color:#14b8a6;margin-top:30px}code{background:#1e1e3a;padding:2px 6px;border-radius:4px;color:#14b8a6}
+a{color:#a855f7}table{border-collapse:collapse;width:100%}td,th{border:1px solid #333;padding:8px;text-align:left}th{background:#1e1e3a}
+.step{background:#12122a;border:1px solid #333;border-radius:8px;padding:15px;margin:10px 0}
+.warn{background:#332211;border:1px solid #664400;border-radius:8px;padding:12px;margin:15px 0;color:#ffaa00;font-size:13px}
+.good{background:#112211;border:1px solid #226622;border-radius:8px;padding:12px;margin:15px 0;color:#44cc44;font-size:13px}
+.btn{display:inline-block;background:#a855f7;color:#fff;padding:12px 24px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:16px;margin:10px 0}
+.btn:hover{background:#9333ea}</style></head><body>
+
+<h1>⚡ GridRunner — Setup Guide</h1>
+
+<div class="good"><b>🎉 Free 7-Day Trial:</b> Your bot starts a trial automatically — no license key required. Skip that field during setup and you're good to go. After 7 days, buy a license to keep live trading.</div>
+
+<h2>What You Need</h2>
+<ol>
+<li>A Solana wallet with some USDC (Phantom, Solflare, etc.)</li>
+<li>A free <a href="https://render.com">Render.com</a> account — <a href="https://dashboard.render.com/register">sign up here</a></li>
+<li>A free <a href="https://alchemy.com">Alchemy.com</a> account — <a href="https://dashboard.alchemy.com/signup">sign up here</a> (Solana chain)</li>
+</ol>
+
+<div class="warn"><b>⚠️ Important:</b> Render requires a credit card on file even for the free tier. They do a $1 verification hold that is refunded immediately. You will not be charged unless you upgrade.</div>
+
+<h2>Step 1: Get Your Alchemy Key</h2>
+<div class="step">
+1. Sign up at <a href="https://dashboard.alchemy.com/signup">alchemy.com</a> (free tier)<br>
+2. Create new app → select <b>Solana</b> → <b>Mainnet</b><br>
+3. Copy the API key from your dashboard — you'll paste it into Render in Step 2
+</div>
+
+<h2>Step 2: Deploy to Render</h2>
+<div class="step">
+1. Click this button to start the deploy:<br><br>
+<a class="btn" href="https://render.com/deploy?repo=https://github.com/gridrunner-tools/gridrunner-bot&branch=release">🚀 Deploy to Render</a><br><br>
+
+2. On the Render setup page, check these settings:<br><br>
+   <table>
+     <tr><th>Setting</th><th>Value</th></tr>
+     <tr><td><b>Branch</b></td><td><code>release</code></td></tr>
+     <tr><td><b>Blueprint Path</b></td><td><code>render.yaml</code></td></tr>
+     <tr><td><b>Plan</b></td><td><b>Free</b> — click "Change" if it shows Starter</td></tr>
+   </table>
+   <br>
+   <b>If it says "Blueprints require a paid plan":</b><br>
+   Skip the blueprint. Instead go to <a href="https://dashboard.render.com/select-repo?type=web">Render dashboard</a> → <b>New Web Service</b> → connect <code>gridrunner-tools/gridrunner-bot</code> → branch <code>release</code> → select <b>Free</b> plan. Then manually add the env vars below.<br><br>
+
+3. Add these environment variables:<br><br>
+   <table>
+     <tr><th>Variable</th><th>Value</th><th>Where to Find It</th></tr>
+     <tr><td><code>SOL_PRIVATE_KEY</code></td><td>Your private key</td><td>Phantom → Settings → Export Private Key</td></tr>
+     <tr><td><code>SOL_WALLET_ADDRESS</code></td><td>Your wallet address</td><td>Phantom — copy from top</td></tr>
+     <tr><td><code>ALCHEMY_KEY</code></td><td>Your Alchemy key</td><td>Alchemy dashboard → API Key</td></tr>
+     <tr><td><code>LICENSE_KEY</code></td><td><b>Leave this blank</b></td><td>Your 7-day trial starts automatically ✨</td></tr>
+   </table>
+   <br>
+
+4. Click <b>"Create Web Service"</b> — your bot deploys in ~2 minutes<br>
+5. Your bot URL will be <code>https://[name].onrender.com</code> — find it on your Render dashboard
+
+</div>
+
+<h2>Step 3: Start Trading</h2>
+<div class="step">
+1. Open your Render URL in a browser → you'll see the GridRunner dashboard<br>
+2. Select <b>Grid</b> strategy, pick a pair like <b>SOL/USDC</b><br>
+3. Start in <b>Paper mode</b> first to test safely<br>
+4. Click <b>Start</b> — the grid begins running<br>
+5. When ready, toggle to <b>LIVE</b> mode
+</div>
+
+<h2>Testing Checklist</h2>
+<table>
+<tr><td>☐</td><td><b>Paper mode</b> — run grid, confirm trades show in history</td></tr>
+<tr><td>☐</td><td><b>Manual buy (paper)</b> — try a small manual buy/sell</td></tr>
+<tr><td>☐</td><td><b>Live $1 buy</b> — switch to LIVE, buy $1 of SOL, verify on <a href="https://solscan.io">Solscan</a></td></tr>
+<tr><td>☐</td><td><b>Live sell</b> — sell it back, confirm USDC returns</td></tr>
+<tr><td>☐</td><td><b>Grid live</b> — let grid run, verify buy→sell cycles</td></tr>
+</table>
+
+<h2>⏰ Keep It Alive (Important!)</h2>
+<div class="step">
+Render's free tier puts your bot to sleep after 15 minutes of no visitors.<br>
+You need a free ping service to visit your bot every 5 minutes:
+<ol>
+<li>Sign up at <a href="https://uptimerobot.com">UptimeRobot.com</a> (free)</li>
+<li>Click <b>+ Add New Monitor</b></li>
+<li>Type: <b>HTTP(s)</b> — URL: your Render URL (e.g. <code>https://gridrunner-xxxx.onrender.com</code>)</li>
+<li>Monitoring interval: <b>Every 5 minutes</b></li>
+<li>Click <b>Create Monitor</b></li>
+</ol>
+Now your bot stays awake 24/7 and never misses a trade.
+</div>
+
+<h2>What Happens After 7 Days?</h2>
+<div class="step">
+Your trial lets you trade live for 7 full days. After that:
+<ul>
+<li>The bot stays running but switches to <b>paper-only mode</b></li>
+<li>Your positions remain — you won't lose anything</li>
+<li>To continue live trading, buy a license at <a href="https://gridrunner.tools">gridrunner.tools</a></li>
+<li>Add your license key to the <code>LICENSE_KEY</code> env var on Render and redeploy</li>
+</ul>
+</div>
+
+<h2>Troubleshooting</h2>
+<ul>
+<li><b>Bot starts in paper?</b> Toggle the paper mode switch on the dashboard</li>
+<li><b>Swaps failing?</b> You need ~$5 USDC minimum + 0.01 SOL for gas</li>
+<li><b>Dashboard not loading?</b> Wait 30 seconds — Render takes a moment to boot</li>
+<li><b>Dashboard shows 404?</b> Your Render URL might still be building — check Render dashboard</li>
+<li><b>Other issues?</b> Check Render dashboard → Logs for error messages</li>
+</ul>
+
+</body></html>
