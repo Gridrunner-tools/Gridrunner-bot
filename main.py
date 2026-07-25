@@ -3137,6 +3137,27 @@ function refresh() {
             }
           } catch(e) { console.log("Chart error for " + pair, e); }
         }
+        // Recreate chart if missing (e.g. from previous deploy without _series)
+        if (!card._series || !card._chart) {
+          try {
+            var chartEl = document.getElementById(cardId + "-chart");
+            if (chartEl) {
+              var w = Math.max(chartEl.clientWidth || 380, 380);
+              var ch = LightweightCharts.createChart(chartEl, {
+                width: w, height: 200,
+                layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+                grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+                timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
+                rightPriceScale: { borderColor: "#1a1a1a" }
+              });
+              card._chart = ch;
+              card._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+                wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
+              });
+            }
+          } catch(e) { console.log("Chart recovery error for " + pair, e); }
+        }
         // Update chart data
         var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
         if (card._series) {
