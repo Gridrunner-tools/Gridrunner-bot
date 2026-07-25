@@ -337,8 +337,73 @@ def get_price_raydium(pair):
         log("Raydium price error: "+str(ex), "WARN")
     return 0.0
 
+def get_price_jupiter(pair):
+    """Get price from Jupiter quote API (works for any token on Solana)."""
+    try:
+        token = pair.split("/")[0].upper()
+        token_mint = SOL_TOKENS.get(token)
+        if not token_mint:
+            try:
+                r = requests.get("https://token.jup.ag/all", timeout=5)
+                for t in r.json():
+                    if t.get("symbol","").upper() == token:
+                        token_mint = t["address"]
+                        SOL_TOKENS[token] = token_mint
+                        log(f"Found {token} mint via Jupiter: {token_mint[:8]}...")
+                        break
+            except: pass
+        if not token_mint:
+            return 0.0
+        usdc_mint = SOL_TOKENS.get("USDC", "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v")
+        decimals = TOKEN_DECIMALS.get(token, 6)
+        amount = 10 ** decimals
+        url = f"https://quote-api.jup.ag/v6/quote?inputMint={token_mint}&outputMint={usdc_mint}&amount={amount}&slippageBps=100"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        if data.get("outAmount"):
+            price = int(data["outAmount"]) / 10**6
+            if price > 0:
+                return price
+    except Exception as ex:
+        log("Jupiter price error: "+str(ex), "WARN")
+    return 0.0
+
+def get_price_dexscreener(pair):
+    """Get price from DexScreener API (works for obscure meme coins)."""
+    try:
+        token = pair.split("/")[0].upper()
+        token_mint = SOL_TOKENS.get(token)
+        if not token_mint:
+            return 0.0
+        url = f"https://api.dexscreener.com/latest/dex/tokens/{token_mint}"
+        r = requests.get(url, timeout=5)
+        data = r.json()
+        pairs = data.get("pairs", [])
+        if pairs:
+            best = None
+            for p in pairs:
+                if p.get("quoteToken",{}).get("symbol","") in ("USDC","USDT","SOL"):
+                    liq = float(p.get("liquidity",{}).get("usd",0))
+                    if best is None or liq > float(best.get("liquidity",{}).get("usd",0)):
+                        best = p
+            if best:
+                price = float(best.get("priceUsd", 0))
+                if price > 0:
+                    return price
+    except Exception as ex:
+        log("DexScreener price error: "+str(ex), "WARN")
+    return 0.0
+
 def get_price(pair):
     price = get_price_raydium(pair)
+    if price > 0:
+        state["price"] = price
+        return price
+    price = get_price_jupiter(pair)
+    if price > 0:
+        state["price"] = price
+        return price
+    price = get_price_dexscreener(pair)
     if price > 0:
         state["price"] = price
         return price
@@ -1572,10 +1637,12 @@ def place_order(pair, side, amount):
                 # amount is token quantity, jupiter_swap needs USDC cost
                 cost = amount * price
                 log(f"place_order BUY: amt={amount} price={price} cost={cost} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"BUY","pair":pair,"amount":amount,"price":price,"cost":cost})
-                result = jupiter_swap(stablecoin, token, cost, price, dex="Raydium")
+                swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
+                result = jupiter_swap(stablecoin, token, cost, price, dex=swap_dex)
             else:
                 log(f"place_order SELL: amt={amount} price={price} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"SELL","pair":pair,"amount":amount,"price":price})
-                result = jupiter_swap(token, stablecoin, amount, price, dex="Raydium")
+                swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
+                result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex)
             # jupiter_swap returns (success_bool, amount) tuple — unpack it
             if isinstance(result, tuple):
                 return result[0]
@@ -1765,6 +1832,7 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
         "grid_trailing_active": trailing_sell_active, "grid_trailing_high": trailing_high,
         "grids": grids[:], "filled": filled, "mid_idx": mid_idx,
         "trailing_sell_active": trailing_sell_active, "trailing_high": trailing_high,
+        "price": gs.get("price", 0),
     })
     state["grid_pairs"][pair] = gp
     # Also set top-level state for backward compat (shows active pair's data)
@@ -1809,6 +1877,8 @@ def run_grid():
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
 
             price = get_price(pair)
+            if price > 0:
+                gs["price"] = price
             if price <= 0:
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
@@ -1990,14 +2060,18 @@ def run_grid():
                 state["daily_pnl"] = 0.0
                 state["last_midnight"] = today_midnight
             # Track peak balance
-            b = get_balance()
-            if b > state.get("peak_balance", 0):
-                state["peak_balance"] = b
+            usdc_bal = get_balance()
+            total_val = usdc_bal
+            for gp_name, gp_data in state.get("grid_pairs", {}).items():
+                for idx, pos in gp_data.get("filled", {}).items():
+                    total_val += pos.get("amount", 0) * pos.get("price", 0)
+            if total_val > state.get("peak_balance", 0):
+                state["peak_balance"] = total_val
             # Drawdown check
             dd_pct = cfg.get("max_drawdown_pct", 20)
             pk = state.get("peak_balance", 0)
-            if pk > 0 and b < pk * (1 - dd_pct/100):
-                log("DRAWDOWN STOP: balance $"+str(round(b,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
+            if pk > 0 and total_val < pk * (1 - dd_pct/100):
+                log("DRAWDOWN STOP: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
                 state["running"] = False
                 state["strategy"] = None
                 state["emergency_stop"] = True
@@ -2105,7 +2179,9 @@ def run_rsi_ema():
         while state["paused"]: time.sleep(1)
         try:
             price = get_price(pair)
-            if price <= 0: time.sleep(30); continue
+            if price > 0:
+                gs["price"] = price
+            else: time.sleep(30); continue
             # Build price buffer
             buf = get_price_history(pair, 100)
             if len(buf) < max(rsi_period, ema_slow) + 5:
@@ -2181,7 +2257,9 @@ def run_bbands():
         while state["paused"]: time.sleep(1)
         try:
             price = get_price(pair)
-            if price <= 0: time.sleep(30); continue
+            if price > 0:
+                gs["price"] = price
+            else: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
                 time.sleep(30); continue
@@ -2932,7 +3010,7 @@ function refresh() {
     var on = d.running;
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
-    document.getElementById("s-price").textContent = d.price > 0 ? "$" + d.price.toFixed(4) : "—";
+    document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
     // Per-pair charts: create/update chart card for each active pair
     var pairs = d.active_pairs && d.active_pairs.length ? d.active_pairs : (d.pair ? [d.pair] : ["SOL/USDC"]);
     var container = document.getElementById("charts-container");
@@ -2993,7 +3071,7 @@ function refresh() {
     var ps = document.getElementById("pair-select");
     if (ps && d.active_pairs && d.active_pairs.length > 1) { ps.parentElement.style.display = "none"; }
     document.getElementById("s-balance").textContent = d.balance > 0 ? "$" + (d.balance||0).toFixed(2) : "—";
-    document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + (d.sol_usdc||0).toFixed(2) + " USDT: $" + (d.sol_usdt||0).toFixed(2) + ")" : "—";
+    document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + (d.sol_balance||0).toFixed(2) + " (USDC: $" + (d.sol_usdc||0).toFixed(2) + " USDT: $" + (d.sol_usdt||0).toFixed(2) + ")" : "—";
     document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
     document.getElementById("s-mode").style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
     var pb = document.getElementById("paper-btn");
@@ -3078,15 +3156,18 @@ function refresh() {
 }
 
 window.addEventListener("resize", function() {
-  if (Object.keys(pairCharts).length) {
-    var w = document.getElementById("chart-container").clientWidth || 600;
-    chart.applyOptions({width: w});
-  }
+  Object.keys(pairCharts).forEach(function(pair) {
+    var pc = pairCharts[pair];
+    if (pc && pc.chart) {
+      var cardId = "chart-card-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
+      var el = document.getElementById(cardId + "-chart");
+      if (el) pc.chart.applyOptions({width: el.clientWidth || 380});
+    }
+  });
 });
 
 setInterval(refresh, 3000);
 refresh();
-initChart();
   var API_SECRET = "{API_SECRET}";
   function apiFetch(url, opts) {
     opts = opts || {};
@@ -3501,7 +3582,9 @@ class Handler(BaseHTTPRequestHandler):
             side = data.get("side", "buy")
             usdc_amt = float(data.get("amount_usdc", 10))
             price = get_price(pair)
-            if price <= 0:
+            if price > 0:
+                gs["price"] = price
+            else:
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
                 token_amt = round(usdc_amt / price, 6)
