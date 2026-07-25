@@ -234,6 +234,7 @@ state = {
     "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
     "last_trade":    None,
     "price_history": [],
+    "price_history_pairs": {},
     "grid_levels":   [],
     "grid_buy_zone": 0.0,
     "grid_filled":   {},
@@ -1808,6 +1809,12 @@ def run_grid():
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
 
             price = get_price(pair)
+            if price > 0:
+                if pair not in state["price_history_pairs"]:
+                    state["price_history_pairs"][pair] = []
+                state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
+                if len(state["price_history_pairs"][pair]) > 200:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
             if price <= 0:
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
@@ -2098,6 +2105,12 @@ def run_rsi_ema():
         while state["paused"]: time.sleep(1)
         try:
             price = get_price(pair)
+            if price > 0:
+                if pair not in state["price_history_pairs"]:
+                    state["price_history_pairs"][pair] = []
+                state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
+                if len(state["price_history_pairs"][pair]) > 200:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
             if price <= 0: time.sleep(30); continue
             # Build price buffer
             buf = get_price_history(pair, 100)
@@ -2174,6 +2187,12 @@ def run_bbands():
         while state["paused"]: time.sleep(1)
         try:
             price = get_price(pair)
+            if price > 0:
+                if pair not in state["price_history_pairs"]:
+                    state["price_history_pairs"][pair] = []
+                state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
+                if len(state["price_history_pairs"][pair]) > 200:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
             if price <= 0: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
@@ -2375,7 +2394,8 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
   </div>
 
-  <div style="display:flex;gap:16px;align-items:stretch">
+  <div id="charts-container" style="display:none;flex-wrap:wrap;gap:16px;margin-bottom:16px"></div>
+  <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
     <div id="chart-container" style="flex:1;min-width:0"></div>
     <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct" style="display:flex;align-items:center;gap:8px">
@@ -2987,8 +3007,72 @@ function refresh() {
     var on = d.running;
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
-    document.getElementById("s-price").textContent = d.price > 0 ? "$" + d.price.toFixed(4) : "—";
-    if (d.price_history && d.price_history.length > 1) {
+    document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
+    // Multi-pair mode: show per-pair charts when 2+ active pairs
+    var multiPair = d.active_pairs && d.active_pairs.length >= 2;
+    var singleRow = document.getElementById("single-chart-row");
+    var chartsWrap = document.getElementById("charts-container");
+    if (multiPair) {
+      if (singleRow) singleRow.style.display = "none";
+      if (chartsWrap) chartsWrap.style.display = "flex";
+      var multiPairs = d.active_pairs;
+      multiPairs.forEach(function(pair) {
+        var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
+        var card = document.getElementById(cardId);
+        if (!card) {
+          card = document.createElement("div");
+          card.id = cardId;
+          card.style.cssText = "flex:1;min-width:320px;max-width:calc(50% - 8px);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;";
+          card.innerHTML = '<div style="font-weight:600;color:#14b8a6;margin-bottom:8px">' + pair + '</div>' +
+            '<div id="' + cardId + '-price" style="font-size:18px;font-weight:700;margin-bottom:8px">--</div>' +
+            '<div id="' + cardId + '-chart" style="height:200px"></div>' +
+            '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
+          chartsWrap.appendChild(card);
+          // Create chart
+          try {
+            var chartEl = document.getElementById(cardId + "-chart");
+            var ch = LightweightCharts.createChart(chartEl, {
+              width: chartEl.clientWidth || 350, height: 200,
+              layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+              grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+              timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
+              rightPriceScale: { borderColor: "#1a1a1a" }
+            });
+            card._chart = ch;
+            card._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
+              upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+              wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
+            });
+          } catch(e) { console.log("Chart error for " + pair, e); }
+        }
+        // Update chart data
+        var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
+        if (ph.length > 1 && card._series) {
+          var chartData = [];
+          for (var j = 0; j < ph.length; j++) {
+            var p = ph[j];
+            var o = j > 0 ? ph[j-1].value : p.value;
+            chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+          }
+          card._series.setData(chartData);
+        }
+        // Update price
+        var lastPrice = ph.length ? ph[ph.length-1].value : (d.price || 0);
+        var priceEl = document.getElementById(cardId + "-price");
+        if (priceEl && lastPrice) priceEl.textContent = "$" + (typeof lastPrice === "number" ? lastPrice.toFixed(6) : lastPrice);
+        // Update info
+        var gp = d.grid_pairs && d.grid_pairs[pair];
+        var infoEl = document.getElementById(cardId + "-info");
+        if (infoEl && gp) {
+          var fc = gp.filled ? Object.keys(gp.filled).length : 0;
+          infoEl.innerHTML = "Levels: " + gp.grids.length + " | Filled: " + fc + " | Buy: ≤$" + (gp.grids[gp.mid_idx]||0).toFixed(4) + " | Sell: >$" + (gp.grids[gp.mid_idx]||0).toFixed(4);
+        }
+      });
+    } else {
+      if (singleRow) singleRow.style.display = "flex";
+      if (chartsWrap) chartsWrap.style.display = "none";
+    }
+    if (!multiPair && d.price_history && d.price_history.length > 1) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
@@ -3578,6 +3662,12 @@ class Handler(BaseHTTPRequestHandler):
             side = data.get("side", "buy")
             usdc_amt = float(data.get("amount_usdc", 10))
             price = get_price(pair)
+            if price > 0:
+                if pair not in state["price_history_pairs"]:
+                    state["price_history_pairs"][pair] = []
+                state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
+                if len(state["price_history_pairs"][pair]) > 200:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
             if price <= 0:
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
