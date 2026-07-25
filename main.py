@@ -3156,15 +3156,18 @@ function refresh() {
 }
 
 window.addEventListener("resize", function() {
-  if (Object.keys(pairCharts).length) {
-    var w = document.getElementById("chart-container").clientWidth || 600;
-    chart.applyOptions({width: w});
-  }
+  Object.keys(pairCharts).forEach(function(pair) {
+    var pc = pairCharts[pair];
+    if (pc && pc.chart) {
+      var cardId = "chart-card-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
+      var el = document.getElementById(cardId + "-chart");
+      if (el) pc.chart.applyOptions({width: el.clientWidth || 380});
+    }
+  });
 });
 
 setInterval(refresh, 3000);
 refresh();
-initChart();
   var API_SECRET = "{API_SECRET}";
   function apiFetch(url, opts) {
     opts = opts || {};
