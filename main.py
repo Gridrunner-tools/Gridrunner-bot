@@ -3047,14 +3047,20 @@ function refresh() {
         }
         // Update chart data
         var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
-        if (ph.length > 1 && card._series) {
+        if (card._series) {
           var chartData = [];
-          for (var j = 0; j < ph.length; j++) {
-            var p = ph[j];
-            var o = j > 0 ? ph[j-1].value : p.value;
-            chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+          if (ph.length >= 1) {
+            for (var j = 0; j < ph.length; j++) {
+              var p = ph[j];
+              var o = j > 0 ? ph[j-1].value : p.value;
+              chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+            }
+            // If only 1 point, duplicate it so candles render
+            if (ph.length === 1) {
+              chartData.push({time: ph[0].time - 1, open: ph[0].value, high: ph[0].value, low: ph[0].value, close: ph[0].value});
+            }
           }
-          card._series.setData(chartData);
+          if (chartData.length) card._series.setData(chartData);
         }
         // Update price
         var lastPrice = ph.length ? ph[ph.length-1].value : (d.price || 0);
