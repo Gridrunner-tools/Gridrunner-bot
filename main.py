@@ -2647,7 +2647,6 @@ function aggregateCandles(data, intervalSec) {
 function initChart() {
   pairCharts = {};
 }
-}
 
 function updatePairChart(pair, data, gridLevels, gridBuyZone) {
   var pc = pairCharts[pair];
