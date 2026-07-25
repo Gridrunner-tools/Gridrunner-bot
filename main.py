@@ -245,6 +245,7 @@ state = {
     "partial_positions": {},
     "active_pairs":   [],
     "grid_pairs":     {},
+    "price_history_pairs": {},
     "daily_pnl":      0.0,
     "peak_balance":   0.0,
     "dip_active":     False,
@@ -1812,6 +1813,12 @@ def run_grid():
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
 
+            # Per-pair price history
+            if pair not in state["price_history_pairs"]:
+                state["price_history_pairs"][pair] = []
+            state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
+            if len(state["price_history_pairs"][pair]) > 200:
+                state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
             # ── Pause check: wait while paused ──
             while state["paused"]:
                 time.sleep(1)
@@ -2289,6 +2296,14 @@ body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;backgrou
 .head-row{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px}
 h1{font-size:22px;font-weight:900;color:var(--text)}
 .sub{font-size:13px;color:var(--dim);margin-bottom:24px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pair-chart-card{border:1px solid #1a1a1a;border-radius:8px;background:var(--card);overflow:hidden;flex:1 1 400px;min-width:320px;max-width:calc(50% - 8px)}
+.pair-chart-card .pair-header{padding:8px 12px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a1a1a}
+.pair-chart-card .pair-name{font-weight:700;font-size:14px;color:#14b8a6}
+.pair-chart-card .pair-price{font-size:14px;font-family:monospace;color:var(--text)}
+.pair-chart-card .chart-inner{height:250px;width:100%}
+.pair-chart-card .grid-mini{padding:8px 12px;font-size:11px;color:var(--dim);border-top:1px solid #1a1a1a;display:flex;gap:16px;flex-wrap:wrap}
+.pair-chart-card .grid-mini span{white-space:nowrap}
+@media(max-width:700px){.pair-chart-card{max-width:100%;flex:1 1 100%}}
 .dot{width:8px;height:8px;border-radius:50%;background:#333;display:inline-block;transition:all .3s}
 .dot.on{background:var(--accent);box-shadow:0 0 8px var(--accent)}
 .theme-btn{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:13px;color:var(--text);transition:all .15s}
@@ -2375,15 +2390,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
   </div>
 
-  <div style="display:flex;gap:16px;align-items:stretch">
-    <div id="chart-container" style="flex:1;min-width:0"></div>
-    <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
-      <div class="ct" style="display:flex;align-items:center;gap:8px">
-        Grid Details
-        <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
-      </div>
-      <div id="grid-details-body"></div>
-    </div>
+  <div id="charts-container" style="display:flex;flex-wrap:wrap;gap:16px"></div>
   </div>
 
   <div class="summary-cards" id="summary-cards">
@@ -2535,13 +2542,14 @@ function toggleTheme() {
   isDark = !isDark;
   document.body.classList.toggle("light", !isDark);
   document.getElementById("theme-btn").textContent = isDark ? "🌙 Dark" : "☀ Light";
-  if (chart) setTimeout(function() { updateChartTheme(isDark); }, 100);
+  if (Object.keys(pairCharts).length) setTimeout(function() { updateChartTheme(isDark); }, 100);
 }
 
 
 var chart = null;
 var candleSeries = null;
 var gridLines = [];
+var pairCharts = {};
 
 function aggregateCandles(data, intervalSec) {
   var candles = [], current = null;
@@ -2558,138 +2566,75 @@ function aggregateCandles(data, intervalSec) {
   });
   if (current) candles.push(current);
   return candles;
-}
 function initChart() {
-  try {
-    chart = LightweightCharts.createChart(document.getElementById("chart-container"), {
-      width: document.getElementById("chart-container").clientWidth || 600,
-      height: 350,
-      layout: {
-        background: {type: "solid", color: "transparent"},
-        textColor: "#888",
-      },
-      grid: {
-        vertLines: {color: "#1a1a1a"},
-        horzLines: {color: "#1a1a1a"},
-      },
-      crosshair: {
-        vertLine: {color: "#444", labelBackgroundColor: "#111"},
-        horzLine: {color: "#444", labelBackgroundColor: "#111"},
-      },
-      timeScale: {
-        borderColor: "#1a1a1a",
-        timeVisible: true,
-        secondsVisible: false,
-        barSpacing: 3,
-      },
-      rightPriceScale: {
-        borderColor: "#1a1a1a",
-      },
-    });
-    candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
-      upColor: "#00ff9d",
-      downColor: "#ff6b6b",
-      borderUpColor: "#00ff9d",
-      borderDownColor: "#ff6b6b",
-      wickUpColor: "#00ff9d",
-      wickDownColor: "#ff6b6b",
-      priceFormat: {type: "price", precision: 4, minMove: 0.0001},
-    });
-  } catch(e) { console.log("Chart init error:", e); }
+  pairCharts = {};
+}
 }
 
-function updateChartTheme(isDarkMode) {
-  if (!chart) return;
-  chart.applyOptions({
-    layout: {
-      textColor: isDarkMode ? "#888" : "#666",
-    },
-    grid: {
-      vertLines: {color: isDarkMode ? "#1a1a1a" : "#e0e0e0"},
-      horzLines: {color: isDarkMode ? "#1a1a1a" : "#e0e0e0"},
-    },
-    timeScale: {
-      borderColor: isDarkMode ? "#1a1a1a" : "#d0d5dd",
-    },
-    rightPriceScale: {
-      borderColor: isDarkMode ? "#1a1a1a" : "#d0d5dd",
-    },
-  });
-}
-
-function updateChart(data, gridLevels, gridBuyZone, pair) {
-  if (!chart || !candleSeries) return;
-  // Remove old grid lines (do this first, regardless of data)
+function updatePairChart(pair, data, gridLevels, gridBuyZone) {
+  var pc = pairCharts[pair];
+  if (!pc || !pc.chart || !pc.candleSeries) return;
+  // Remove old grid lines
   try {
-    gridLines.forEach(function(l) { chart.removeSeries(l); });
-  } catch(e) { console.log("Grid remove error:", e); }
-  gridLines = [];
+    pc.gridLines.forEach(function(l) { pc.chart.removeSeries(l); });
+  } catch(e) {}
+  pc.gridLines = [];
   if (!data || data.length < 2) return;
 
   // Update candles
   var candles = aggregateCandles(data, 60);
-  candleSeries.setData(candles);
+  pc.candleSeries.setData(candles);
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Pin to right edge without stretching candles
   if (candles.length > 60) {
-    chart.timeScale().setVisibleLogicalRange({
-      from: candles.length - 60,
-      to: candles.length + 1
-    });
+    pc.chart.timeScale().setVisibleLogicalRange({from: candles.length - 60, to: candles.length + 1});
   } else {
-    chart.timeScale().scrollToPosition(candles.length, false);
+    pc.chart.timeScale().scrollToPosition(candles.length, false);
   }
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
-
   var midPrice = gridBuyZone;
   var buyZone = gridLevels.filter(function(g) { return g <= midPrice; });
   var sellZone = gridLevels.filter(function(g) { return g > midPrice; });
 
   try {
-    // Buy zone lines (green)
     buyZone.forEach(function(g) {
-      var s = chart.addSeries(LightweightCharts.LineSeries, {
-        color: "#00ff9d44",
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
+      var s = pc.chart.addSeries(LightweightCharts.LineSeries, {
+        color: "#00ff9d44", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false
       });
       s.setData([{time: dataStart, value: g}, {time: dataEnd, value: g}]);
-      gridLines.push(s);
+      pc.gridLines.push(s);
     });
-
-    // Sell zone lines (red)
     sellZone.forEach(function(g) {
-      var s = chart.addSeries(LightweightCharts.LineSeries, {
-        color: "#ff6b6b44",
-        lineWidth: 1,
-        lineStyle: 2,
-        priceLineVisible: false,
-        lastValueVisible: false,
+      var s = pc.chart.addSeries(LightweightCharts.LineSeries, {
+        color: "#ff6b6b44", lineWidth: 1, lineStyle: 2, priceLineVisible: false, lastValueVisible: false
       });
       s.setData([{time: dataStart, value: g}, {time: dataEnd, value: g}]);
-      gridLines.push(s);
+      pc.gridLines.push(s);
     });
-
-    // Midpoint line (yellow, thicker)
-    var midLine = chart.addSeries(LightweightCharts.LineSeries, {
-      color: "#ffd43b88",
-      lineWidth: 2,
-      lineStyle: 2,
-      priceLineVisible: false,
-      lastValueVisible: false,
+    var midLine = pc.chart.addSeries(LightweightCharts.LineSeries, {
+      color: "#ffd43b88", lineWidth: 2, lineStyle: 2, priceLineVisible: false, lastValueVisible: false
     });
     midLine.setData([{time: dataStart, value: midPrice}, {time: dataEnd, value: midPrice}]);
-    gridLines.push(midLine);
+    pc.gridLines.push(midLine);
   } catch(e) { console.log("Grid overlay error:", e); }
 }
 
 
+
+function updateChartTheme(isDarkMode) {
+  Object.values(pairCharts).forEach(function(pc) {
+    if (!pc.chart) return;
+    pc.chart.applyOptions({
+      layout: { textColor: isDarkMode ? "#888" : "#666" },
+      grid: { vertLines: {color: isDarkMode ? "#1a1a1a" : "#e0e0e0"}, horzLines: {color: isDarkMode ? "#1a1a1a" : "#e0e0e0"} },
+      timeScale: { borderColor: isDarkMode ? "#1a1a1a" : "#d0d5dd" },
+      rightPriceScale: { borderColor: isDarkMode ? "#1a1a1a" : "#d0d5dd" }
+    });
+  });
+}
 function showToast(msg, type) {
   var c = document.getElementById("toast-container");
   var t = document.createElement("div");
@@ -2988,23 +2933,65 @@ function refresh() {
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + d.price.toFixed(4) : "—";
-    if (d.price_history && d.price_history.length > 1) {
-      // Show grid for currently selected pair
-      var viewPair = sel.pair || d.pair || "SOL/USDC";
-      var gp = d.grid_pairs && d.grid_pairs[viewPair];
+    // Per-pair charts: create/update chart card for each active pair
+    var pairs = d.active_pairs && d.active_pairs.length ? d.active_pairs : (d.pair ? [d.pair] : ["SOL/USDC"]);
+    var container = document.getElementById("charts-container");
+    if (!container) return;
+    var currentPairs = {};
+    pairs.forEach(function(pair) { currentPairs[pair] = true; });
+    Object.keys(pairCharts).forEach(function(pair) {
+      if (!currentPairs[pair]) {
+        var oldCard = document.getElementById("chart-card-" + pair.replace(/[^a-zA-Z0-9]/g, "_"));
+        if (oldCard) oldCard.remove();
+        delete pairCharts[pair];
+      }
+    });
+    pairs.forEach(function(pair) {
+      var cardId = "chart-card-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
+      var card = document.getElementById(cardId);
+      if (!card) {
+        card = document.createElement("div");
+        card.id = cardId;
+        card.className = "pair-chart-card";
+        card.innerHTML = '<div class="pair-header"><span class="pair-name">' + pair + '</span><span class="pair-price" id="' + cardId + '-price">--</span></div><div class="chart-inner" id="' + cardId + '-chart"></div><div class="grid-mini" id="' + cardId + '-grid"></div>';
+        container.appendChild(card);
+        try {
+          var chartEl = document.getElementById(cardId + "-chart");
+          var c = LightweightCharts.createChart(chartEl, {
+            width: chartEl.clientWidth || 380, height: 250,
+            layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+            grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+            crosshair: { vertLine: {color: "#444", labelBackgroundColor: "#111"}, horzLine: {color: "#444", labelBackgroundColor: "#111"} },
+            timeScale: { borderColor: "#1a1a1a", timeVisible: true, secondsVisible: false, barSpacing: 3 },
+            rightPriceScale: { borderColor: "#1a1a1a" }
+          });
+          var cs = c.addSeries(LightweightCharts.CandlestickSeries, {
+            upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+            wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 4, minMove: 0.0001}
+          });
+          pairCharts[pair] = {chart: c, candleSeries: cs, gridLines: []};
+        } catch(e) { console.log("Chart init error for " + pair + ":", e); }
+      }
+      var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : (d.price_history || []);
+      var gp = d.grid_pairs && d.grid_pairs[pair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart(d.price_history, levels, buyZone, viewPair);
-      // Override grid details for selected pair
-      if (gp) {
-        d.grid_levels = gp.grids;
-        d.grid_buy_zone = gp.grids[gp.mid_idx];
-        d.grid_filled = gp.filled;
-        d.grid_mid_idx = gp.mid_idx;
-        d.grid_trailing_active = gp.trailing_sell_active;
-        d.grid_trailing_high = gp.trailing_high;
+      if (ph && ph.length > 1) { updatePairChart(pair, ph, levels, buyZone); }
+      var lastPrice = ph && ph.length ? ph[ph.length-1].value : d.price;
+      var priceEl = document.getElementById(cardId + "-price");
+      if (priceEl && lastPrice) priceEl.textContent = "$" + (typeof lastPrice === "number" ? lastPrice.toFixed(4) : parseFloat(lastPrice).toFixed(4));
+      var gridEl = document.getElementById(cardId + "-grid");
+      if (gridEl && gp) {
+        var fc = gp.filled ? Object.keys(gp.filled).length : 0;
+        gridEl.innerHTML = "<span>Levels: " + gp.grids.length + "</span><span>Filled: " + fc + "</span><span>Buy zone: \u2264$" + gp.grids[gp.mid_idx].toFixed(2) + "</span><span>Sell zone: >$" + gp.grids[gp.mid_idx].toFixed(2) + "</span>" + (gp.trailing_sell_active ? "<span style=\"color:#ff6b6b\">\u26A0 Trailing</span>" : "");
+      } else if (gridEl && d.grid_levels && d.grid_levels.length) {
+        gridEl.innerHTML = "<span>Levels: " + d.grid_levels.length + "</span><span>Buy zone: \u2264$" + d.grid_buy_zone.toFixed(2) + "</span>";
+      } else if (gridEl) {
+        gridEl.innerHTML = "<span>No grid data</span>";
       }
-    }
+    });
+    var ps = document.getElementById("pair-select");
+    if (ps && d.active_pairs && d.active_pairs.length > 1) { ps.parentElement.style.display = "none"; }
     document.getElementById("s-balance").textContent = d.balance > 0 ? "$" + (d.balance||0).toFixed(2) : "—";
     document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + (d.sol_usdc||0).toFixed(2) + " USDT: $" + (d.sol_usdt||0).toFixed(2) + ")" : "—";
     document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
@@ -3056,70 +3043,6 @@ function refresh() {
       });
       // Could add a positions card here
     }
-    // ── Grid Details ──
-    var gdCard = document.getElementById("grid-details-card");
-    if (d.strategy === "grid" && d.grid_levels && d.grid_levels.length >= 2) {
-      gdCard.style.display = "block";
-      var gl = d.grid_levels;
-      var midIdx = d.grid_mid_idx != null ? d.grid_mid_idx : Math.floor(gl.length / 2);
-      var midPrice = gl[midIdx];
-      var curPrice = d.price || 0;
-      var filled = d.grid_filled || {};
-      var trailActive = d.grid_trailing_active || false;
-      var trailHigh = d.grid_trailing_high || 0;
-      var trailingPct = 0.5;
-      document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
-      var html = '<div style="margin-top:12px">';
-      var minP = gl[0], maxP = gl[gl.length-1], range = maxP - minP;
-      var curPct = range > 0 ? ((curPrice - minP) / range * 100) : 50;
-      html += '<div style="position:relative;height:6px;background:linear-gradient(90deg,#00ff9d44,#ffd43b44,#ff6b6b44);border-radius:3px;margin-bottom:16px">';
-      html += '<div style="position:absolute;left:' + curPct.toFixed(0) + '%;top:-4px;width:3px;height:14px;background:#3399ff;border-radius:1px"></div>';
-      html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-top:8px">';
-      html += '<span style="color:#00ff9d">$' + minP.toFixed(0) + '</span>';
-      html += '<span style="color:#ffd43b">Mid $' + midPrice.toFixed(0) + '</span>';
-      html += '<span style="color:#ff6b6b">$' + maxP.toFixed(0) + '</span></div></div>';
-      html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;font-size:11px;color:var(--dim);padding:4px 8px;text-transform:uppercase;letter-spacing:0.5px">';
-      html += '<span>Zone</span><span>Price</span><span>Status</span><span style="text-align:right">Dist</span></div>';
-      for (var i = gl.length - 1; i >= 0; i--) {
-        var isMid = i === midIdx;
-        var isBuy = i < midIdx;
-        var isFilled = filled[i] != null;
-        var isCur = (i < gl.length - 1 && curPrice >= gl[i] && curPrice < gl[i+1]) || (i === gl.length - 1 && curPrice >= gl[i]);
-        var zone = isMid ? "MID" : isBuy ? "BUY" : "SELL";
-        var zoneColor = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
-        var bgColor = isMid ? "#ffd43b08" : isBuy ? "#00ff9d08" : "#ff6b6b08";
-        var borderColor = isMid ? "#ffd43b44" : isBuy ? "#00ff9d44" : "#ff6b6b44";
-        if (isCur) { zone = "\u25CF"; zoneColor = "#3399ff"; bgColor = "#3399ff10"; borderColor = "#3399ff"; }
-        if (isFilled) { zoneColor = "#00ff9d"; bgColor = "#00ff9d15"; borderColor = "#00ff9d"; }
-        var dist = curPrice > 0 ? (gl[i] - curPrice) : 0;
-        var distStr = dist > 0 ? "+$" + dist.toFixed(0) : dist < 0 ? "-$" + Math.abs(dist).toFixed(0) : "\u2014";
-        var status = isFilled ? "\u2705 $" + filled[i].price.toFixed(0) : isCur ? "\u2190 Current" : isMid ? "Buy Zone \u2191" : "Waiting";
-        if (isFilled && trailActive && i < midIdx) status = "\u2705 Trailing...";
-        if (isFilled && !trailActive && i < midIdx) status = "\u2705 Filled";
-        html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;align-items:center;padding:5px 8px;border-radius:4px;margin-bottom:2px;font-size:12px;background:' + bgColor + ';border-left:2px solid ' + borderColor + '">';
-        html += '<span style="font-weight:600;color:' + zoneColor + ';font-size:10px;text-transform:uppercase">' + zone + '</span>';
-        html += '<span style="font-family:monospace;font-weight:600">$' + gl[i].toFixed(2) + '</span>';
-        html += '<span style="color:' + (isFilled ? "#00ff9d" : isCur ? "#3399ff" : "var(--text)") + '">' + status + '</span>';
-        html += '<span style="text-align:right;font-family:monospace;font-size:11px;color:' + (dist > 0 ? "#ff6b6b" : dist < 0 ? "#00ff9d" : "var(--dim)") + '">' + distStr + '</span></div>';
-      }
-      html += '</div>';
-      if (trailActive && trailHigh > 0) {
-        var sellTrigger = trailHigh * (1 - trailingPct / 100);
-        var distToSell = curPrice - sellTrigger;
-        html += '<div style="margin-top:12px;padding:10px 12px;background:#ffd43b08;border:1px solid #ffd43b33;border-radius:6px">';
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-        html += '<span>🎯</span><span style="font-weight:600;color:#ffd43b">Take-profit triggered \u2014 waiting for pullback</span></div>';
-        html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">';
-        html += '<div><span style="color:var(--dim);font-size:10px">Peak</span><div style="font-weight:600;font-family:monospace;color:#ffd43b">$' + trailHigh.toFixed(2) + '</div></div>';
-        html += '<div><span style="color:var(--dim);font-size:10px">Sell Trigger</span><div style="font-weight:600;font-family:monospace;color:#ff6b6b">$' + sellTrigger.toFixed(2) + '</div></div>';
-        html += '<div><span style="color:var(--dim);font-size:10px">Distance</span><div style="font-weight:600;font-family:monospace;color:' + (distToSell > 0 ? "#ffd43b" : "#00ff9d") + '">$' + Math.abs(distToSell).toFixed(2) + '</div></div></div></div>';
-      }
-      document.getElementById("grid-details-body").innerHTML = html;
-    } else {
-      gdCard.style.display = "block";
-      document.getElementById("gdt-status").textContent = "\u23F8 Idle \u2014 start a Grid strategy to see levels";
-      document.getElementById("grid-details-body").innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:13px;margin-top:40px">Start a Grid strategy to see buy/sell levels, filled positions, and trailing sell status here.</div>';
-    }
     // Update log
     if (d.log && d.log.length) {
       var logHtml = d.log.slice(0, 30).map(function(l) {
@@ -3155,7 +3078,7 @@ function refresh() {
 }
 
 window.addEventListener("resize", function() {
-  if (chart) {
+  if (Object.keys(pairCharts).length) {
     var w = document.getElementById("chart-container").clientWidth || 600;
     chart.applyOptions({width: w});
   }
