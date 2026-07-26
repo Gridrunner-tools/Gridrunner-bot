@@ -1821,7 +1821,7 @@ def _init_grid_pair(pair):
     mid_idx = len(grids) // 2
     return {
         "grids": grids, "mid_idx": mid_idx, "filled": {},
-        "trailing_pct": 0.5, "trailing_high": 0.0, "trailing_sell_active": False,
+        "trailing_pct": 0.05, "trailing_high": 0.0, "trailing_sell_active": False,
         "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
         "price": price, "levels": levels, "spread": spread,
     }
@@ -2553,7 +2553,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="cfg-risk" value="" min="0.1" max="100" step="0.1" placeholder="Loaded from state..."/></div>
       <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
       <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
-      <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.5" min="0.1" max="10" step="0.1"/></div>
+      <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.05" min="0.01" max="10" step="0.01"/></div>
       <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="50" min="0" max="100" step="5"/></div>
       <div class="config-field"><label>Grid Spread (%)</label><input type="number" id="cfg-spread" value="5" min="1" max="30" step="0.5"/></div>
       <div class="config-field"><label>Auto-Compound</label><select id="cfg-compound"><option value="true">On</option><option value="false">Off</option></select></div>
