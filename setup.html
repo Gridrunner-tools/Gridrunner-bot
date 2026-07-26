@@ -1,88 +1,137 @@
 <!DOCTYPE html><html><head><meta charset="utf-8"><title>GridRunner Setup</title>
-<style>body{font-family:-apple-system,sans-serif;max-width:650px;margin:40px auto;padding:20px;background:#0a0a1a;color:#ddd;line-height:1.6}
-h1{color:#a855f7;font-size:28px}h2{color:#14b8a6;margin-top:30px;font-size:20px}code{background:#1e1e3a;padding:2px 6px;border-radius:4px;color:#14b8a6}
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>body{font-family:-apple-system,sans-serif;max-width:680px;margin:40px auto;padding:20px;background:#0a0a1a;color:#ddd;line-height:1.6}
+h1{color:#a855f7;font-size:26px}h2{color:#14b8a6;margin-top:30px;font-size:19px}
+code{background:#1e1e3a;padding:2px 6px;border-radius:4px;color:#14b8a6}
 a{color:#a855f7}
 .step{background:#12122a;border:1px solid #333;border-radius:8px;padding:15px;margin:10px 0}
 .warn{background:#332211;border:1px solid #664400;border-radius:8px;padding:12px;margin:15px 0;color:#ffaa00;font-size:13px}
 .good{background:#112211;border:1px solid #226622;border-radius:8px;padding:12px;margin:15px 0;color:#44cc44;font-size:14px}
 .bigbtn{display:inline-block;background:#a855f7;color:#fff;padding:14px 28px;border-radius:8px;text-decoration:none;font-weight:bold;font-size:18px;margin:15px 0;text-align:center}
 .bigbtn:hover{background:#9333ea}
-.num{display:inline-block;width:28px;height:28px;background:#a855f7;color:#fff;border-radius:50%;text-align:center;line-height:28px;font-weight:bold;font-size:14px;margin-right:8px}
+table{width:100%;border-collapse:collapse;margin:10px 0;font-size:13px}
+td,th{border:1px solid #333;padding:8px;text-align:left;vertical-align:top}
+th{background:#1e1e3a}
+.opt{color:#888;font-size:12px}
+.highlight{color:#44cc44;font-weight:bold}
 </style></head><body>
 
-<h1>⚡ GridRunner Setup</h1>
+<h1>⚡ GridRunner — Setup Guide</h1>
 
-<div class="good"><b>🎉 No license key needed.</b> Your bot starts a free 7-day trial automatically. Just leave <code>LICENSE_KEY</code> blank during setup.</div>
+<div class="good"><b>🎉 Free 7-Day Trial — no license key needed.</b> Just leave <code>LICENSE_KEY</code> blank. After 7 days, buy a license at <a href="https://gridrunner.tools">gridrunner.tools</a>.</div>
 
 <h2>What You Need</h2>
 <div class="step">
-<span class="num">1</span> A Solana wallet with some USDC<br><br>
-<span class="num">2</span> A free <a href="https://dashboard.render.com/register">Render.com</a> account<br><br>
-<span class="num">3</span> A free <a href="https://dashboard.alchemy.com/signup">Alchemy.com</a> account
+<b>1.</b> A Solana wallet with USDC (Phantom or Solflare)<br>
+<b>2.</b> A free <a href="https://dashboard.render.com/register">Render.com</a> account<br>
+<b>3.</b> A free <a href="https://dashboard.alchemy.com/signup">Alchemy.com</a> account (for Solana RPC)
 </div>
 
-<div class="warn"><b>⚠️ Render needs a credit card</b> (even for free tier). They do a $1 hold that gets refunded. You won't be charged.</div>
+<div class="warn"><b>⚠️ Render requires a credit card even for free tier.</b> They place a $1 verification hold that is refunded immediately. You will NOT be charged.</div>
 
-<h2>Step 1 — Get Alchemy Key</h2>
+<h2>Step 1 — Get an Alchemy API Key</h2>
 <div class="step">
-1. Go to <a href="https://dashboard.alchemy.com">Alchemy</a> → Create App<br>
-2. Select <b>Solana</b> → <b>Mainnet</b><br>
-3. Copy the <b>API Key</b>
+Alchemy provides the RPC (Remote Procedure Call) connection your bot uses to read the Solana blockchain — prices, balances, and transactions. Without it, the bot can't see anything on-chain.<br><br>
+1. Go to <a href="https://dashboard.alchemy.com/signup">alchemy.com</a> → sign up (free)<br>
+2. Click <b>Create App</b> → choose <b>Solana</b> → <b>Mainnet</b><br>
+3. Click <b>API Key</b> → copy the long string
 </div>
 
-<h2>Step 2 — Deploy Bot</h2>
+<h2>Step 2 — Deploy to Render</h2>
 <div class="step">
 <a class="bigbtn" href="https://render.com/deploy?repo=https://github.com/gridrunner-tools/gridrunner-bot&branch=release">🚀 Deploy to Render</a><br><br>
 
-<b>On the Render page:</b><br><br>
-• <b>Name:</b> anything you want<br>
+<b>On the Render page:</b><br>
+• <b>Name:</b> any name you want<br>
 • <b>Branch:</b> <code>release</code><br>
 • <b>Plan:</b> Free<br><br>
 
-<b>Add these 4 things:</b><br><br>
+<b>Required — fill these 4 in:</b>
 
-<table style="width:100%;border-collapse:collapse;margin:10px 0">
-<tr style="background:#1e1e3a"><td style="padding:8px;font-weight:bold">Field</td><td style="padding:8px;font-weight:bold">What to put</td></tr>
-<tr><td style="padding:8px;border-bottom:1px solid #333"><code>SOL_PRIVATE_KEY</code></td><td style="padding:8px;border-bottom:1px solid #333">Phantom → Settings → Export Private Key</td></tr>
-<tr><td style="padding:8px;border-bottom:1px solid #333"><code>SOL_WALLET_ADDRESS</code></td><td style="padding:8px;border-bottom:1px solid #333">Your wallet address (copy from Phantom)</td></tr>
-<tr><td style="padding:8px;border-bottom:1px solid #333"><code>ALCHEMY_KEY</code></td><td style="padding:8px;border-bottom:1px solid #333">The API key from Step 1</td></tr>
-<tr><td style="padding:8px"><code>LICENSE_KEY</code></td><td style="padding:8px;color:#44cc44"><b>Leave blank</b> — trial starts automatically</td></tr>
+<table>
+<tr><th style="width:30%">Variable</th><th style="width:35%">What to enter</th><th style="width:35%">Where to find it</th></tr>
+<tr>
+  <td><code>SOL_PRIVATE_KEY</code></td>
+  <td>Your wallet's private key</td>
+  <td>Phantom → Settings → Export Private Key<br><span class="opt">This lets the bot sign transactions. Never share this with anyone.</span></td>
+</tr>
+<tr>
+  <td><code>SOL_WALLET_ADDRESS</code></td>
+  <td>Your wallet's public address</td>
+  <td>Phantom — tap the address at the top to copy</td>
+</tr>
+<tr>
+  <td><code>ALCHEMY_KEY</code></td>
+  <td>The API key from Step 1</td>
+  <td>Alchemy dashboard → API Key</td>
+</tr>
+<tr>
+  <td><code>LICENSE_KEY</code></td>
+  <td class="highlight">Leave blank</td>
+  <td>Your 7-day trial starts automatically<br><span class="opt">After trial, buy a license at gridrunner.tools and paste it here.</span></td>
+</tr>
 </table>
 
-• Click <b>"Create Web Service"</b><br>
-• Wait ~2 minutes for deploy<br>
-• Your bot URL: <code>https://your-name.onrender.com</code>
+<b>Optional — these add features but work fine if left blank:</b>
+
+<table>
+<tr><th style="width:30%">Variable</th><th style="width:35%">What it does</th><th style="width:35%">Where to get it</th></tr>
+<tr>
+  <td><code>API_SECRET</code></td>
+  <td>Password-protects your dashboard</td>
+  <td>Make up any password you want<br><span class="opt">Without this, anyone with your URL can access the dashboard.</span></td>
+</tr>
+<tr>
+  <td><code>TG_BOT_TOKEN</code></td>
+  <td>Telegram alerts when bot buys/sells</td>
+  <td>Talk to <a href="https://t.me/BotFather">@BotFather</a> on Telegram → create a bot → copy the token<br><span class="opt">Looks like: 123456:ABC-DEF1234ghikl...</span></td>
+</tr>
+<tr>
+  <td><code>TG_CHAT_ID</code></td>
+  <td>Which Telegram chat gets alerts</td>
+  <td>Add <a href="https://t.me/userinfobot">@userinfobot</a> to a Telegram group or DM it → copy the ID number<br><span class="opt">Must fill in TG_BOT_TOKEN above first.</span></td>
+</tr>
+</table>
+
+Click <b>"Create Web Service"</b> → deploys in ~2 minutes.<br>
+Your bot URL will be <code>https://your-name.onrender.com</code>
 </div>
 
 <h2>Step 3 — Start Trading</h2>
 <div class="step">
-1. Open your bot URL → you'll see the GridRunner dashboard<br>
-2. Pick <b>Grid</b> + <b>BTC/USDC</b> (or any pair)<br>
-3. Leave it in <b>Paper mode</b> first<br>
-4. Click <b>Start</b><br>
+1. Open your bot URL → dashboard appears<br>
+2. Select <b>Grid</b> strategy + <b>BTC/USDC</b> (or any pair)<br>
+3. Start in <b>Paper mode</b> to test safely<br>
+4. Click <b>Start</b> → grid begins running<br>
 5. When ready, tap <b>Paper: ON</b> to switch to LIVE
 </div>
 
-<h2>⏰ Keep Bot Awake</h2>
+<h2>⏰ Keep It Running 24/7</h2>
 <div class="step">
-Render's free plan sleeps after 15 min of no visitors:<br><br>
+Render's free plan puts the bot to sleep after 15 minutes of no visitors.<br><br>
 1. Sign up at <a href="https://uptimerobot.com">UptimeRobot.com</a> (free)<br>
-2. Add monitor → HTTP(s) → your bot URL<br>
-3. Set to <b>every 5 minutes</b><br><br>
-Now it stays awake 24/7.
+2. Add New Monitor → type <b>HTTP(s)</b><br>
+3. URL: your bot's Render URL<br>
+4. Interval: <b>5 minutes</b><br><br>
+This pings your bot every 5 minutes so it never sleeps.
 </div>
 
 <h2>After 7 Days</h2>
 <div class="step">
-Trial ends → bot switches to paper-only. Buy a license at <a href="https://gridrunner.tools">gridrunner.tools</a> and add it to <code>LICENSE_KEY</code> on Render.
+When your trial ends, the bot stays running but switches to paper-only mode. To continue live trading:<br><br>
+1. Buy a license at <a href="https://gridrunner.tools">gridrunner.tools</a><br>
+2. Go to Render → your service → Environment<br>
+3. Paste the license key into <code>LICENSE_KEY</code><br>
+4. Click <b>Save</b> and redeploy
 </div>
 
 <h2>Troubleshooting</h2>
 <div class="step">
-• <b>Swaps fail?</b> Need ~$5 USDC + 0.01 SOL for gas<br>
-• <b>Not loading?</b> Wait 30 seconds, Render is booting<br>
-• <b>Stuck in paper?</b> Tap the Paper button on dashboard<br>
-• <b>Other issues?</b> Check Render → Logs
+• <b>Swaps failing?</b> You need ~$5 USDC minimum + 0.01 SOL for gas fees<br>
+• <b>Dashboard not loading?</b> Wait 30-60 seconds, Render is still booting<br>
+• <b>Stuck in paper mode?</b> Tap the Paper button in the top-right of the dashboard<br>
+• <b>No prices showing?</b> Make sure ALCHEMY_KEY is correct<br>
+• <b>Other issues?</b> On Render → Logs tab shows error messages
 </div>
 
 </body></html>
