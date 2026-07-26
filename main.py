@@ -2542,6 +2542,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <button class="btn-start" id="start-btn" onclick="startBot()" disabled>Select options above</button>
       <button class="btn-stop" onclick="stopBot()">&#9209; Stop</button>
       <button class="btn-pause" id="pause-btn" onclick="pauseBot()" style="display:none">⏸ Pause</button>
+      <button class="btn" onclick="var el=document.getElementById('config-card');el.style.display=el.style.display==='none'?'block':'none'" style="background:var(--card);color:var(--text2);border-color:var(--border);padding:13px 16px;margin-right:4px">⚙️</button>
       <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)44;padding:13px 20px">📋 Paper: —</button>
     </div>
   </div>
