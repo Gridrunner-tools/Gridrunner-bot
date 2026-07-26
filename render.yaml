@@ -15,7 +15,11 @@ services:
         value: "10000"
       - key: LICENSE_KEY
         sync: false
-      - key: SOLANA_PRIVATE_KEY
+      - key: SOL_PRIVATE_KEY
+        sync: false
+      - key: SOL_WALLET_ADDRESS
+        sync: false
+      - key: ALCHEMY_KEY
         sync: false
       - key: PAPER_TRADING
         value: "false"
