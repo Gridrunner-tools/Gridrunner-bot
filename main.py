@@ -232,7 +232,7 @@ state = {
     "best_trade":    None,
     "trades_list":   [],
     "positions_list": [],
-    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
+    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.05), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
     "last_trade":    None,
     "price_history": [],
     "price_history_pairs": {},
@@ -2902,7 +2902,7 @@ function saveConfig() {
     risk_pct: parseFloat(document.getElementById("cfg-risk").value) || null,
     max_pos: parseInt(document.getElementById("cfg-maxpos").value) || 500,
     grid_stop_loss_pct: parseFloat(document.getElementById("cfg-stoploss").value) || 8,
-    trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.5,
+    trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.05,
     partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
     base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
     auto_compound: document.getElementById("cfg-compound").value === "true"
@@ -3369,7 +3369,7 @@ function refresh() {
       document.getElementById("cfg-risk").value = d.config.risk_pct || "";
       document.getElementById("cfg-maxpos").value = d.config.max_pos || 500;
       document.getElementById("cfg-stoploss").value = d.config.grid_stop_loss_pct || 8;
-      document.getElementById("cfg-trailing").value = d.config.trailing_pct || 0.5;
+      var ct = document.getElementById("cfg-trailing"); if (document.activeElement !== ct) ct.value = d.config.trailing_pct || 0.05;
       document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
       document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
       document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
