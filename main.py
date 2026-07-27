@@ -2728,14 +2728,12 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Pin to right edge without stretching candles
-  if (candles.length > 60) {
-    chart.timeScale().setVisibleLogicalRange({
-      from: candles[candles.length > 60 ? candles.length - 60 : 0].time,
-      to: candles[candles.length - 1].time + 60
-    });
-  } else {
-    chart.timeScale().scrollToPosition(candles.length, false);
+  // Pin newest candle to far right edge
+  var showCount = Math.min(candles.length, 60);
+  chart.timeScale().setVisibleLogicalRange({
+    from: candles[candles.length - showCount].time,
+    to: candles[candles.length - 1].time + 60
+  });
   }
 
   // Grid overlay
