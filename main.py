@@ -19,7 +19,11 @@ TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, 
 
 
 # ── License Validation ──────────────────────────────────────────────────────────
-LICENSE_URL = "https://raw.githubusercontent.com/gridrunner-tools/gridrunner-bot/release/keys.json"
+
+# Set this to your deployed license-api service, e.g.
+# https://your-license-api.onrender.com/validate
+# Falls back to a placeholder if LICENSE_API_URL isn't set as an env var.
+LICENSE_URL = os.environ.get("LICENSE_API_URL", "https://your-license-api.onrender.com/validate")
 LICENSE_CACHE_FILE = ".license_cache"
 GRACE_HOURS = 48
 
@@ -88,23 +92,23 @@ def validate_license():
             print(f"Trial error: {e}")
             return True, {"valid": True, "type": "demo", "expires": None, "days_remaining": None}
 
-    # Try to fetch the keys file
-    keys_data = None
+    # Validate against the private license API — this checks ONLY this one key
+    # server-side and never transmits or exposes any other customer's key,
+    # unlike the old approach of publishing every key in a public JSON file.
+    resp_data = None
     fetch_ok = False
     for attempt in range(3):
         try:
-            import urllib.request
-            req = urllib.request.Request(LICENSE_URL, headers={"User-Agent": "GridRunner/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                keys_data = json.loads(resp.read().decode())
+            r = requests.post(LICENSE_URL, json={"key": license_key}, timeout=10)
+            resp_data = r.json()
             fetch_ok = True
             break
         except Exception as e:
             wait = 2 ** attempt
-            print(f"License fetch attempt {attempt+1} failed: {e} — retrying in {wait}s")
+            print(f"License check attempt {attempt+1} failed: {e} — retrying in {wait}s")
             time.sleep(wait)
 
-    if not fetch_ok or keys_data is None:
+    if not fetch_ok or resp_data is None:
         # Grace period: check cache
         cache = _cache_read()
         if cache and cache.get("key") == license_key:
@@ -120,36 +124,24 @@ def validate_license():
         print("License validation failed — network error and no valid cache. Restart when online.")
         return False, {"valid": False, "type": "error", "expires": None, "days_remaining": None, "error": "Cannot reach license server"}
 
-    # Search for the key
-    match = None
-    for entry in keys_data:
-        if entry.get("key") == license_key:
-            match = entry
-            break
+    if not resp_data.get("valid"):
+        err = resp_data.get("error", "invalid")
+        print(f"License check failed: {err}")
+        return False, {
+            "valid": False,
+            "type": resp_data.get("type", "invalid"),
+            "expires": resp_data.get("expires"),
+            "days_remaining": 0,
+            "error": err,
+        }
 
-    if not match:
-        print(f"Invalid license key: {license_key[:12]}...")
-        return False, {"valid": False, "type": "invalid", "expires": None, "days_remaining": None, "error": "License key not found"}
-
-    # Check expiry
-    expires_str = match.get("expires")
-    if expires_str:
-        try:
-            expires_dt = datetime.fromisoformat(expires_str)
-            now = datetime.now(timezone.utc)
-            if now > expires_dt:
-                print(f"License expired on {expires_str[:10]}")
-                return False, {"valid": False, "type": match.get("type", "trial"), "expires": expires_str, "days_remaining": 0, "error": "License expired"}
-            days_left = (expires_dt - now).days
-        except Exception:
-            days_left = None
-    else:
-        days_left = None  # Full key, no expiry
+    expires_str = resp_data.get("expires")
+    days_left = resp_data.get("days_remaining")
 
     # Valid — cache and return
     info = {
         "valid": True,
-        "type": match.get("type", "full"),
+        "type": resp_data.get("type", "full"),
         "expires": expires_str,
         "days_remaining": days_left,
     }
