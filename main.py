@@ -193,6 +193,8 @@ cfg = {
 
 import threading
 _state_lock = threading.Lock()
+# Real lock guarding actual order placement/execution (was a fake boolean flag before).
+_order_lock = threading.Lock()
 
 # ── Bot State ─────────────────────────────────────────────────────────────────
 state = {
@@ -220,7 +222,7 @@ state = {
     "license_type":   "demo",
     "license_expires": None,
     "license_days_left": None,
-    "trading_lock":  False,   # Prevent simultaneous trades
+    "trading_lock":  False,   # Informational flag only — real locking is _order_lock
     "last_trade_time": 0,     # Cooldown between trades
     # Dashboard UI fields
     "paused":        False,
@@ -511,7 +513,7 @@ def cex_get_balance():
                 if a.get("currency")=="USDT" and a.get("type")=="trade":
                     state["balance"]=float(a.get("available",0)); return state["balance"]
         elif exchange == "kraken":
-            ts = str(int(time.time()))
+            ts = str(int(time.time()*1000))
             path = "/0/private/Balance"
             sig_str = "/0/private/Balance"+hashlib.sha256((str(ts)+"nonce="+ts).encode()).hexdigest()
             sig = base64.b64encode(hmac.new(cfg["api_secret"].encode(), sig_str.encode(), hashlib.sha512).digest()).decode()
@@ -604,7 +606,7 @@ def cex_place_order(pair, side, amount):
             data = r.json()
             return data.get("data",{}).get("orderId")
         elif exchange == "kraken":
-            ts = str(int(time.time()))
+            ts = str(int(time.time()*1000))
             path = "/0/private/AddOrder"
             post_data = "pair="+sym+"&type="+("buy" if "buy" in side.lower() else "sell")+"&ordertype=market&volume="+str(amount)
             sig_str = "/0/private/AddOrder"+hashlib.sha256((str(ts)+post_data).encode()).hexdigest()
@@ -659,6 +661,25 @@ TOKENS = {
     "monad":    {},  # TODO: add Monad token addresses when available
 }
 
+# Human-readable token decimals per EVM chain, used to normalize quote comparisons
+# so different routers' raw integer outputs aren't compared apples-to-oranges.
+EVM_TOKEN_DECIMALS = {
+    "ethereum": {"USDT": 6, "WETH": 18, "WBTC": 8},
+    "bsc":      {"USDT": 18, "WBNB": 18, "BTCB": 18},
+    "base":     {"USDT": 6, "WETH": 18},
+    "arbitrum": {"USDT": 6, "WETH": 18},
+    "polygon":  {"USDT": 6, "WMATIC": 18},
+    "monad":    {},
+}
+
+def _evm_token_decimals(chain, address):
+    """Look up decimals for a token address on a given chain; default to 18 (most common for EVM)."""
+    tokens_map = TOKENS.get(chain, {})
+    for sym, addr in tokens_map.items():
+        if addr.lower() == address.lower():
+            return EVM_TOKEN_DECIMALS.get(chain, {}).get(sym, 18)
+    return 18
+
 def dex_get_quote_1inch(chain, from_token, to_token, amount_wei):
     try:
         chain_ids = {"ethereum":1,"bsc":56,"base":8453,"arbitrum":42161,"polygon":137,"monad":10143}
@@ -682,12 +703,21 @@ def dex_get_quote_uniswap(chain, from_token, to_token, amount_wei):
             params={"protocols":"v2,v3","tokenInAddress":from_token,"tokenInChainId":cid,
                     "tokenOutAddress":to_token,"tokenOutChainId":cid,"amount":str(amount_wei),"type":"exactIn"}, timeout=5)
         data = r.json()
-        return int(float(data.get("quote","0")) * 1e6)
+        # Uniswap's "quote" field is a human-readable decimal string (not raw integer units),
+        # so convert it to the destination token's smallest-unit integer for a fair comparison
+        # against 1inch's raw dstAmount below.
+        to_dec = _evm_token_decimals(chain, to_token)
+        human_amount = float(data.get("quote", "0"))
+        return int(round(human_amount * (10 ** to_dec)))
     except Exception as ex:
         log("Uniswap quote error: "+str(ex), "ERROR")
     return 0
 
 def dex_best_quote(chain, from_token, to_token, amount_wei):
+    """
+    Compare quotes from both routers in the destination token's smallest-unit integer form,
+    so amounts are always apples-to-apples regardless of token decimals.
+    """
     q1 = dex_get_quote_1inch(chain, from_token, to_token, amount_wei)
     q2 = dex_get_quote_uniswap(chain, from_token, to_token, amount_wei)
     if q1 >= q2:
@@ -695,18 +725,16 @@ def dex_best_quote(chain, from_token, to_token, amount_wei):
     return q2, "Uniswap"
 
 def dex_swap(chain, from_token, to_token, amount_usd, price):
-    try:
-        amount_wei = int(amount_usd * 1e6)
-        best_amount, router = dex_best_quote(chain, from_token, to_token, amount_wei)
-        log("DEX swap via "+router+": $"+str(amount_usd)+" on "+CHAIN_CONFIG[chain]["name"])
-        token_amount = amount_usd / price
-        trade = {"time":time.strftime("%H:%M:%S"),"side":"DEX-BUY","price":price,"amount":round(token_amount,6),"router":router,"chain":chain}
-        state["trades"].append(trade)
-        state["positions"].append({"price":price,"amount":round(token_amount,6),"side":"buy","router":router,"chain":chain})
-        log("Swap executed via "+router+" on "+CHAIN_CONFIG[chain]["name"])
-        return True
-    except Exception as ex:
-        log("DEX swap error: "+str(ex), "ERROR")
+    """
+    EVM swap execution is NOT implemented — there is no signing, gas estimation,
+    nonce handling, or transaction submission for any EVM chain in this codebase.
+    This function used to log a fake "success" and fabricate a trade/position
+    entry even though nothing happened on-chain. It now refuses instead of lying,
+    so the dashboard never shows fills or PnL that never actually occurred.
+    """
+    log("EVM swap requested on "+CHAIN_CONFIG.get(chain,{}).get("name",chain)+
+        " — NOT EXECUTED. EVM signing/submission isn't implemented yet. "
+        "Only Solana (Raydium/Jupiter) has real live execution.", "ERROR")
     return False
 
 def dex_get_balance():
@@ -892,10 +920,58 @@ def sol_get_balance():
         state["sol_usdc"]    = usdc
         state["sol_usdt"]    = usdt
         state["sol_native"]  = round(sol_amt * sol_price, 2)
+        state["sol_native_amount"] = sol_amt
         log("Solana balance: "+str(round(sol_amt,4))+" SOL + $"+str(usdc)+" USDC + $"+str(usdt)+" USDT = $"+str(total_usd))
         return total_usd
     except Exception as ex:
         log("Solana balance error: "+str(ex), "ERROR")
+    return 0.0
+
+def get_spl_token_balance(wallet, mint):
+    """
+    Standalone helper to fetch the on-chain balance of any SPL token for a wallet.
+    Used as a pre-flight check before selling a token, so a sell doesn't get sent
+    on-chain only to fail because we never actually held enough of it.
+    """
+    rpcs = list(SOL_RPCS)
+    if ALCHEMY_KEY:
+        rpcs = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + rpcs
+    payload = {
+        "jsonrpc": "2.0", "id": 1,
+        "method": "getTokenAccountsByOwner",
+        "params": [wallet, {"mint": mint}, {"encoding": "jsonParsed"}]
+    }
+    for rpc in rpcs:
+        try:
+            r = requests.post(rpc, json=payload, timeout=8)
+            result = r.json().get("result", {})
+            value = result.get("value", [])
+            if value:
+                return float(
+                    value[0].get("account", {}).get("data", {}).get("parsed", {})
+                    .get("info", {}).get("tokenAmount", {}).get("uiAmount", 0) or 0
+                )
+            return 0.0
+        except Exception as e:
+            log("get_spl_token_balance RPC error: "+str(e), "WARN")
+            continue
+    return 0.0
+
+def get_sol_native_balance(wallet):
+    """Return native SOL balance (in SOL, not USD) for pre-flight sell checks."""
+    rpcs = list(SOL_RPCS)
+    if ALCHEMY_KEY:
+        rpcs = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + rpcs
+    payload = {"jsonrpc":"2.0","id":1,"method":"getBalance","params":[wallet]}
+    for rpc in rpcs:
+        try:
+            r = requests.post(rpc, json=payload, timeout=8)
+            result = r.json().get("result", {})
+            if isinstance(result, dict) and "value" in result:
+                return result["value"] / 1e9
+        except Exception as e:
+            log("get_sol_native_balance RPC error: "+str(e), "WARN")
+            continue
     return 0.0
 
 def jupiter_get_quote(from_mint, to_mint, amount_lamports):
@@ -972,11 +1048,21 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
         if not private_key or not wallet:
             log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set", "WARN")
             return False, 0.0
-        # Check USDC balance before attempting swap
+        # Check USDC balance before attempting swap (buy side)
         usdc_bal = state.get("sol_usdc", 0)
         if from_token in ("USDC","USDT") and usdc_bal > 0 and amount_input > usdc_bal:
             log(f"Insufficient USDC: need ${amount_input:.2f}, have ${usdc_bal:.2f}", "WARN")
             return False, 0.0
+        # Sell-side pre-flight check: confirm we actually hold enough of the token
+        # being sold, instead of only ever checking the buy-side USDC/USDT balance.
+        if from_token not in ("USDC", "USDT"):
+            if from_token == "SOL":
+                held = get_sol_native_balance(wallet)
+            else:
+                held = get_spl_token_balance(wallet, from_mint)
+            if held <= 0 or amount_input > held:
+                log(f"Insufficient {from_token}: need {amount_input:.6f}, have {held:.6f}", "WARN")
+                return False, 0.0
 
         keypair = Keypair.from_base58_string(private_key)
 
@@ -1250,11 +1336,21 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
         if not private_key or not wallet:
             log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set", "WARN")
             return False, 0.0
-        # Check USDC balance before attempting swap
+        # Check USDC balance before attempting swap (buy side)
         usdc_bal = state.get("sol_usdc", 0)
         if from_token in ("USDC","USDT") and usdc_bal > 0 and amount_input > usdc_bal:
             log(f"Insufficient USDC: need ${amount_input:.2f}, have ${usdc_bal:.2f}", "WARN")
             return False, 0.0
+        # Sell-side pre-flight check: confirm we actually hold enough of the token
+        # being sold before submitting a transaction that would otherwise fail on-chain.
+        if from_token not in ("USDC", "USDT"):
+            if from_token == "SOL":
+                held = get_sol_native_balance(wallet)
+            else:
+                held = get_spl_token_balance(wallet, from_mint)
+            if held <= 0 or amount_input > held:
+                log(f"Insufficient {from_token}: need {amount_input:.6f}, have {held:.6f}", "WARN")
+                return False, 0.0
 
         try:
             keypair = Keypair.from_base58_string(private_key)
@@ -1619,47 +1715,59 @@ _last_order_key = None
 _last_order_time = 0
 
 def place_order(pair, side, amount):
+    """
+    Serialized with a real threading.Lock (_order_lock) so overlapping strategy
+    threads can never both be mid-order-placement at once. Previously
+    state["trading_lock"] was just a plain boolean only checked by the
+    arbitrage strategy, so grid/DCA/scalp could race against it or each other.
+    """
     global _last_order_key, _last_order_time
     order_key = f"{pair}:{side}:{amount}"
     now = time.time()
     if order_key == _last_order_key and now - _last_order_time < 5:
         log(f"DUPLICATE ORDER BLOCKED: {order_key}", "WARN")
         return False
-    _last_order_key = order_key
-    _last_order_time = now
-    if state["mode"] == "dex":
-        chain = state["chain"]
-        price = get_price(pair)
-        token = pair.split("/")[0]
-        stablecoin = pair.split("/")[1]
 
-        if chain == "solana":
-            # Use Jupiter/Raydium for Solana trades
-            if side in ("buy","buy_market"):
-                # amount is token quantity, jupiter_swap needs USDC cost
-                cost = amount * price
-                log(f"place_order BUY: amt={amount} price={price} cost={cost} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"BUY","pair":pair,"amount":amount,"price":price,"cost":cost})
-                swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
-                result = jupiter_swap(stablecoin, token, cost, price, dex=swap_dex)
+    with _order_lock:
+        _last_order_key = order_key
+        _last_order_time = now
+        state["trading_lock"] = True
+        try:
+            if state["mode"] == "dex":
+                chain = state["chain"]
+                price = get_price(pair)
+                token = pair.split("/")[0]
+                stablecoin = pair.split("/")[1]
+
+                if chain == "solana":
+                    # Use Jupiter/Raydium for Solana trades
+                    if side in ("buy","buy_market"):
+                        # amount is token quantity, jupiter_swap needs USDC cost
+                        cost = amount * price
+                        log(f"place_order BUY: amt={amount} price={price} cost={cost} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"BUY","pair":pair,"amount":amount,"price":price,"cost":cost})
+                        swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
+                        result = jupiter_swap(stablecoin, token, cost, price, dex=swap_dex)
+                    else:
+                        log(f"place_order SELL: amt={amount} price={price} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"SELL","pair":pair,"amount":amount,"price":price})
+                        swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
+                        result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex)
+                    # jupiter_swap returns (success_bool, amount) tuple — unpack it
+                    if isinstance(result, tuple):
+                        return result[0]
+                    return bool(result)
+                else:
+                    # EVM chains: use 1inch/Uniswap
+                    tokens = TOKENS.get(chain, {})
+                    from_t = tokens.get("USDT","")
+                    to_t   = tokens.get("W"+token, tokens.get(token,""))
+                    if side in ("buy","buy_market"):
+                        return dex_swap(chain, from_t, to_t, amount * price, price)
+                    else:
+                        return dex_swap(chain, to_t, from_t, amount * price, price)
             else:
-                log(f"place_order SELL: amt={amount} price={price} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"SELL","pair":pair,"amount":amount,"price":price})
-                swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
-                result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex)
-            # jupiter_swap returns (success_bool, amount) tuple — unpack it
-            if isinstance(result, tuple):
-                return result[0]
-            return bool(result)
-        else:
-            # EVM chains: use 1inch/Uniswap
-            tokens = TOKENS.get(chain, {})
-            from_t = tokens.get("USDT","")
-            to_t   = tokens.get("W"+token, tokens.get(token,""))
-            if side in ("buy","buy_market"):
-                return dex_swap(chain, from_t, to_t, amount * price, price)
-            else:
-                return dex_swap(chain, to_t, from_t, amount * price, price)
-    else:
-        return cex_place_order(pair, side, amount)
+                return cex_place_order(pair, side, amount)
+        finally:
+            state["trading_lock"] = False
 
 def log_trade_to_file(entry):
     """Write a trade event to persistent log file."""
@@ -2987,7 +3095,7 @@ function pnlHtml(v) {
 
 function killSwitch() {
   if (!confirm("🛑 KILL SWITCH: Close ALL positions on ALL pairs? This cannot be undone.")) return;
-  fetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
+  apiFetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
     showToast("KILL: "+d.closed+" positions closed, $"+d.total_value.toFixed(2),"error");
   }).catch(function(){showToast("Kill failed","error")});
 }
@@ -3356,7 +3464,14 @@ window.addEventListener("resize", function() {
 setInterval(refresh, 3000);
 refresh();
 initChart();
-  var API_SECRET = "{API_SECRET}";
+  // API_SECRET is no longer embedded server-side (it was previously leaked to
+  // anyone who viewed page source). It's requested once and kept in this
+  // browser's localStorage only.
+  var API_SECRET = localStorage.getItem("gr_api_secret") || "";
+  if (!API_SECRET) {
+    API_SECRET = prompt("Enter your API_SECRET (set in Render env vars):") || "";
+    if (API_SECRET) localStorage.setItem("gr_api_secret", API_SECRET);
+  }
   function apiFetch(url, opts) {
     opts = opts || {};
     opts.headers = opts.headers || {};
@@ -3372,16 +3487,22 @@ class Handler(BaseHTTPRequestHandler):
     API_SECRET = os.environ.get("API_SECRET", "")
 
     def _check_auth(self):
+        # Fail CLOSED if no secret is configured. The old code did
+        # `if self.API_SECRET and sent != self.API_SECRET`, which meant an
+        # unset API_SECRET silently disabled auth entirely — every control
+        # endpoint was wide open with zero authentication. Never do that.
+        if not self.API_SECRET:
+            self.respond(503, "application/json",
+                b'{"error":"API_SECRET not configured on server. Set it in Render env vars before using control endpoints."}')
+            return False
         sent = self.headers.get("X-API-Secret", "")
-        if self.API_SECRET and sent != self.API_SECRET:
+        if sent != self.API_SECRET:
             self.respond(401, "text/plain", b"Unauthorized")
             return False
         return True
 
     def _auth_or_401(self):
-        if not self._check_auth():
-            return False
-        return True
+        return self._check_auth()
 
     def do_GET(self):
         parsed=urlparse(self.path)
@@ -3389,7 +3510,9 @@ class Handler(BaseHTTPRequestHandler):
         params=parse_qs(parsed.query)
 
         if path=="/":
-            self.respond(200,"text/html",DASHBOARD.replace("{API_SECRET}", os.environ.get("API_SECRET","")).encode())
+            # No longer embeds API_SECRET in the served HTML — that leaked the
+            # secret in plaintext to anyone who viewed page source.
+            self.respond(200,"text/html",DASHBOARD.encode())
         elif path=="/logo.jpeg":
             try:
                 with open("logo.jpeg","rb") as f: logo_data=f.read()
@@ -3616,109 +3739,6 @@ class Handler(BaseHTTPRequestHandler):
             log("Bot "+("paused" if state["paused"] else "resumed"))
             self.respond(200,"application/json",json.dumps({"paused":state["paused"]}).encode())
             return
-        elif path=="/webhook":
-            if not self._auth_or_401(): return
-            signal = data.get("signal","")
-            wpair = data.get("pair",state.get("pair","SOL/USDC"))
-            wprice = data.get("price", 0.0)
-            if signal == "buy" and wprice > 0:
-                gs = state["grid_pairs"].get(wpair, {})
-                grids = gs.get("grids", [])
-                filled = gs.get("filled", {})
-                mid_idx = gs.get("mid_idx", len(grids)//2) if grids else 2
-                if not grids:
-                    levels=5; spread_val=cfg.get("base_spread",0.05)
-                    grids = [round(wprice*(1-spread_val)+i*(wprice*spread_val*2/levels),4) for i in range(levels+1)]
-                    mid_idx = len(grids)//2
-                    state["grid_pairs"][wpair] = {"grids":grids,"mid_idx":mid_idx,"filled":{}}
-                    if wpair not in state.get("active_pairs",[]): state["active_pairs"].append(wpair)
-                bal = get_balance()
-                sz = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])/5
-                amt = round(sz/wprice,6)
-                if place_order(wpair,"buy",amt):
-                    for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
-                            filled[i] = {"price":wprice,"amount":amt}
-                            state["grid_pairs"][wpair]["filled"] = filled
-                            record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
-                            log("[WEBHOOK] Forced buy "+wpair+" @ $"+str(round(wprice,2)))
-                            break
-                self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair}).encode())
-            elif signal == "sell":
-                gs = state["grid_pairs"].get(wpair, {})
-                filled = gs.get("filled", {})
-                sold = 0
-                for bi in sorted(filled.keys()):
-                    amt = filled[bi]["amount"]
-                    bp = filled[bi]["price"]
-                    sp = wprice if wprice > 0 else get_price(wpair)
-                    if place_order(wpair,"sell",amt):
-                        pnl = (sp - bp) * amt
-                        state["pnl"] += pnl
-                        record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)
-                        log("[WEBHOOK] Forced sell "+wpair+" @ $"+str(round(sp,2)))
-                        sold += 1
-                state["grid_pairs"][wpair]["filled"] = {}
-                self.respond(200,"application/json",json.dumps({"ok":True,"pair":wpair,"closed":sold}).encode())
-            else:
-                self.respond(400,"application/json",json.dumps({"error":"signal must be buy or sell"}).encode())
-        elif path=="/backtest":
-            if not self._auth_or_401(): return
-            pair = data.get("pair", state.get("pair", "SOL/USDC"))
-            strategy = data.get("strategy", "grid")
-            prices = []
-            if state.get("price_history") and len(state["price_history"]) > 5:
-                prices = state["price_history"]
-            else:
-                try:
-                    r = requests.get("https://api.kraken.com/0/public/OHLC", params={
-                        "pair": pair.replace("/",""), "interval": 5
-                    }, timeout=10)
-                    ohlc = r.json().get("result", {})
-                    for k in ohlc:
-                        if k != "last":
-                            prices = [{"time": int(p[0]), "value": float(p[4])} for p in ohlc[k][-200:]]
-                except Exception: pass
-            if not prices or len(prices) < 5:
-                self.respond(200,"application/json",json.dumps({"error":"Not enough price data"}).encode()); return
-            trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
-            levels=5; spread_val=cfg.get("base_spread",0.05)
-            base_price = prices[0]["value"]
-            grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
-            mid_idx = len(grids)//2; filled = {}
-            for pt in prices[1:]:
-                pr = pt["value"]
-                if pr <= 0: continue
-                if pr < grids[0]*0.98 or pr > grids[-1]*1.02:
-                    base_price = pr
-                    grids = [round(pr*(1-spread_val)+i*(pr*spread_val*2/levels),4) for i in range(levels+1)]
-                    mid_idx = len(grids)//2
-                for i,g in enumerate(grids[:-1]):
-                    ng = grids[i+1]
-                    if g <= pr < ng:
-                        is_buy = i < mid_idx
-                        if is_buy and i not in filled:
-                            filled[i] = {"price":pr,"amount":1}
-                        elif not is_buy:
-                            for bi in sorted(filled.keys()):
-                                if bi < i:
-                                    bp = filled[bi]["price"]
-                                    pnl = pr - bp
-                                    pnl_total += pnl; equity += pnl
-                                    if equity > peak_equity: peak_equity = equity
-                                    dd = peak_equity - equity
-                                    if dd > max_dd: max_dd = dd
-                                    if pnl > 0: wins += 1
-                                    trades.append({"action":"sell","price":pr,"buy_price":bp,"pnl":round(pnl,2),"time":pt["time"]})
-                                    del filled[bi]; break
-            result = {
-                "total_trades": len(trades),
-                "win_rate": round(wins/max(len(trades),1)*100,1),
-                "total_pnl": round(pnl_total,2),
-                "max_drawdown": round(max_dd,2),
-                "trades": trades[-20:]
-            }
-            self.respond(200,"application/json",json.dumps(result).encode())
         else:
             self.respond(404,"text/plain",b"Not found")
 
@@ -3924,6 +3944,10 @@ if __name__=="__main__":
         error_msg = linfo.get("error", "License validation failed")
         log(f"LICENSE INVALID — {error_msg}. Live trading disabled. Paper mode only.", "WARN")
         state["paper_trading"] = True  # force paper-only
+    if not os.environ.get("API_SECRET"):
+        log("WARNING: API_SECRET is not set. All control endpoints (/start, /stop, /kill, "
+            "/manual_trade, /webhook, /config, /toggle_paper, /pause) will refuse requests "
+            "with 503 until you set API_SECRET in your Render environment variables.", "WARN")
     start_background_loops()
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
