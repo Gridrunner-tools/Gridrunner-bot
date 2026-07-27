@@ -255,6 +255,15 @@ state = {
     "emergency_stop":  False,
 }
 
+# Load persisted price history
+try:
+    with open("price_history.json") as f:
+        saved = json.load(f)
+        state["price_history"] = saved.get("price_history", [])
+        log(f"Loaded {len(state["price_history"])} price history points")
+except:
+    state["price_history"] = []
+
 def send_telegram(msg):
     token = cfg.get("tg_bot_token", "")
     chat_id = cfg.get("tg_chat_id", "")
@@ -782,6 +791,9 @@ def start_background_loops():
                     if len(state["price_history"]) > 1440:
                         state["price_history"] = state["price_history"][-1440:]
             except Exception as e:
+                    try:
+                        json.dump({"price_history": state["price_history"][-500:]}, open("price_history.json","w"))
+                    except: pass
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
 
