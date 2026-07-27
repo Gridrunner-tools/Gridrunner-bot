@@ -2731,8 +2731,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   // Pin to right edge without stretching candles
   if (candles.length > 60) {
     chart.timeScale().setVisibleLogicalRange({
-      from: candles.length - 60,
-      to: candles.length + 1
+      from: candles[candles.length > 60 ? candles.length - 60 : 0].time,
+      to: candles[candles.length - 1].time + 60
     });
   } else {
     chart.timeScale().scrollToPosition(candles.length, false);
