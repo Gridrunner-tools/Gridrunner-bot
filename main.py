@@ -1750,6 +1750,27 @@ def get_price_history(pair, lookback=100):
     state["_price_buf_" + pair] = buf
     return buf
 
+def seed_history(pair):
+    """Fetch 4 hours of 1-min candles from Kraken on startup."""
+    try:
+        if not requests: return
+        pmap = {"BTC/USDC":"XXBTZUSD","BTC/USDT":"XXBTZUSD","ETH/USDC":"XETHZUSD","SOL/USDC":"SOLUSD"}
+        kp = pmap.get(pair, pair.replace("/",""))
+        now = int(time.time())
+        url = f"https://api.kraken.com/0/public/OHLC?pair={kp}&interval=1&since={now-14400}"
+        r = requests.get(url, timeout=10)
+        data = r.json()
+        if data.get("error"): return
+        for key, candles in data.get("result",{}).items():
+            if key == "last": continue
+            for c in candles:
+                state["price_history"].append({"time": int(c[0]), "value": float(c[4])})
+            state["price_history"] = state["price_history"][-1440:]
+            log(f"Seeded {len(candles)} candles from Kraken for {pair}")
+            return
+    except Exception as e:
+        log(f"Seed history failed: {e}", "WARN")
+
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
     buy_prices = []
@@ -1856,6 +1877,7 @@ def run_grid():
             gs = _init_grid_pair(p)
             if gs:
                 state["grid_pairs"][p] = gs
+            seed_history(p)
                 log("Grid initialized for "+p+": "+str(gs["grids"]), "INFO")
     if not state["active_pairs"]:
         log("No active pairs to grid", "WARN"); return
