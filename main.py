@@ -1992,7 +1992,7 @@ def run_grid():
                         # Sell when price drops trailing_pct% below peak
                         if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
                             for buy_idx in sorted(filled.keys()):
-                                if buy_idx < i:
+                                if True:  # allow sell from any grid level
                                     amt = filled[buy_idx]["amount"]
                                     buy_price = filled[buy_idx]["price"]
                                     partial_pct = cfg.get("partial_sell_pct", 50)
@@ -2050,12 +2050,13 @@ def run_grid():
                     else:
                         # Price back in buy zone — reset sell trailing
                         if trailing_sell_active:
-                            log("["+pair+"] Trailing sell reset — price back in buy zone")
-                            trailing_sell_active = False
-                            trailing_high = 0.0
-            # ── Daily loss limit check ──
-            now = int(time.time())
-            today_midnight = now - (now % 86400)
+                            # Only reset if ALL positions were cleared by the sell
+                            if not filled:
+                                trailing_sell_active = False
+                                trailing_high = 0.0
+                                log("["+pair+"] Trailing sell reset — all positions cleared")
+                            else:
+                                log("["+pair+"] Trailing still active — "+str(len(filled))+" positions remaining")
             if state.get("last_midnight",0) < today_midnight:
                 state["daily_pnl"] = 0.0
                 state["last_midnight"] = today_midnight
