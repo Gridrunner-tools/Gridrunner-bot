@@ -529,6 +529,9 @@ def cex_get_balance():
     return 0.0
 
 def cex_place_order(pair, side, amount):
+    if state.get("paper_trading", False):
+        log("[CEX] PAPER MODE — skipping " + side + " " + pair + " " + str(amount))
+        return True
     exchange = state["exchange"]
     try:
         sym = pair.replace("/","")
@@ -2052,6 +2055,18 @@ def run_grid():
                             log("["+pair+"] Trailing sell reset — price back in buy zone")
                             trailing_sell_active = False
                             trailing_high = 0.0
+            # ── Gap-fill: catch unfilled buy levels price has dropped below ──
+            for gap_i in range(mid_idx):
+                if gap_i in filled:
+                    continue
+                if price < grids[gap_i]:
+                    gap_amt = round(size / price, 6)
+                    if place_order(pair, "buy", gap_amt):
+                        filled[gap_i] = {"price": price, "amount": gap_amt}
+                        state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
+                        record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
+                        log("[" + pair + "] GAP-FILL BUY level " + str(gap_i) + " @ $" + str(round(price, 2)))
+
             # ── Daily loss limit check ──
             now = int(time.time())
             today_midnight = now - (now % 86400)
