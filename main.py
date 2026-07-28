@@ -2376,6 +2376,11 @@ def stop_bot():
     state["running"]=False
     state["strategy"]=None
     state["active_pairs"]=[]
+    # Clear all strategy-specific state to prevent leaks across restarts
+    state["positions"] = []
+    state["partial_positions"] = {}
+    state["compound_profit"] = 0.0
+    state["trading_lock"] = False
     for k in list(state.keys()):
         if k.startswith("_rsi_peak_") or k.startswith("_bb_peak_"):
             del state[k]
@@ -3683,7 +3688,7 @@ class Handler(BaseHTTPRequestHandler):
         content_len = int(self.headers.get("Content-Length", 0))
         if content_len > 0:
             body = self.rfile.read(content_len)
-            try: data = json.loads(body)
+            try: data = json.loads(body)  # local to do_POST — not shared with do_GET
             except Exception as e:
                 log("JSON parse error: "+str(e), "WARN")
                 data = {}
