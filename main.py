@@ -2620,6 +2620,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 </div>
 
 <script>
+document.title = 'GR LOADED';
 var sel = {mode:"dex", strat:null, pair:null, exch:null, chain:"solana"};
 var isDark = true;
 var tradeLog = [];
