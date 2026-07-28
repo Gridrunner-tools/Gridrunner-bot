@@ -2357,6 +2357,9 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
         # Multi-pair: if grid is already running, add new pair without restarting
         if strategy == "grid" and pair not in state.get("active_pairs", []):
             state["active_pairs"].append(pair)
+            state["pair"] = pair
+            if pair in state.get("price_history_pairs", {}):
+                state["price_history"] = state["price_history_pairs"][pair]
             log("Added "+pair+" to active grids ("+str(len(state["active_pairs"]))+" total)")
             return
         log("Already running — stop first","WARN"); return
@@ -3257,7 +3260,8 @@ function refresh() {
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart(d.price_history, levels, buyZone, viewPair);
+      var ph = (d.price_history_pairs && d.price_history_pairs[viewPair]) ? d.price_history_pairs[viewPair] : d.price_history;
+      updateChart(ph, levels, buyZone, viewPair);
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
