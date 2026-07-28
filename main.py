@@ -2743,7 +2743,6 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
     from: candles[candles.length - showCount].time,
     to: candles[candles.length - 1].time + 60
   });
-  }
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
