@@ -2046,6 +2046,7 @@ def run_grid():
                             trailing_buy_active = True
                             trailing_low = price
                             dip_occurred = False
+                            log("["+pair+"] Trailing buy active at level "+str(i)+" @ $"+str(round(price,2)))
                         elif trailing_buy_active:
                             if price < trailing_low:
                                 trailing_low = price
