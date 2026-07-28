@@ -3383,9 +3383,6 @@ window.addEventListener("resize", function() {
   }
 });
 
-setInterval(refresh, 3000);
-refresh();
-initChart();
   var API_SECRET = "{API_SECRET}";
   function apiFetch(url, opts) {
     opts = opts || {};
@@ -3393,6 +3390,9 @@ initChart();
     if (API_SECRET) opts.headers["X-API-Secret"] = API_SECRET;
     return fetch(url, opts);
   }
+setInterval(refresh, 3000);
+refresh();
+initChart();
 </script>
 </body>
 </html>'''
@@ -3404,12 +3404,12 @@ class Handler(BaseHTTPRequestHandler):
     def _check_auth(self):
         sent = self.headers.get("X-API-Secret", "")
         if self.API_SECRET and sent != self.API_SECRET:
+            self.respond(401, "text/plain", b"Unauthorized")
             return False
         return True
 
     def _auth_or_401(self):
         if not self._check_auth():
-            self.respond(401, "text/plain", b"Unauthorized")
             return False
         return True
 
