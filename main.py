@@ -780,10 +780,11 @@ def start_background_loops():
                 pair = state.get("pair","ETH/USDT")
                 p = get_price(pair)
                 if p > 0:
-                    state["price"] = p
+                    # state["price"] already set by get_price() — avoid race
                     state["price_history"].append({"time": int(time.time()), "value": p})
                     if len(state["price_history"]) > 1440:
-                        state["price_history"] = state["price_history"][-1440:]
+                        with _state_lock:
+                            state["price_history"] = state["price_history"][-1440:]
             except Exception as e:
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
@@ -2024,10 +2025,11 @@ def run_grid():
                                             del state["partial_positions"][partial_key]
                                     if place_order(pair,"sell",sell_amt):
                                         pnl=(price-buy_price)*sell_amt
-                                        state["pnl"]+=pnl
-                                        state["daily_pnl"] = state.get("daily_pnl",0)+pnl
-                                        if cfg.get("auto_compound", True) and pnl > 0:
-                                            state["compound_profit"] += pnl
+                                        with _state_lock:
+                                            state["pnl"]+=pnl
+                                            state["daily_pnl"] = state.get("daily_pnl",0)+pnl
+                                            if cfg.get("auto_compound", True) and pnl > 0:
+                                                state["compound_profit"] += pnl
                                         tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
                                         record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)
                                         log("["+pair+"] SELL "+str(round(sell_amt,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(buy_price,2))+" PnL $"+str(round(pnl,2))+")")
@@ -2071,7 +2073,7 @@ def run_grid():
                         state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                         record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
                         log("[" + pair + "] GAP-FILL BUY level " + str(gap_i) + " @ $" + str(round(price, 2)))
-            # ── Daily loss limit check ──
+            # ── Daily loss limit check (resets at 00:00 UTC) ──
             now = int(time.time())
             today_midnight = now - (now % 86400)
             if state.get("last_midnight",0) < today_midnight:
@@ -2338,13 +2340,15 @@ def run_bbands():
         time.sleep(5)
 
 def run_webhook():
-    """TradingView webhook receiver. Waits for external buy/sell signals via /webhook endpoint."""
+    """TradingView webhook receiver. Waits for external buy/sell signals via /webhook endpoint.
+    All actual trading is handled by the HTTP /webhook handler — this thread only
+    keeps the strategy alive and responds to pause/stop signals."""
     pair = state["pair"]
     mode = "PAPER" if state["paper_trading"] else "LIVE"
     log("[WEBHOOK] Active on " + pair + " (" + mode + ") — waiting for TradingView alerts")
     while state["running"] and state["strategy"] == "webhook":
         while state["paused"]: time.sleep(1)
-        time.sleep(5)  # Just keep alive; trades come in via webhook handler
+        time.sleep(5)  # Keep strategy thread alive; trades arrive via HTTP /webhook
 
 STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook}
 
