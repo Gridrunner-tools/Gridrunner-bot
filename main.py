@@ -17,6 +17,9 @@ time.tzset()
 logging.basicConfig(level=logging.WARNING)
 TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6, "SPCX": 6}
 
+# Minimum reversal fraction from tracked extreme that triggers trailing execution (0.05%)
+GRID_TRAILING_REVERSAL = 0.0005
+
 
 # ── License Validation ──────────────────────────────────────────────────────────
 
@@ -2002,11 +2005,25 @@ def run_grid():
                 else:
                     log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
                 if has_positions and price < grids[0]:
+                    # Down-move: shift buy side only; sell levels (open position targets) stay anchored
                     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     for i in range(mid_idx + 1):
                         grids[i] = new_grids[i]
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
+                elif has_positions and price > grids[-1]:
+                    # Up-move: shift sell side only; buy levels (open position entries) stay anchored
+                    new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                    for i in range(mid_idx, levels + 1):
+                        grids[i] = new_grids[i]
+                    # Enforce: no sell level may be below any open position's entry price
+                    for idx in list(filled.keys()):
+                        entry_price = filled[idx]["price"]
+                        for gi in range(mid_idx, levels + 1):
+                            if grids[gi] < entry_price:
+                                grids[gi] = entry_price
+                    trailing_sell_active = False; trailing_high = 0.0
+                    log("["+pair+"] Grid sell zone raised: sell="+str(grids[mid_idx:])+" buy zone kept: "+str(grids[:mid_idx+1]))
                 else:
                     grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     mid_idx = len(grids) // 2
@@ -2034,16 +2051,18 @@ def run_grid():
                                 trailing_low = price
                                 dip_occurred = True
                         dip_mult = 1.5 if state.get("dip_active") else 1.0
-                        # Buy: immediately if no dip, or on 0.5% bounce if dipped
+                        # Buy on GRID_TRAILING_REVERSAL bounce from trough (armed at grid touch) OR configured-% bounce
                         if trailing_buy_active and i not in filled and size > 1:
-                            should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                            reversal_buy = price >= trailing_low * (1 + GRID_TRAILING_REVERSAL)
+                            original_buy = price >= trailing_low * (1 + trailing_pct / 100)
+                            should_buy = reversal_buy or original_buy
                             if should_buy:
                                 amt = round(size*dip_mult/price,6)
                                 if place_order(pair,"buy",amt):
                                     filled[i]={"price":price,"amount":amt}
                                     state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                     record_trade("GRID-BUY",price,amt, pair=pair)
-                                    log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
+                                    log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+" (low $"+str(round(trailing_low,2))+" bounce "+("0.05%" if reversal_buy else str(trailing_pct)+"%")+")")
                                     send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                     trailing_buy_active = False
                                     trailing_low = 0.0
@@ -2088,12 +2107,18 @@ def run_grid():
                                 trailing_high = price
                                 state["grid_trailing_high"] = trailing_high
                                 log("["+pair+"] Trailing high updated to $"+str(price))
-                        # Sell when price drops trailing_pct% below peak
-                        if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
+                        # Sell on GRID_TRAILING_REVERSAL pullback from peak (armed at grid touch) OR original configured-% pullback
+                        reversal_sell = price <= trailing_high * (1 - GRID_TRAILING_REVERSAL)
+                        original_sell = price <= trailing_high * (1 - trailing_pct / 100)
+                        if trailing_sell_active and (reversal_sell or original_sell):
                             for buy_idx in sorted(filled.keys()):
                                 if buy_idx < i:
                                     amt = filled[buy_idx]["amount"]
                                     buy_price = filled[buy_idx]["price"]
+                                    # Never sell below entry price (no-loss guard)
+                                    if price <= buy_price:
+                                        log("["+pair+"] Sell skipped for level "+str(buy_idx)+" — current price $"+str(round(price,2))+" <= entry $"+str(round(buy_price,2))+" (no-loss guard)")
+                                        continue
                                     partial_pct = cfg.get("partial_sell_pct", 50)
                                     # Check if this position still has a partial remainder
                                     partial_key = str(buy_idx)
