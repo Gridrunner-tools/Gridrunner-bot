@@ -217,7 +217,7 @@ state = {
     "error":         None,
     "arb_opps":      [],
     "paper_trading": cfg["paper_trading"],
-    "license_valid":  True,
+    "license_valid":  False,
     "license_type":   "demo",
     "license_expires": None,
     "license_days_left": None,
@@ -2364,12 +2364,23 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
     else: state["chain"]="solana"
     state["running"]=True
     state["error"]=None
+    state["emergency_stop"]=False
+    state["_strategy_thread"]=None  # cleared before new thread
     t=threading.Thread(target=STRATEGIES.get(strategy,run_dca),daemon=True)
     t.start()
+    state["_strategy_thread"]=t
     log("Started "+strategy.upper()+" on "+pair+" via "+mode.upper()+((" / "+chain) if mode=="dex" else ""))
 
 def stop_bot():
     state["running"]=False
+    # Join strategy thread to prevent orphan competing threads on rapid stop/start
+    t = state.get("_strategy_thread")
+    if t is not None and t.is_alive():
+        log("Waiting for strategy thread to finish...")
+        t.join(timeout=10)
+        if t.is_alive():
+            log("Strategy thread did not stop within 10s — proceeding","WARN")
+    state["_strategy_thread"] = None
     state["strategy"]=None
     state["active_pairs"]=[]
     for k in list(state.keys()):
@@ -3472,7 +3483,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200,"application/json",json.dumps(state).encode())
         elif path=="/license_status":
             info = {
-                "valid": state.get("license_valid", True),
+                "valid": state.get("license_valid", False),
                 "type": state.get("license_type", "unknown"),
                 "expires": state.get("license_expires"),
                 "days_remaining": state.get("license_days_left"),
@@ -3640,7 +3651,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,"application/json",json.dumps({"error":str(ex)}).encode())
         elif path=="/toggle_paper":
             if not self._auth_or_401(): return
-            if not state.get("license_valid", True) and state["paper_trading"]:
+            if not state.get("license_valid", False) and state["paper_trading"]:
                 self.respond(403,"application/json",json.dumps({"error":"Cannot enable live trading — invalid license"}).encode())
                 return
             state["paper_trading"] = not state["paper_trading"]
