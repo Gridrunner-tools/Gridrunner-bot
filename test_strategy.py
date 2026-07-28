@@ -205,6 +205,21 @@ def test_no_sell_below_buy_entry():
     print("PASS  test_no_sell_below_buy_entry")
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Test 6: Neither trailing sell nor trailing buy fires when not armed.
+# ──────────────────────────────────────────────────────────────────────────────
+def test_trailing_not_execute_when_not_armed():
+    """Armed flag must be True for either trigger to fire."""
+    # Sell: never fires when not armed, even if price satisfies both thresholds
+    assert not trailing_sell_should_execute(False, 105.0, 104.9, 0.5), \
+        "Should NOT execute sell when trailing_sell_active is False"
+
+    # Buy: never fires when not armed, even if price satisfies both thresholds
+    assert not trailing_buy_should_execute(False, 95.0, 95.1, 0.5), \
+        "Should NOT execute buy when trailing_buy_active is False"
+
+    print("PASS  test_trailing_not_execute_when_not_armed")
+
+# ──────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -213,4 +228,5 @@ if __name__ == "__main__":
     test_down_move_shifts_buy_only()
     test_up_move_shifts_sell_only()
     test_no_sell_below_buy_entry()
-    print("\nAll 5 regression tests passed.")
+    test_trailing_not_execute_when_not_armed()
+    print("\nAll 6 regression tests passed.")
