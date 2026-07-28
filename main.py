@@ -3090,8 +3090,10 @@ function manualSell() {
     body: JSON.stringify({pair: pair, side: "sell", amount_usdc: amt})
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
-      document.getElementById("mt-result").innerHTML = '<span style="color:var(--accent)">✓ Sold ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + ' | Received: $' + d.received.toFixed(2) + '</span>';
-      showToast("Sell executed: $" + d.received.toFixed(2), "trade");
+      var modeLabel = d.paper_trading ? "📋 PAPER SELL" : "🔴 LIVE SELL";
+      var modeColor = d.paper_trading ? "var(--yellow)" : "var(--accent)";
+      document.getElementById("mt-result").innerHTML = '<span style="color:' + modeColor + '">✓ ' + modeLabel + ' ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + ' | Received: $' + d.received.toFixed(2) + '</span>';
+      showToast((d.paper_trading ? "📋 PAPER " : "🔴 LIVE ") + "Sell: $" + d.received.toFixed(2), "trade");
     } else {
       document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ ' + (d.error || "Sell failed") + '</span>';
       showToast("Sell failed: " + (d.error || "unknown"), "error");
@@ -3494,7 +3496,7 @@ class Handler(BaseHTTPRequestHandler):
                     paper_reason = "none"  # live trading
                 elif not state.get("license_valid", False):
                     paper_reason = "invalid_license"
-                elif not (cfg.get("sol_key") or cfg.get("eth_key")):
+                elif not (cfg.get("sol_key") or cfg.get("private_key")):
                     paper_reason = "no_private_key"
                 else:
                     paper_reason = "explicit_setting"
@@ -3780,7 +3782,7 @@ class Handler(BaseHTTPRequestHandler):
                     received = token_amt * price
                     record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2), pair=pair)
                     log("[MANUAL] SELL "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
-                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"received":round(received,2)}).encode())
+                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"received":round(received,2),"paper_trading":state["paper_trading"]}).encode())
                 else:
                     self.respond(500,"application/json",json.dumps({"error":"Sell order failed"}).encode())
         elif path=="/webhook":
