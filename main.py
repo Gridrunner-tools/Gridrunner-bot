@@ -297,6 +297,27 @@ def get_price_kraken(pair):
         log("Kraken price error: "+str(ex), "ERROR")
     return 0.0
 
+def fetch_historical_candles(pair, hours=6):
+    """Fetch historical OHLC candles from Kraken for the past `hours` hours.
+    Returns a list of {"time": int, "value": float} dicts (close price), oldest first."""
+    try:
+        kraken_pair = KRAKEN_PAIRS.get(pair, pair.replace("/","").replace("USDT","USD").replace("USDC","USD"))
+        since = int(time.time()) - hours * 3600
+        r = requests.get("https://api.kraken.com/0/public/OHLC", params={
+            "pair": kraken_pair, "interval": 1, "since": since
+        }, timeout=10)
+        data = r.json()
+        if data.get("error"):
+            return []
+        result = data.get("result", {})
+        for k in result:
+            if k != "last":
+                cutoff = int(time.time()) - hours * 3600
+                return [{"time": int(p[0]), "value": float(p[4])} for p in result[k] if int(p[0]) >= cutoff]
+    except Exception as e:
+        log("fetch_historical_candles error: " + str(e), "WARN")
+    return []
+
 def get_price_coingecko(token):
     try:
         ids = {"BTC":"bitcoin","ETH":"ethereum","BNB":"binancecoin","SOL":"solana","MATIC":"matic-network","ARB":"arbitrum"}
@@ -794,6 +815,12 @@ def dex_get_balance():
 def start_background_loops():
     """Start continuous price + balance + arb scanning regardless of strategy"""
     def price_loop():
+        # Pre-populate price_history with 6 hours of historical candles
+        init_pair = state.get("pair", "ETH/USDT")
+        hist = fetch_historical_candles(init_pair)
+        if hist:
+            state["price_history"] = hist
+            log("Loaded " + str(len(hist)) + " historical candles for " + init_pair)
         while True:
             try:
                 pair = state.get("pair","ETH/USDT")
@@ -1983,10 +2010,10 @@ def run_grid():
             price = get_price(pair)
             if price > 0:
                 if pair not in state["price_history_pairs"]:
-                    state["price_history_pairs"][pair] = []
+                    state["price_history_pairs"][pair] = fetch_historical_candles(pair)
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0:
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
@@ -2306,10 +2333,10 @@ def run_rsi_ema():
             price = get_price(pair)
             if price > 0:
                 if pair not in state["price_history_pairs"]:
-                    state["price_history_pairs"][pair] = []
+                    state["price_history_pairs"][pair] = fetch_historical_candles(pair)
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0: time.sleep(30); continue
             # Build price buffer
             buf = get_price_history(pair, 100)
@@ -2388,10 +2415,10 @@ def run_bbands():
             price = get_price(pair)
             if price > 0:
                 if pair not in state["price_history_pairs"]:
-                    state["price_history_pairs"][pair] = []
+                    state["price_history_pairs"][pair] = fetch_historical_candles(pair)
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
@@ -3810,10 +3837,10 @@ class Handler(BaseHTTPRequestHandler):
             price = get_price(pair)
             if price > 0:
                 if pair not in state["price_history_pairs"]:
-                    state["price_history_pairs"][pair] = []
+                    state["price_history_pairs"][pair] = fetch_historical_candles(pair)
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0:
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
