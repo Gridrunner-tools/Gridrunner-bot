@@ -403,7 +403,7 @@ def get_price_jup_dex(pair):
     return get_price_dexscreener(pair)
 def get_price(pair):
     token = pair.split("/")[0].upper()
-    if token in CEX_PRICE_TOKENS:
+    if token in WORMHOLE_TOKENS:
         price = get_price_kraken(pair)
         if price <= 0:
             price = get_price_coingecko(pair)
@@ -849,8 +849,8 @@ SOL_TOKENS = {
     "SPCX":  "SPCXxcqXj6e5dJDVNovHN8744zkbhM2bYudU45BimGb",
 }
 
-# Cross-chain tokens that need CEX-first pricing due to thin DEX liquidity on Solana
-CEX_PRICE_TOKENS = {"BTC", "ETH", "MATIC", "BNB"}
+# Wormhole-wrapped tokens — thin DEX liquidity, prefer off-chain price sources
+WORMHOLE_TOKENS = {"BTC", "ETH", "MATIC", "BNB"}
 
 # Shared Solana RPC endpoints — set SOLANA_RPC env var to override all
 SOLANA_RPC = os.environ.get("SOLANA_RPC", "")
