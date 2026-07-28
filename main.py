@@ -3009,7 +3009,7 @@ function runBacktest() {
       showToast(msg, "info");
       if (d.trades && d.trades.length) {
         var lines = d.trades.slice(0, 5).map(function(t) { return t.action + " @ $" + t.price.toFixed(2) + " PnL: $" + (t.pnl||0).toFixed(2); });
-        log("Backtest: " + lines.join(" | "));
+        console.log("Backtest: " + lines.join(" | "));
       } else {
         showToast("Backtest done: 0 simulated trades in range", "info");
       }
