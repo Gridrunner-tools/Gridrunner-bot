@@ -402,6 +402,17 @@ def get_price_jup_dex(pair):
         return price
     return get_price_dexscreener(pair)
 def get_price(pair):
+    token = pair.split("/")[0].upper()
+    if token in CEX_PRICE_TOKENS:
+        price = get_price_kraken(pair)
+        if price <= 0:
+            price = get_price_coingecko(pair)
+        if price <= 0:
+            price = get_price_raydium(pair)
+        if price <= 0:
+            price = get_price_jup_dex(pair)
+        state["price"] = price
+        return price
     price = get_price_raydium(pair)
     if price > 0:
         state["price"] = price
@@ -837,6 +848,9 @@ SOL_TOKENS = {
     "MATIC": "Gz7VkD4MacbEB6yC5XD3HcumEiYx2EtDYYrfikGsvopG",
     "SPCX":  "SPCXxcqXj6e5dJDVNovHN8744zkbhM2bYudU45BimGb",
 }
+
+# Cross-chain tokens that need CEX-first pricing due to thin DEX liquidity on Solana
+CEX_PRICE_TOKENS = {"BTC", "ETH", "MATIC", "BNB"}
 
 # Shared Solana RPC endpoints — set SOLANA_RPC env var to override all
 SOLANA_RPC = os.environ.get("SOLANA_RPC", "")
