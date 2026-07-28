@@ -2558,9 +2558,9 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div class="section-label">Quick Presets</div>
     <div class="preset-row">
-      <button class="preset-btn" onclick="applyPreset('conservative')">&#128737; Conservative</button>
-      <button class="preset-btn" onclick="applyPreset('moderate')">&#9878; Moderate</button>
-      <button class="preset-btn" onclick="applyPreset('aggressive')">&#128640; Aggressive</button>
+      <button class="preset-btn" onclick="applyPreset('conservative',event)">&#128737; Conservative</button>
+      <button class="preset-btn" onclick="applyPreset('moderate',event)">&#9878; Moderate</button>
+      <button class="preset-btn" onclick="applyPreset('aggressive',event)">&#128640; Aggressive</button>
     </div>
     <button class="btn" onclick="saveConfig()" style="margin-top:8px;background:var(--accent)18;color:var(--accent);border-color:var(--accent)">&#128190; Save Config</button>
   </div>
@@ -2877,7 +2877,7 @@ function switchPair() {
   showToast("Switched to " + next, "info");
 }
 
-function applyPreset(name) {
+function applyPreset(name, event) {
   var presets = {
     conservative: {risk: 1, maxpos: 250, stoploss: 6, trailing: 0.3, partial: 25, spread: 3},
     moderate: {risk: 2, maxpos: 500, stoploss: 8, trailing: 0.5, partial: 50, spread: 5},
@@ -2987,7 +2987,7 @@ function pnlHtml(v) {
 
 function killSwitch() {
   if (!confirm("🛑 KILL SWITCH: Close ALL positions on ALL pairs? This cannot be undone.")) return;
-  fetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
+  apiFetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
     showToast("KILL: "+d.closed+" positions closed, $"+d.total_value.toFixed(2),"error");
   }).catch(function(){showToast("Kill failed","error")});
 }
@@ -3008,7 +3008,7 @@ function runBacktest() {
       showToast(msg, "info");
       if (d.trades && d.trades.length) {
         var lines = d.trades.slice(0, 5).map(function(t) { return t.action + " @ $" + t.price.toFixed(2) + " PnL: $" + (t.pnl||0).toFixed(2); });
-        addLog("Backtest: " + lines.join(" | "));
+        log("Backtest: " + lines.join(" | "));
       } else {
         showToast("Backtest done: 0 simulated trades in range", "info");
       }
@@ -3089,6 +3089,7 @@ function refresh() {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
       // Clean up cards for pairs no longer active
+      if (!chartsWrap) return;
       var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
       var activeSet = {};
       d.active_pairs.forEach(function(p) { activeSet[p] = true; });
