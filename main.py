@@ -1840,7 +1840,7 @@ def _init_grid_pair(pair):
     return {
         "grids": grids, "mid_idx": mid_idx, "filled": {},
         "trailing_pct": 0.05, "trailing_high": 0.0, "trailing_sell_active": False,
-        "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
+        "ta": {}, "tl": {}, "td": {},
         "price": price, "levels": levels, "spread": spread,
     }
 
@@ -1893,8 +1893,8 @@ def run_grid():
             grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
             trailing_pct = cfg.get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
             trailing_sell_active = gs["trailing_sell_active"]
-            trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
-            dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
+            ta = gs.get("ta", {}); tl = gs.get("tl", {}); td = gs.get("td", {})
+            levels = gs["levels"]; spread = gs["spread"]
 
             price = get_price(pair)
             if price > 0:
@@ -1924,13 +1924,15 @@ def run_grid():
                     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     for i in range(mid_idx + 1):
                         grids[i] = new_grids[i]
-                    trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                    ta = {k: v for k, v in ta.items() if k < mid_idx + 1}
+                    tl = {k: v for k, v in tl.items() if k < mid_idx + 1}
+                    td = {k: v for k, v in td.items() if k < mid_idx + 1}
                     log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
                 else:
                     grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     mid_idx = len(grids) // 2
                     trailing_sell_active = False; trailing_high = 0.0
-                    trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                    ta = {}; tl = {}; td = {}
                     state["partial_positions"] = {}
                     log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
             bal = get_balance()
@@ -1943,42 +1945,35 @@ def run_grid():
                     is_buy_zone = i < mid_idx
                     # ── BUY ZONE: trailing buy (buy on bounce) ──
                     if is_buy_zone:
-                        # Track the low
-                        if not trailing_buy_active and i not in filled:
-                            trailing_buy_active = True
-                            trailing_low = price
-                            dip_occurred = False
-                        elif trailing_buy_active:
-                            if price < trailing_low:
-                                trailing_low = price
-                                dip_occurred = True
+                        # Track the low per-level (independent trailing per grid level)
+                        tb = ta.get(i, False)
+                        if not tb and i not in filled:
+                            ta[i] = True
+                            tl[i] = price
+                            td[i] = False
+                        elif tb:
+                            if price < tl.get(i, price):
+                                tl[i] = price
+                                td[i] = True
                         dip_mult = 1.5 if state.get("dip_active") else 1.0
                         # Buy: immediately if no dip, or on 0.5% bounce if dipped
-                        if trailing_buy_active and i not in filled and size > 1:
-                            should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                        if ta.get(i) and i not in filled and size > 1:
+                            should_buy = (not td.get(i, False)) or (price >= tl.get(i, price) * (1 + trailing_pct / 100))
                             if should_buy:
                                 amt = round(size*dip_mult/price,6)
                                 if place_order(pair,"buy",amt):
                                     filled[i]={"price":price,"amount":amt}
                                     state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                     record_trade("GRID-BUY",price,amt, pair=pair)
-                                    log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
+                                    log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(tl.get(i,price),2))+" +"+str(trailing_pct)+"% bounce)" if td.get(i) else " (no dip)"))
                                     send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
-                                    trailing_buy_active = False
-                                    trailing_low = 0.0
+                                    ta[i] = False
                                     # Reset sell trailing too, new position opened
                                     trailing_sell_active = False
                                     trailing_high = 0.0
                                     state["grid_trailing_active"] = trailing_sell_active
                                     state["grid_trailing_high"] = trailing_high
-                    else:
-                        # Reset buy trailing when leaving buy zone
-                        if trailing_buy_active:
-                            trailing_buy_active = False
-                            trailing_low = 0.0
-                            dip_occurred = False
-                            state["grid_trailing_active"] = trailing_sell_active
-                            state["grid_trailing_high"] = trailing_high
+
 
                     # ── Stop-loss check: immediate sell if position drops too far ──
                     stop_pct = cfg.get("grid_stop_loss_pct", 8)
@@ -2121,8 +2116,7 @@ def run_grid():
             gs.update({
                 "grids": grids, "mid_idx": mid_idx, "filled": filled,
                 "trailing_high": trailing_high, "trailing_sell_active": trailing_sell_active,
-                "trailing_low": trailing_low, "trailing_buy_active": trailing_buy_active,
-                "dip_occurred": dip_occurred,
+                "ta": ta, "tl": tl, "td": td,
             })
             _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
         time.sleep(5)
