@@ -46,4 +46,6 @@ services:
       - key: DYNAMIC_SPREAD
         value: "true"
       - key: BASE_SPREAD
-        value: "0.05"
+        value: "0.03"
+      - key: GRID_LEVELS
+        value: "10"
