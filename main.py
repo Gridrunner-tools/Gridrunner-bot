@@ -3506,7 +3506,7 @@ class Handler(BaseHTTPRequestHandler):
                     paper_reason = "explicit_setting"
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True),"paper_reason":paper_reason}).encode())
                 return
-            self.respond(200,"application/json",json.dumps(state).encode())
+            resp = dict(state); resp.pop("_strategy_thread", None); self.respond(200,"application/json",json.dumps(resp).encode())
         elif path=="/license_status":
             info = {
                 "valid": state.get("license_valid", False),
