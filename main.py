@@ -3065,8 +3065,10 @@ function manualBuy() {
     body: JSON.stringify({pair: pair, side: "buy", amount_usdc: amt})
   }).then(function(r) { return r.json(); }).then(function(d) {
     if (d.ok) {
-      document.getElementById("mt-result").innerHTML = '<span style="color:var(--accent)">✓ Bought ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + '</span>';
-      showToast("Buy executed: " + d.amount + " " + pair.split('/')[0], "trade");
+      var modeLabel = d.paper_trading ? "📋 PAPER BUY" : "🔴 LIVE BUY";
+      var modeColor = d.paper_trading ? "var(--yellow)" : "var(--accent)";
+      document.getElementById("mt-result").innerHTML = '<span style="color:" + modeColor + "">✓ " + modeLabel + " ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + '</span>';
+      showToast((d.paper_trading ? "📋 PAPER " : "🔴 LIVE ") + "Buy: " + d.amount + " " + pair.split('/')[0], "trade");
     } else {
       document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ ' + (d.error || "Buy failed") + '</span>';
       showToast("Buy failed: " + (d.error || "unknown"), "error");
@@ -3487,7 +3489,16 @@ class Handler(BaseHTTPRequestHandler):
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))
             if not self._check_auth():
-                self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
+                # Determine why paper mode is active
+                if not state.get("paper_trading", True):
+                    paper_reason = "none"  # live trading
+                elif not state.get("license_valid", False):
+                    paper_reason = "invalid_license"
+                elif not (cfg.get("sol_key") or cfg.get("eth_key")):
+                    paper_reason = "no_private_key"
+                else:
+                    paper_reason = "explicit_setting"
+                self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True),"paper_reason":paper_reason}).encode())
                 return
             self.respond(200,"application/json",json.dumps(state).encode())
         elif path=="/license_status":
@@ -3739,6 +3750,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,"application/json",json.dumps({"log":[],"error":str(e)}).encode())
         elif path == "/manual_trade":
             if not self._auth_or_401(): return
+            if state.get("emergency_stop"):
+                self.respond(403,"application/json",json.dumps({"error":"Trading stopped — emergency stop active"}).encode()); return
             pair = data.get("pair", state.get("pair", "SOL/USDC"))
             side = data.get("side", "buy")
             usdc_amt = float(data.get("amount_usdc", 10))
@@ -3757,7 +3770,7 @@ class Handler(BaseHTTPRequestHandler):
                 if ok:
                     record_trade("MANUAL-BUY", price, token_amt, pair=pair)
                     log("[MANUAL] BUY "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
-                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair}).encode())
+                    self.respond(200,"application/json",json.dumps({"ok":True,"price":price,"amount":token_amt,"pair":pair,"paper_trading":state["paper_trading"]}).encode())
                 else:
                     self.respond(500,"application/json",json.dumps({"error":"Buy order failed"}).encode())
             else:
