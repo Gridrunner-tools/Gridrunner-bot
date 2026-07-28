@@ -2092,7 +2092,7 @@ def run_grid():
                 "dip_occurred": dip_occurred,
             })
             _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
-        time.sleep(30)
+        time.sleep(5)
 
 def run_scalp():
     log("Scalping started on "+state["pair"]+" ("+state["mode"].upper()+")")
@@ -2160,7 +2160,7 @@ def run_arbitrage():
                 log("ARB opportunity: "+opp["pair"]+" spread "+str(opp["spread_pct"])+"% est profit $"+str(opp["est_profit_usd"]))
                 execute_arbitrage(opp)
                 break  # Stop after first executable — wait for next scan cycle
-        time.sleep(30)
+        time.sleep(5)
 
 
 def run_rsi_ema():
@@ -2190,7 +2190,7 @@ def run_rsi_ema():
             # Build price buffer
             buf = get_price_history(pair, 100)
             if len(buf) < max(rsi_period, ema_slow) + 5:
-                time.sleep(30); continue
+                time.sleep(5); continue
             rsi_vals = calc_rsi(buf, rsi_period)
             ema_f = calc_ema(buf, ema_fast)
             ema_s = calc_ema(buf, ema_slow)
@@ -2246,7 +2246,7 @@ def run_rsi_ema():
                         entry_price = 0
         except Exception as e:
             log("[RSI-EMA] Error: " + str(e), "ERROR")
-        time.sleep(30)
+        time.sleep(5)
 
 def run_bbands():
     """Bollinger Bands spot strategy. Buys at lower band, sells at upper band."""
@@ -2271,12 +2271,12 @@ def run_bbands():
             if price <= 0: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
-                time.sleep(30); continue
+                time.sleep(5); continue
             middle, upper, lower = calc_bbands(buf, period, stddev)
             lower_now = lower[-1]
             upper_now = upper[-1]
             if lower_now is None or upper_now is None:
-                time.sleep(30); continue
+                time.sleep(5); continue
             # Buy at lower band
             if not has_position and price <= lower_now:
                 amt = round(order_size / price, 6)
@@ -2318,7 +2318,7 @@ def run_bbands():
                         entry_price = 0
         except Exception as e:
             log("[BBANDS] Error: " + str(e), "ERROR")
-        time.sleep(30)
+        time.sleep(5)
 
 def run_webhook():
     """TradingView webhook receiver. Waits for external buy/sell signals via /webhook endpoint."""
