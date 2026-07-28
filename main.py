@@ -3404,12 +3404,12 @@ class Handler(BaseHTTPRequestHandler):
     def _check_auth(self):
         sent = self.headers.get("X-API-Secret", "")
         if self.API_SECRET and sent != self.API_SECRET:
-            self.respond(401, "text/plain", b"Unauthorized")
             return False
         return True
 
     def _auth_or_401(self):
         if not self._check_auth():
+            self.respond(401, "text/plain", b"Unauthorized")
             return False
         return True
 
