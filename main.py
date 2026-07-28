@@ -2732,11 +2732,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataEnd = candles[candles.length - 1].time;
 
   // Pin newest candle to far right edge
-  var showCount = Math.min(candles.length, 60);
-  chart.timeScale().setVisibleLogicalRange({
-    from: candles[candles.length - showCount].time,
-    to: candles[candles.length - 1].time + 60
-  });
+  chart.timeScale().fitContent();
+  chart.timeScale().scrollToPosition(Infinity, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
