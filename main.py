@@ -2733,7 +2733,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
 
   // Pin newest candle to far right edge
   chart.timeScale().fitContent();
-  chart.timeScale().scrollToPosition(Infinity, false);
+  chart.timeScale().applyOptions({ barSpacing: 3 });
+  chart.timeScale().scrollToPosition(candles.length + 5, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
