@@ -2620,12 +2620,6 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 </div>
 
 <script>
-document.title = 'GR LOADED';
-var _banner = document.createElement('div');
-_banner.id = 'gr-banner';
-_banner.style.cssText = 'background:red;color:white;padding:10px;text-align:center;font-weight:bold;font-size:18px;position:fixed;top:0;left:0;right:0;z-index:99999';
-_banner.textContent = 'JS IS RUNNING — ' + new Date().toISOString();
-document.body.insertBefore(_banner, document.body.firstChild);
 var _chartScript = document.createElement('script');
 _chartScript.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
 document.head.appendChild(_chartScript);
