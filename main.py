@@ -1921,13 +1921,18 @@ def run_grid():
                         else:
                             log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
                         if has_positions and price < grids[0]:
-                            new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                            # Shift only the buy zone down, preserve sell zone exactly
+                            old_sell_start = grids[mid_idx + 1] if mid_idx + 1 < len(grids) else grids[-1]
+                            # Rebuild buy zone from current price up to old sell zone
+                            buy_range = old_sell_start - price
+                            buy_step = buy_range / (mid_idx + 1)
                             for i in range(mid_idx + 1):
-                                grids[i] = new_grids[i]
+                                grids[i] = round(price + i * buy_step, 4)
+                            # Clear filled positions in the shifted buy zone
                             for i in range(mid_idx + 1):
                                 filled.pop(i, None)
                             trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                            log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
+                            log("["+pair+"] Grid buy zone shifted down to $"+str(round(price,2))+" — sell zone unchanged")
                         else:
                             grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                             mid_idx = len(grids) // 2
