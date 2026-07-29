@@ -236,7 +236,7 @@ state = {
     "best_trade":    None,
     "trades_list":   [],
     "positions_list": [],
-    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.05), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
+    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",8), "trailing_pct": cfg.get("trailing_pct",0.005), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
     "last_trade":    None,
     "price_history": [],
     "price_history_pairs": {},
@@ -1877,7 +1877,7 @@ def run_grid():
             gs = state["grid_pairs"].get(pair)
             if not gs: continue
             grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
-            trailing_pct = cfg.get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
+            trailing_pct = cfg.get("trailing_pct", 0.005); trailing_high = gs["trailing_high"]
             trailing_sell_active = gs["trailing_sell_active"]
             trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
@@ -1996,6 +1996,7 @@ def run_grid():
                                 record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2), pair=pair)
                                 log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
                                 del filled[sl_buy_idx]
+                                state["partial_positions"].pop(str(sl_buy_idx), None)
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
                     # -- SELL ZONE: per-position independent trailing take profit --
                     if not is_buy_zone:
@@ -2909,7 +2910,8 @@ function saveConfig() {
     trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.05,
     partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
     base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
-    auto_compound: document.getElementById("cfg-compound").value === "true"
+    auto_compound: document.getElementById("cfg-compound").value === "true",
+    dynamic_spread: document.getElementById("cfg-dynamicspread").value === "true"
   };
   apiFetch("/config", {
     method: "POST",
@@ -3294,7 +3296,7 @@ function refresh() {
       var filled = d.grid_filled || {};
       var trailActive = d.grid_trailing_active || false;
       var trailHigh = d.grid_trailing_high || 0;
-      var trailingPct = 0.5;
+      var trailingPct = (d.config && d.config.trailing_pct != null) ? d.config.trailing_pct : 0.005;
       document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
       var html = '<div style="margin-top:12px">';
       var minP = gl[0], maxP = gl[gl.length-1], range = maxP - minP;
@@ -3778,7 +3780,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/config":
             if not self._auth_or_401(): return
-            config_keys = ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
+            config_keys = ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"]
             bool_keys = {"auto_compound"}
             float_keys = {"risk_pct", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
             for key in config_keys:
