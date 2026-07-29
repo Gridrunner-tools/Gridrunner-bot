@@ -2912,8 +2912,7 @@ function saveConfig() {
     trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.05,
     partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
     base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
-    auto_compound: document.getElementById("cfg-compound").value === "true",
-    dynamic_spread: document.getElementById("cfg-dynamicspread").value === "true"
+    auto_compound: document.getElementById("cfg-compound").value === "true"
   };
   apiFetch("/config", {
     method: "POST",
@@ -3298,7 +3297,7 @@ function refresh() {
       var filled = d.grid_filled || {};
       var trailActive = d.grid_trailing_active || false;
       var trailHigh = d.grid_trailing_high || 0;
-      var trailingPct = (d.config && d.config.trailing_pct != null) ? d.config.trailing_pct : 0.005;
+      var trailingPct = 0.5;
       document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
       var html = '<div style="margin-top:12px">';
       var minP = gl[0], maxP = gl[gl.length-1], range = maxP - minP;
