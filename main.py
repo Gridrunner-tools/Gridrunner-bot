@@ -187,6 +187,10 @@ cfg = {
     "paper_trading":   os.environ.get("PAPER_TRADING", "false" if (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY")) else "true").lower() != "false",
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
+    "grid_levels": int(os.environ.get("GRID_LEVELS", "10")),
+    "base_spread": float(os.environ.get("BASE_SPREAD", "0.05")),
+    "trailing_pct": float(os.environ.get("TRAILING_PCT", "0.5")),
+    "grid_stop_loss_pct": float(os.environ.get("GRID_STOP_LOSS_PCT", "8")),
     "license_key":   os.environ.get("LICENSE_KEY", ""),
     "tg_bot_token":    os.environ.get("TG_BOT_TOKEN", ""),
     "tg_chat_id":      os.environ.get("TG_CHAT_ID", ""),
@@ -1804,7 +1808,7 @@ def _init_grid_pair(pair):
     """Initialize grid state for a pair, return dict with all local vars."""
     price = get_price(pair)
     if price <= 0: return None
-    levels=5; spread=cfg.get("base_spread", 0.05)
+    levels=int(cfg.get("grid_levels", 5)); spread=cfg.get("base_spread", 0.05)
     # Dynamic spread: widen in volatile markets
     if cfg.get("dynamic_spread", True):
         try:
