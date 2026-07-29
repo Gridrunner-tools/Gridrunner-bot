@@ -1972,7 +1972,7 @@ def run_grid():
                                 dip_mult = 1.5 if state.get("dip_active") else 1.0
                                 # Buy: immediately if no dip, or on 0.5% bounce if dipped
                                 if trailing_buy_active and i not in filled and size > 1:
-                                    should_buy = ((not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))) and not state.get("emergency_stop")
+                                    should_buy = dip_occurred and price >= trailing_low * (1 + trailing_pct / 100) and not state.get("emergency_stop")
                                     if should_buy:
                                         amt = round(size*dip_mult/price,6)
                                         if place_order(pair,"buy",amt):
@@ -2168,7 +2168,7 @@ def run_grid():
                                     elif price < trailing_low:
                                         trailing_low = price
                                         dip_occurred = True
-                                    should_buy = ((not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))) and not state.get("emergency_stop")
+                                    should_buy = dip_occurred and price >= trailing_low * (1 + trailing_pct / 100) and not state.get("emergency_stop")
                                     if should_buy:
                                         dip_mult = 1.5 if state.get("dip_active") else 1.0
                                         amt = round(size*dip_mult/price,6)
