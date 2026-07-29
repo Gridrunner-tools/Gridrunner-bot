@@ -1911,6 +1911,7 @@ def run_grid():
                     price = get_price(pair)
                     if price <= 0: break
                 try:
+                    today_midnight = int(time.time()) // 86400 * 86400
         
                     # ── Grid re-centering ──
                     if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
