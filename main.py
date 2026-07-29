@@ -4082,6 +4082,10 @@ if __name__=="__main__":
         error_msg = linfo.get("error", "License validation failed")
         log(f"LICENSE INVALID — {error_msg}. Live trading disabled. Paper mode only.", "WARN")
         state["paper_trading"] = True  # force paper-only
+    # Clear price history on every startup to prevent contaminated saved-state data
+    state["price_history"] = []
+    state["price_history_pairs"] = {}
+    log("Cleared price history on startup")
     start_background_loops()
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
