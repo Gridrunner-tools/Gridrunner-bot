@@ -3429,7 +3429,22 @@ function refresh() {
     }
     // ── Grid Details ──
     var gdCard = document.getElementById("grid-details-card");
-    if (d.strategy === "grid" && d.grid_levels && d.grid_levels.length >= 2) {
+    // Fall back to grid_pairs if top-level grid data is empty (e.g. after crash)
+    if (!d.grid_levels || d.grid_levels.length < 2) {
+      var pairs = d.grid_pairs || {};
+      var keys = Object.keys(pairs);
+      if (keys.length > 0) {
+        var first = pairs[keys[0]];
+        if (first.grids && first.grids.length >= 2) {
+          d.grid_levels = first.grids;
+          d.grid_mid_idx = first.mid_idx;
+          d.grid_filled = first.filled || {};
+          d.grid_trailing_active = first.trailing_sell_active || false;
+          d.grid_trailing_high = first.trailing_high || 0;
+        }
+      }
+    }
+    if (d.grid_levels && d.grid_levels.length >= 2) {
       gdCard.style.display = "block";
       var gl = d.grid_levels;
       var midIdx = d.grid_mid_idx != null ? d.grid_mid_idx : Math.floor(gl.length / 2);
