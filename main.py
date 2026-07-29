@@ -2440,10 +2440,13 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
     old_pair = state.get("pair","")
     state["strategy"]=strategy
     state["pair"]=pair
-    # Clear price_history when switching pairs to prevent mixed-asset chart spikes
+    # Always clear price history on start to prevent mixed-asset chart spikes
+    state["price_history"] = []
+    state["price_history_pairs"] = {}
     if old_pair and old_pair != pair:
-        state["price_history"] = []
         log(f"Cleared price_history: switched from {old_pair} to {pair}")
+    else:
+        log(f"Cleared price_history for fresh start on {pair}")
     state["mode"]=mode
     if exchange: state["exchange"]=exchange
     if chain: state["chain"]=chain
