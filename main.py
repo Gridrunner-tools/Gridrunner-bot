@@ -2010,8 +2010,8 @@ def run_grid():
                                 del filled[sl_buy_idx]
                                 state["partial_positions"].pop(str(sl_buy_idx), None)
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
-                    # -- SELL ZONE: per-position independent trailing take profit --
-                    if not is_buy_zone:
+                    # -- Trailing take profit for all in-profit positions --
+                    if True:  # was: if not is_buy_zone — now runs in all zones
                         for buy_idx, pos in list(filled.items()):
                             paired_sell_level = levels - buy_idx
                             if paired_sell_level >= len(grids):
