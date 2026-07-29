@@ -2222,6 +2222,16 @@ def run_grid():
                     pk = state.get("peak_balance", 0)
                     if pk > 0 and total_val < pk * (1 - dd_pct/100):
                         log("DRAWDOWN STOP: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
+                        # Sell all positions before stopping
+                        for _gp_name, _gp_data in state.get("grid_pairs", {}).items():
+                            for _b_idx, _pos in list(_gp_data.get("filled", {}).items()):
+                                _sell_amt = _pos["amount"]
+                                if place_order(_gp_name, "sell", _sell_amt):
+                                    _pnl = (price - _pos["price"]) * _sell_amt
+                                    state["pnl"] += _pnl
+                                    log("DRAWDOWN SELL level "+str(_b_idx)+" @ $"+str(round(price,2))+" PnL: $"+str(round(_pnl,2)))
+                                    send_telegram("\uD83D\uDD34 <b>DRAWDOWN SELL</b> "+_gp_name+"\nLevel: "+str(_b_idx)+"\nPrice: $"+str(round(price,2))+"\nP&L: $"+str(round(_pnl,2)))
+                                    del _gp_data["filled"][_b_idx]
                         state["running"] = False
                         state["strategy"] = None
                         state["emergency_stop"] = True
@@ -2229,6 +2239,16 @@ def run_grid():
                     dl = cfg.get("daily_loss_limit", 200)
                     if state["daily_pnl"] < -dl:
                         log("DAILY LOSS LIMIT: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl), "WARN")
+                        # Sell all positions before stopping
+                        for _gp_name, _gp_data in state.get("grid_pairs", {}).items():
+                            for _b_idx, _pos in list(_gp_data.get("filled", {}).items()):
+                                _sell_amt = _pos["amount"]
+                                if place_order(_gp_name, "sell", _sell_amt):
+                                    _pnl = (price - _pos["price"]) * _sell_amt
+                                    state["pnl"] += _pnl
+                                    log("LOSS LIMIT SELL level "+str(_b_idx)+" @ $"+str(round(price,2))+" PnL: $"+str(round(_pnl,2)))
+                                    send_telegram("\uD83D\uDD34 <b>LOSS LIMIT SELL</b> "+_gp_name+"\nLevel: "+str(_b_idx)+"\nPrice: $"+str(round(price,2))+"\nP&L: $"+str(round(_pnl,2)))
+                                    del _gp_data["filled"][_b_idx]
                         state["running"] = False
                         state["strategy"] = None
                         state["emergency_stop"] = True
