@@ -2688,7 +2688,6 @@ function initChart() {
         timeVisible: true,
         secondsVisible: false,
         barSpacing: 3,
-        rightOffset: 0,
       },
       rightPriceScale: {
         borderColor: "#1a1a1a",
@@ -2740,9 +2739,10 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Fit to data range, pin right edge
+  // Pin newest candle to far right edge
   chart.timeScale().fitContent();
-  chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
+  chart.timeScale().applyOptions({ barSpacing: 3 });
+  chart.timeScale().scrollToPosition(candles.length + 5, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
