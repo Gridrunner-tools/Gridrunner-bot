@@ -1914,13 +1914,23 @@ def run_grid():
                     today_midnight = int(time.time()) // 86400 * 86400
         
                     # ── Grid re-centering ──
-                    if (price < grids[0] or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
+                    if (price < grids[0] or price > grids[-1]) or (not filled and price >= grids[mid_idx]):
                         has_positions = bool(filled)
                         if not filled and price > grids[mid_idx]:
                             log("["+pair+"] Grid re-centering: no positions at $"+str(price))
                         else:
                             log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
-                        if has_positions and price < grids[0]:
+                        if has_positions and price > grids[-1]:
+                            # Shift only the sell zone up, preserve buy zone and positions
+                            old_buy_end = grids[mid_idx]
+                            # Rebuild sell zone from old buy end up to current price
+                            sell_range = price - old_buy_end
+                            sell_step = sell_range / (len(grids) - mid_idx - 1) if len(grids) > mid_idx + 1 else sell_range
+                            for i in range(mid_idx + 1, len(grids)):
+                                grids[i] = round(old_buy_end + (i - mid_idx) * sell_step, 4)
+                            trailing_sell_active = False; trailing_high = 0.0
+                            log("["+pair+"] Grid sell zone shifted up to $"+str(round(price,2))+" — buy zone & positions unchanged")
+                        elif has_positions and price < grids[0]:
                             # Shift only the buy zone down, preserve sell zone exactly
                             old_sell_start = grids[mid_idx + 1] if mid_idx + 1 < len(grids) else grids[-1]
                             # Rebuild buy zone from current price up to old sell zone
