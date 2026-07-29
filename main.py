@@ -2739,7 +2739,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Pin newest candle to far right edge
+  // Zoom to fit data range, then pin newest candle to far right edge
+  chart.timeScale().fitContent();
   chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
 
   // Grid overlay
