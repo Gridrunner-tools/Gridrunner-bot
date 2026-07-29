@@ -1808,7 +1808,7 @@ def _init_grid_pair(pair):
     """Initialize grid state for a pair, return dict with all local vars."""
     price = get_price(pair)
     if price <= 0: return None
-    levels=int(cfg.get("grid_levels", 5)); spread=cfg.get("base_spread", 0.05)
+    levels=int(cfg.get("grid_levels", 10)); spread=cfg.get("base_spread", 0.05)
     # Dynamic spread: widen in volatile markets
     if cfg.get("dynamic_spread", True):
         try:
@@ -3504,7 +3504,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,"application/json",json.dumps({"error":"Not enough price data"}).encode()); return
             # Simple grid backtest
             trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
-            levels=5; spread_val=cfg.get("base_spread",0.05)
+            levels=int(cfg.get("grid_levels", 10)); spread_val=cfg.get("base_spread",0.05)
             base_price = prices[0]["value"]
             grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
             mid_idx = len(grids)//2; filled = {}
@@ -3558,7 +3558,7 @@ class Handler(BaseHTTPRequestHandler):
                 filled = gs.get("filled", {})
                 mid_idx = gs.get("mid_idx", len(grids)//2) if grids else 2
                 if not grids:
-                    levels=5; spread_val=cfg.get("base_spread",0.05)
+                    levels=int(cfg.get("grid_levels", 10)); spread_val=cfg.get("base_spread",0.05)
                     grids = [round(wprice*(1-spread_val)+i*(wprice*spread_val*2/levels),4) for i in range(levels+1)]
                     mid_idx = len(grids)//2
                     state["grid_pairs"][wpair] = {"grids":grids,"mid_idx":mid_idx,"filled":{}}
@@ -3656,7 +3656,7 @@ class Handler(BaseHTTPRequestHandler):
                 filled = gs.get("filled", {})
                 mid_idx = gs.get("mid_idx", len(grids)//2) if grids else 2
                 if not grids:
-                    levels=5; spread_val=cfg.get("base_spread",0.05)
+                    levels=int(cfg.get("grid_levels", 10)); spread_val=cfg.get("base_spread",0.05)
                     grids = [round(wprice*(1-spread_val)+i*(wprice*spread_val*2/levels),4) for i in range(levels+1)]
                     mid_idx = len(grids)//2
                     state["grid_pairs"][wpair] = {"grids":grids,"mid_idx":mid_idx,"filled":{}}
@@ -3711,7 +3711,7 @@ class Handler(BaseHTTPRequestHandler):
             if not prices or len(prices) < 5:
                 self.respond(200,"application/json",json.dumps({"error":"Not enough price data"}).encode()); return
             trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
-            levels=5; spread_val=cfg.get("base_spread",0.05)
+            levels=int(cfg.get("grid_levels", 10)); spread_val=cfg.get("base_spread",0.05)
             base_price = prices[0]["value"]
             grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
             mid_idx = len(grids)//2; filled = {}
@@ -3837,7 +3837,7 @@ class Handler(BaseHTTPRequestHandler):
                 filled = gs.get("filled", {})
                 mid_idx = gs.get("mid_idx", len(grids)//2) if grids else 2
                 if not grids:
-                    levels=5; spread_val=cfg.get("base_spread",0.05)
+                    levels=int(cfg.get("grid_levels", 10)); spread_val=cfg.get("base_spread",0.05)
                     grids = [round(wprice*(1-spread_val)+i*(wprice*spread_val*2/levels),4) for i in range(levels+1)]
                     mid_idx = len(grids)//2
                     state["grid_pairs"][wpair] = {"grids":grids,"mid_idx":mid_idx,"filled":{}}
@@ -3892,7 +3892,7 @@ class Handler(BaseHTTPRequestHandler):
             if not prices or len(prices) < 5:
                 self.respond(200,"application/json",json.dumps({"error":"Not enough price data"}).encode()); return
             trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
-            levels=5; spread_val=cfg.get("base_spread",0.05)
+            levels=int(cfg.get("grid_levels", 10)); spread_val=cfg.get("base_spread",0.05)
             base_price = prices[0]["value"]
             grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
             mid_idx = len(grids)//2; filled = {}
