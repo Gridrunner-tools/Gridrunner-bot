@@ -2006,6 +2006,7 @@ def run_grid():
                                 state["pnl"] += sl_pnl
                                 record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2), pair=pair)
                                 log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
+                                send_telegram("🔴 <b>STOP-LOSS</b> "+pair+"\nBought: $"+str(round(sl_bp,2))+"\nSold: $"+str(round(price,2))+"\nLoss: "+str(round(abs(sl_loss),1))+"%\nP&L: $"+str(round(sl_pnl,2)))
                                 del filled[sl_buy_idx]
                                 state["partial_positions"].pop(str(sl_buy_idx), None)
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
@@ -2055,10 +2056,11 @@ def run_grid():
                                     tag = "GRID-PARTIAL" if (is_partial_sell and not sold_partial) else "GRID-SELL"
                                     record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)
                                     if is_partial_sell and not sold_partial:
-                                        pass
+                                        send_telegram("🟡 <b>PARTIAL SELL</b> "+pair+"\nLevel: "+str(buy_idx)+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+" ("+str(partial_pct)+"%)\nP&L: $"+str(round(pnl,2))+"\nRemaining: "+str(round(keep_amt,6)))
                                     else:
                                         del filled[buy_idx]
                                         state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
+                                        send_telegram("🔵 <b>SELL</b> "+pair+"\nLevel: "+str(buy_idx)+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nP&L: $"+str(round(pnl,2)))
                         trailing_sell_active = any(pos.get("trailing_active", False) for pos in filled.values())
                         if trailing_sell_active:
                             trailing_high = max((pos.get("trailing_high", 0) for pos in filled.values()), default=0)
