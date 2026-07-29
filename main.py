@@ -1905,6 +1905,9 @@ def run_grid():
                     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     for i in range(mid_idx + 1):
                         grids[i] = new_grids[i]
+                    # Clear filled for shifted buy-zone indices so the bot can buy at new lower levels
+                    for i in range(mid_idx + 1):
+                        filled.pop(i, None)
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
                 else:
