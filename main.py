@@ -3592,7 +3592,7 @@ class Handler(BaseHTTPRequestHandler):
                 "price_history_first_5": ph[:5] if ph else [],
                 "price_history_last_5": ph[-5:] if ph else [],
                 "price_history_all": ph,
-                "grid_levels": gp.get("grid_levels", []),
+                "grid_levels": gp.get("grid_levels") or gp.get("grids", []),
                 "grid_mid_idx": gp.get("grid_mid_idx", 0),
                 "grid_trailing_active": gp.get("grid_trailing_active", False),
                 "grid_trailing_high": gp.get("grid_trailing_high", 0),
