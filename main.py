@@ -2095,6 +2095,7 @@ def run_grid():
                         if not pos_trail_active:
                             pos["trailing_active"] = True
                             pos["trailing_high"] = price
+                            log("["+pair+"] TRAILING ACTIVATED level "+str(buy_idx)+" @ $"+str(round(price,2)))
                             log("["+pair+"] Trailing activated for level "+str(buy_idx)+" @ $"+str(round(price,2))+" (above grid)")
                         elif price > pos_trail_high:
                             pos["trailing_high"] = price
