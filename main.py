@@ -2184,6 +2184,16 @@ def run_grid():
                                             trailing_high = 0.0
                                             state["grid_trailing_active"] = trailing_sell_active
                                             state["grid_trailing_high"] = trailing_high
+                                            # Catch-up: fill higher buy levels price crossed
+                                            for _ci in range(i+1, mid_idx):
+                                                if _ci not in filled and size > 1:
+                                                    _camt = round(size/price, 6)
+                                                    if place_order(pair, "buy", _camt):
+                                                        filled[_ci] = {"price": price, "amount": _camt}
+                                                        state["positions"].append({"price": price, "amount": _camt, "grid": _ci, "strategy": "Grid"})
+                                                        record_trade("GRID-BUY", price, _camt, pair=pair)
+                                                        log("["+pair+"] BUY level "+str(_ci)+" @ $"+str(round(price,2))+" (catch-up)")
+                                                        send_telegram("\uD83D\uDFE2 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(_ci)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(_camt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                     break
                             # Also reset sell trailing (we're back in deep buy territory)
                             if trailing_sell_active:
