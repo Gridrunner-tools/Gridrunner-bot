@@ -781,10 +781,21 @@ def start_background_loops():
                 pair = state.get("pair","ETH/USDT")
                 p = get_price(pair)
                 if p > 0:
+                    # Spike detection: compare against last price in history
+                    ph = state.get("price_history", [])
+                    if ph:
+                        last_val = ph[-1]["value"]
+                        if last_val > 0:
+                            change_pct = abs(p - last_val) / last_val
+                            if change_pct > 0.5:  # >50% spike
+                                log(f"⚠️ PRICE SPIKE DETECTED: {pair} went from ${last_val:.2f} to ${p:.2f} ({change_pct*100:.1f}% change)", "WARN")
                     state["price"] = p
                     state["price_history"].append({"time": int(time.time()), "value": p})
                     if len(state["price_history"]) > 1440:
                         state["price_history"] = state["price_history"][-1440:]
+                    # Periodic debug dump every ~60s (12 ticks)
+                    if len(state["price_history"]) % 12 == 0:
+                        log(f"📊 DEBUG [{pair}]: price=${p:.4f} | history_len={len(state['price_history'])} | first=${ph[0]['value']:.2f} | last=${p:.2f}")
             except Exception as e:
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
@@ -2347,8 +2358,13 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
             log("Added "+pair+" to active grids ("+str(len(state["active_pairs"]))+" total)")
             return
         log("Already running — stop first","WARN"); return
+    old_pair = state.get("pair","")
     state["strategy"]=strategy
     state["pair"]=pair
+    # Clear price_history when switching pairs to prevent mixed-asset chart spikes
+    if old_pair and old_pair != pair:
+        state["price_history"] = []
+        log(f"Cleared price_history: switched from {old_pair} to {pair}")
     state["mode"]=mode
     if exchange: state["exchange"]=exchange
     if chain: state["chain"]=chain
@@ -3454,6 +3470,19 @@ class Handler(BaseHTTPRequestHandler):
                 with open("setup.html","rb") as f: setup_data=f.read()
                 self.respond(200,"text/html",setup_data)
             except: self.respond(404,"text/plain",b"setup guide not found")
+        elif path=="/debug":
+            ph = state.get("price_history", [])
+            debug = {
+                "pair": state.get("pair", ""),
+                "price": state.get("price", 0),
+                "running": state.get("running", False),
+                "strategy": state.get("strategy", ""),
+                "price_history_len": len(ph),
+                "price_history_first_5": ph[:5] if ph else [],
+                "price_history_last_5": ph[-5:] if ph else [],
+                "price_history_all": ph,
+            }
+            self.respond(200, "application/json", json.dumps(debug).encode())
         elif path=="/state":
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
             state["positions_count"] = len(state.get("positions", []))
