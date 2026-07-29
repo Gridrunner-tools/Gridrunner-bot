@@ -3581,6 +3581,8 @@ class Handler(BaseHTTPRequestHandler):
             except: self.respond(404,"text/plain",b"setup guide not found")
         elif path=="/debug":
             ph = state.get("price_history", [])
+            gp = state.get("grid_pairs", {}).get(state.get("pair", ""), {})
+            filled = gp.get("filled", {})
             debug = {
                 "pair": state.get("pair", ""),
                 "price": state.get("price", 0),
@@ -3590,6 +3592,12 @@ class Handler(BaseHTTPRequestHandler):
                 "price_history_first_5": ph[:5] if ph else [],
                 "price_history_last_5": ph[-5:] if ph else [],
                 "price_history_all": ph,
+                "grid_levels": gp.get("grid_levels", []),
+                "grid_mid_idx": gp.get("grid_mid_idx", 0),
+                "grid_trailing_active": gp.get("grid_trailing_active", False),
+                "grid_trailing_high": gp.get("grid_trailing_high", 0),
+                "filled_positions": {str(k): {"price": v.get("price"), "trailing_active": v.get("trailing_active", False), "trailing_high": v.get("trailing_high", 0)} for k, v in filled.items()},
+                "active_pairs": state.get("active_pairs", []),
             }
             self.respond(200, "application/json", json.dumps(debug).encode())
         elif path=="/state":
