@@ -189,7 +189,7 @@ cfg = {
     "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
     "grid_levels": int(os.environ.get("GRID_LEVELS", "10")),
     "base_spread": float(os.environ.get("BASE_SPREAD", "0.05")),
-    "trailing_pct": float(os.environ.get("TRAILING_PCT", "0.5")),
+    "trailing_pct": float(os.environ.get("TRAILING_PCT", "0.005")),
     "grid_stop_loss_pct": float(os.environ.get("GRID_STOP_LOSS_PCT", "8")),
     "license_key":   os.environ.get("LICENSE_KEY", ""),
     "tg_bot_token":    os.environ.get("TG_BOT_TOKEN", ""),
