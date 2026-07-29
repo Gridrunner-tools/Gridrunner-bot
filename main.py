@@ -2739,15 +2739,10 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Show most recent candles, pinned to right edge
+  // Fit content then pin last candle to right edge
+  chart.timeScale().fitContent();
   chart.timeScale().applyOptions({ barSpacing: 3 });
-  if (candles.length > 0) {
-    var visibleBars = Math.min(candles.length, 200);
-    chart.timeScale().setVisibleLogicalRange({
-      from: candles.length - visibleBars,
-      to: candles.length + 1
-    });
-  }
+  chart.timeScale().scrollToPosition(candles.length - 1, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
