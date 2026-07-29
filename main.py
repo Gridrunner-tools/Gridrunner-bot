@@ -1921,6 +1921,21 @@ def run_grid():
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     state["partial_positions"] = {}
                     log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+                    # Initial buy on fresh grid with no positions
+                    if not filled:
+                        bal = get_balance()
+                        effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
+                        min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
+                        size = max(min_order, min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels)
+                        buy_level = mid_idx - 1  # first buy level below mid
+                        if buy_level >= 0 and size > 1:
+                            amt = round(size/price, 6)
+                            if place_order(pair, "buy", amt):
+                                filled[buy_level] = {"price": price, "amount": amt}
+                                state["positions"].append({"price": price, "amount": amt, "grid": buy_level, "strategy": "Grid"})
+                                record_trade("GRID-BUY", price, amt, pair=pair)
+                                log("["+pair+"] INITIAL BUY level "+str(buy_level)+" @ $"+str(round(price, 2)))
+                                send_telegram("🟢 <b>INITIAL BUY</b> "+state["pair"]+"\nLevel: "+str(buy_level)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
             bal = get_balance()
             effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
             min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))  # $5 minimum per grid level
