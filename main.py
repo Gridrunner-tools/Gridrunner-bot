@@ -2742,7 +2742,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   // Fit content then pin last candle to right edge
   chart.timeScale().fitContent();
   chart.timeScale().applyOptions({ barSpacing: 3 });
-  chart.timeScale().scrollToPosition(candles.length - 1, false);
+  chart.timeScale().scrollToPosition(candles.length + 5, false);
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
