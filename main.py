@@ -1906,6 +1906,8 @@ def run_grid():
                     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     for i in range(mid_idx + 1):
                         grids[i] = new_grids[i]
+                    for i in range(mid_idx + 1):
+                        filled.pop(i, None)
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
                 else:
@@ -1976,78 +1978,64 @@ def run_grid():
                                 log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
                                 del filled[sl_buy_idx]
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
-                    # ── SELL ZONE: trailing take profit ──
+                    # -- SELL ZONE: per-position independent trailing take profit --
                     if not is_buy_zone:
-                        if not trailing_sell_active and filled:
-                            trailing_sell_active = True
-                            trailing_high = price
-                            state["grid_trailing_active"] = trailing_sell_active
-                            state["grid_trailing_high"] = trailing_high
-                            log("["+pair+"] Trailing sell active at $"+str(price))
-                        elif trailing_sell_active:
-                            if price > trailing_high:
-                                trailing_high = price
-                                state["grid_trailing_high"] = trailing_high
-                                log("["+pair+"] Trailing high updated to $"+str(price))
-                        # Sell when price drops trailing_pct% below peak
-                        if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
-                            for buy_idx in sorted(filled.keys()):
-                                if True:  # allow sell from any grid level
-                                    amt = filled[buy_idx]["amount"]
-                                    buy_price = filled[buy_idx]["price"]
-                                    partial_pct = cfg.get("partial_sell_pct", 50)
-                                    # Check if this position still has a partial remainder
-                                    partial_key = str(buy_idx)
-                                    is_partial_sell = cfg.get("partial_sell_pct", 50) < 100
+                        for buy_idx, pos in list(filled.items()):
+                            paired_sell_level = levels - buy_idx
+                            if paired_sell_level >= len(grids):
+                                continue
+                            if price < grids[paired_sell_level]:
+                                continue
+                            pos_trail_active = pos.get("trailing_active", False)
+                            pos_trail_high = pos.get("trailing_high", 0.0)
+                            if not pos_trail_active:
+                                pos["trailing_active"] = True
+                                pos["trailing_high"] = price
+                            elif price > pos_trail_high:
+                                pos["trailing_high"] = price
+                            if price <= pos["trailing_high"] * (1 - trailing_pct / 100):
+                                amt = pos["amount"]
+                                buy_price = pos["price"]
+                                partial_pct = cfg.get("partial_sell_pct", 50)
+                                partial_key = str(buy_idx)
+                                is_partial_sell = partial_pct < 100
+                                sold_partial = pos.get("sold_partial", False)
+                                sell_amt = amt
+                                if is_partial_sell and not sold_partial:
+                                    sell_amt = amt * partial_pct / 100
+                                    keep_amt = amt - sell_amt
+                                    pos["amount"] = keep_amt
+                                    pos["sold_partial"] = True
+                                    pos["trailing_active"] = False
+                                    pos["trailing_high"] = 0.0
+                                    if "partial_positions" not in state:
+                                        state["partial_positions"] = {}
+                                    state["partial_positions"][partial_key] = {"amount": keep_amt, "buy_price": buy_price, "orig_amount": amt, "price": price}
+                                elif sold_partial:
                                     sell_amt = amt
-                                    # ── Partial sell logic ──
-                                    if is_partial_sell and partial_key not in state.get("partial_positions", {}):
-                                        # First sell: only sell partial_pct%
-                                        sell_amt = amt * partial_pct / 100
-                                        keep_amt = amt - sell_amt
-                                        state["partial_positions"][partial_key] = {
-                                            "amount": keep_amt, "buy_price": buy_price,
-                                            "orig_amount": amt, "price": price
-                                        }
-                                        # Update filled entry to reflect kept amount
-                                        filled[buy_idx]["amount"] = keep_amt
-                                        log("PARTIAL SELL: sold "+str(round(sell_amt,6))+" ("
-                                            +str(int(partial_pct))+"%) @ $"+str(round(price,2))
-                                            +", keeping "+str(round(keep_amt,6))+" for wider trailing")
-                                    elif partial_key in state.get("partial_positions", {}):
-                                        # Second sell: sell the remainder
-                                        sell_amt = amt  # sell everything left
-                                        if partial_key in state["partial_positions"]:
-                                            del state["partial_positions"][partial_key]
-                                    if place_order(pair,"sell",sell_amt):
-                                        pnl=(price-buy_price)*sell_amt
-                                        state["pnl"]+=pnl
-                                        state["daily_pnl"] = state.get("daily_pnl",0)+pnl
-                                        if cfg.get("auto_compound", True) and pnl > 0:
-                                            state["compound_profit"] += pnl
-                                        tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
-                                        record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)
-                                        log("["+pair+"] SELL "+str(round(sell_amt,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(buy_price,2))+" PnL $"+str(round(pnl,2))+")")
-                                        log("["+pair+"] TRADE SUMMARY: "+str(round(sell_amt,6))+" bought @ $"+str(round(buy_price,2))+" sold @ $"+str(round(price,2))+" | PnL $"+str(round(pnl,2)))
-                                        send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
-                                        if is_partial_sell and partial_key in state.get("partial_positions",{}):
-                                            # Don't delete the position yet — still holding remainder
-                                            trailing_sell_active = False
-                                            trailing_high = 0.0
-                                            state["grid_trailing_active"] = False
-                                            state["grid_trailing_high"] = 0.0
-                                            state["grid_filled"] = {k: v for k, v in filled.items()}
-                                            break
-                                        else:
-                                            del filled[buy_idx]
-                                            state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
-                                            trailing_sell_active = False
-                                            trailing_high = 0.0
-                                            state["grid_trailing_active"] = False
-                                            state["grid_trailing_high"] = 0.0
-                                            state["grid_filled"] = {k: v for k, v in filled.items()}
-                                            break
-                    else:
+                                    if partial_key in state.get("partial_positions", {}):
+                                        del state["partial_positions"][partial_key]
+                                if place_order(pair,"sell",sell_amt):
+                                    pnl=(price-buy_price)*sell_amt
+                                    state["pnl"]+=pnl
+                                    state["daily_pnl"] = state.get("daily_pnl",0)+pnl
+                                    if cfg.get("auto_compound", True) and pnl > 0:
+                                        state["compound_profit"] += pnl
+                                    tag = "GRID-PARTIAL" if (is_partial_sell and not sold_partial) else "GRID-SELL"
+                                    record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)
+                                    if is_partial_sell and not sold_partial:
+                                        pass
+                                    else:
+                                        del filled[buy_idx]
+                                        state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
+                        trailing_sell_active = any(pos.get("trailing_active", False) for pos in filled.values())
+                        if trailing_sell_active:
+                            trailing_high = max((pos.get("trailing_high", 0) for pos in filled.values()), default=0)
+                        else:
+                            trailing_high = 0.0
+                        state["grid_trailing_active"] = trailing_sell_active
+                        state["grid_trailing_high"] = trailing_high
+                    
                         # Price back in buy zone — reset sell trailing
                         if trailing_sell_active:
                             # Only reset if ALL positions were cleared by the sell
@@ -2732,9 +2720,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataEnd = candles[candles.length - 1].time;
 
   // Pin newest candle to far right edge
-  chart.timeScale().fitContent();
-  chart.timeScale().applyOptions({ barSpacing: 3 });
-  chart.timeScale().scrollToPosition(candles.length + 5, false);
+  chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
