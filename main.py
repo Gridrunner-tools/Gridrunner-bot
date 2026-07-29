@@ -2144,7 +2144,34 @@ def run_grid():
                     state["grid_trailing_active"] = trailing_sell_active
                     state["grid_trailing_high"] = trailing_high
                 elif price < grids[0]:
-                    # Price below grid — reset sell trailing (we're back in deep buy territory)
+                    # Price below grid — run trailing buy for unfilled levels
+                    for i in range(mid_idx):
+                        if i not in filled and size > 1:
+                            if not trailing_buy_active:
+                                trailing_buy_active = True
+                                trailing_low = price
+                                dip_occurred = False
+                            elif price < trailing_low:
+                                trailing_low = price
+                                dip_occurred = True
+                            should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                            if should_buy:
+                                dip_mult = 1.5 if state.get("dip_active") else 1.0
+                                amt = round(size*dip_mult/price,6)
+                                if place_order(pair,"buy",amt):
+                                    filled[i]={"price":price,"amount":amt}
+                                    state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
+                                    record_trade("GRID-BUY",price,amt, pair=pair)
+                                    log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (below grid)"))
+                                    send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
+                                    trailing_buy_active = False
+                                    trailing_low = 0.0
+                                    trailing_sell_active = False
+                                    trailing_high = 0.0
+                                    state["grid_trailing_active"] = trailing_sell_active
+                                    state["grid_trailing_high"] = trailing_high
+                            break
+                    # Also reset sell trailing (we're back in deep buy territory)
                     if trailing_sell_active:
                         trailing_sell_active = False
                         trailing_high = 0.0
