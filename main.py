@@ -2217,18 +2217,7 @@ def run_grid():
                             total_val += pos.get("amount", 0) * pos.get("price", 0)
                     if total_val > state.get("peak_balance", 0):
                         state["peak_balance"] = total_val
-                    # Drawdown check
-                    dd_pct = cfg.get("max_drawdown_pct", 50)
-                    pk = state.get("peak_balance", 0)
-                    if pk > 0 and total_val < pk * (1 - dd_pct/100):
-                        if not state.get("emergency_stop"):
-                            log("DRAWDOWN PAUSE: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown) — holding, no new buys", "WARN")
-                            send_telegram("\uD83D\uDFE1 <b>DRAWDOWN PAUSE</b>\nPortfolio: $"+str(round(total_val,2))+"\nDrawdown: "+str(int(dd_pct))+"%\nHolding positions, no new buys until recovery")
-                            state["emergency_stop"] = True
-                    elif state.get("emergency_stop") and total_val >= pk * (1 - dd_pct/100):
-                        log("DRAWDOWN RECOVERY: portfolio $"+str(round(total_val,2))+" >= "+str(round(pk*(1-dd_pct/100),2))+" — resuming", "INFO")
-                        send_telegram("\uD83D\uDFE2 <b>DRAWDOWN RECOVERY</b>\nPortfolio: $"+str(round(total_val,2))+"\nResuming normal trading")
-                        state["emergency_stop"] = False
+
                     dl = cfg.get("daily_loss_limit", 200)
                     if state["daily_pnl"] < -dl:
                         if not state.get("emergency_stop"):
