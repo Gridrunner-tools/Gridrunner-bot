@@ -3546,7 +3546,6 @@ function refresh() {
       var ct = document.getElementById("cfg-trailing"); if (document.activeElement !== ct) ct.value = d.config.trailing_pct || 0.05;
       document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
       document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
-      document.getElementById("cfg-drawdown").value = d.config.max_drawdown_pct || 50;
       document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
     }
   } catch(e) { console.error("refresh error:", e); } }).catch(console.error);
