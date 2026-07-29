@@ -196,11 +196,16 @@ def place_order(pair, side, amount):
     return True
 
 def start_bot(strategy="dca", pair="SOL/USDC", mode="dex", exchange="", chain=""):
+    old_pair = state.get("pair", "")
     state["running"] = True
     state["strategy"] = strategy
     state["pair"] = pair
     state["mode"] = mode
     state["chain"] = chain or "solana"
+    # Clear price_history when switching pairs to prevent mixed-asset chart spikes
+    if old_pair and old_pair != pair:
+        state["price_history"] = []
+        log(f"Cleared price_history: switched from {old_pair} to {pair}")
     log(f"Bot started: {strategy.upper()} on {pair} via {mode.upper()}")
 
 def stop_bot():
@@ -223,12 +228,23 @@ def start_background_loops():
                 pair = state.get("pair","ETH/USDT")
                 p = get_price(pair)
                 if p > 0:
+                    # Spike detection: compare against last price in history
+                    ph = state.get("price_history", [])
+                    if ph:
+                        last_val = ph[-1]["value"]
+                        if last_val > 0:
+                            change_pct = abs(p - last_val) / last_val
+                            if change_pct > 0.5:  # >50% spike
+                                log(f"⚠️ PRICE SPIKE DETECTED: {pair} went from ${last_val:.2f} to ${p:.2f} ({change_pct*100:.1f}% change)", "WARN")
                     state["price"] = p
                     if not state.get("price_history"):
                         state["price_history"] = []
                     state["price_history"].append({"time": int(time.time()), "value": p})
                     if len(state["price_history"]) > 1440:
                         state["price_history"] = state["price_history"][-1440:]
+                    # Periodic debug dump every ~60s (12 ticks)
+                    if len(state["price_history"]) % 12 == 0:
+                        log(f"📊 DEBUG [{pair}]: price=${p:.4f} | history_len={len(state['price_history'])} | first=${ph[0]['value']:.2f} | last=${p:.2f}")
             except Exception as e:
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
@@ -439,6 +455,20 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         if path == "/":
             self.respond(200, "text/html", html_template.encode())
+        elif path == "/debug":
+            # Deep diagnostic endpoint — no auth required, live debugging
+            ph = state.get("price_history", [])
+            debug = {
+                "pair": state.get("pair", ""),
+                "price": state.get("price", 0),
+                "running": state.get("running", False),
+                "strategy": state.get("strategy", ""),
+                "price_history_len": len(ph),
+                "price_history_first_5": ph[:5] if ph else [],
+                "price_history_last_5": ph[-5:] if ph else [],
+                "price_history_all": ph,
+            }
+            self.respond(200, "application/json", json.dumps(debug).encode())
         elif path == "/state":
             state["trades_list"] = state.get("trades", [])[-50:]
             if not self._check_auth():
