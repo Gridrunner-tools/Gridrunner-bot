@@ -190,6 +190,10 @@ cfg = {
     "license_key":   os.environ.get("LICENSE_KEY", ""),
     "tg_bot_token":    os.environ.get("TG_BOT_TOKEN", ""),
     "tg_chat_id":      os.environ.get("TG_CHAT_ID", ""),
+    "grid_levels":  int(os.environ.get("GRID_LEVELS", "5")),
+    "base_spread":  float(os.environ.get("BASE_SPREAD", "0.05")),
+    "trailing_pct": float(os.environ.get("TRAILING_PCT", "0.5")),
+    "daily_loss_limit": float(os.environ.get("DAILY_LOSS_LIMIT", "200")),
 }
 
 import threading
