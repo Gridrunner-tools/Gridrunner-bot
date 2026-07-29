@@ -1901,8 +1901,8 @@ def run_grid():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0:
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
@@ -2211,8 +2211,8 @@ def run_rsi_ema():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0: time.sleep(30); continue
             # Build price buffer
             buf = get_price_history(pair, 100)
@@ -2293,8 +2293,8 @@ def run_bbands():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
@@ -3774,8 +3774,8 @@ class Handler(BaseHTTPRequestHandler):
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0:
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
