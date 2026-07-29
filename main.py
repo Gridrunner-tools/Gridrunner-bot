@@ -1905,6 +1905,9 @@ def run_grid():
                     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     for i in range(mid_idx + 1):
                         grids[i] = new_grids[i]
+                    # Clear filled for shifted buy-zone indices so new buys can fire
+                    for i in range(mid_idx + 1):
+                        filled.pop(i, None)
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
                 else:
@@ -2725,15 +2728,8 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Pin to right edge without stretching candles
-  if (candles.length > 60) {
-    chart.timeScale().setVisibleLogicalRange({
-      from: candles.length - 60,
-      to: candles.length + 1
-    });
-  } else {
-    chart.timeScale().scrollToPosition(candles.length, false);
-  }
+  // Pin newest candle to far right edge — rightOffset is a permanent anchor, no drift
+  chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
