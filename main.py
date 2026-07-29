@@ -1936,7 +1936,7 @@ def run_grid():
                             state["partial_positions"] = {}
                             log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
                             # Initial buy on fresh grid with no positions
-                            if not filled:
+                            if not filled and not state.get("emergency_stop"):
                                 bal = get_balance()
                                 effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
                                 min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
@@ -1972,7 +1972,7 @@ def run_grid():
                                 dip_mult = 1.5 if state.get("dip_active") else 1.0
                                 # Buy: immediately if no dip, or on 0.5% bounce if dipped
                                 if trailing_buy_active and i not in filled and size > 1:
-                                    should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                                    should_buy = ((not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))) and not state.get("emergency_stop")
                                     if should_buy:
                                         amt = round(size*dip_mult/price,6)
                                         if place_order(pair,"buy",amt):
@@ -2168,7 +2168,7 @@ def run_grid():
                                     elif price < trailing_low:
                                         trailing_low = price
                                         dip_occurred = True
-                                    should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                                    should_buy = ((not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))) and not state.get("emergency_stop")
                                     if should_buy:
                                         dip_mult = 1.5 if state.get("dip_active") else 1.0
                                         amt = round(size*dip_mult/price,6)
@@ -2221,38 +2221,20 @@ def run_grid():
                     dd_pct = cfg.get("max_drawdown_pct", 20)
                     pk = state.get("peak_balance", 0)
                     if pk > 0 and total_val < pk * (1 - dd_pct/100):
-                        log("DRAWDOWN STOP: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
-                        # Sell all positions before stopping
-                        for _gp_name, _gp_data in state.get("grid_pairs", {}).items():
-                            for _b_idx, _pos in list(_gp_data.get("filled", {}).items()):
-                                _sell_amt = _pos["amount"]
-                                if place_order(_gp_name, "sell", _sell_amt):
-                                    _pnl = (price - _pos["price"]) * _sell_amt
-                                    state["pnl"] += _pnl
-                                    log("DRAWDOWN SELL level "+str(_b_idx)+" @ $"+str(round(price,2))+" PnL: $"+str(round(_pnl,2)))
-                                    send_telegram("\uD83D\uDD34 <b>DRAWDOWN SELL</b> "+_gp_name+"\nLevel: "+str(_b_idx)+"\nPrice: $"+str(round(price,2))+"\nP&L: $"+str(round(_pnl,2)))
-                                    del _gp_data["filled"][_b_idx]
-                        state["running"] = False
-                        state["strategy"] = None
-                        state["emergency_stop"] = True
-                        return
+                        if not state.get("emergency_stop"):
+                            log("DRAWDOWN PAUSE: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown) — holding, no new buys", "WARN")
+                            send_telegram("\uD83D\uDFE1 <b>DRAWDOWN PAUSE</b>\nPortfolio: $"+str(round(total_val,2))+"\nDrawdown: "+str(int(dd_pct))+"%\nHolding positions, no new buys until recovery")
+                            state["emergency_stop"] = True
+                    elif state.get("emergency_stop") and total_val >= pk * (1 - dd_pct/100):
+                        log("DRAWDOWN RECOVERY: portfolio $"+str(round(total_val,2))+" >= "+str(round(pk*(1-dd_pct/100),2))+" — resuming", "INFO")
+                        send_telegram("\uD83D\uDFE2 <b>DRAWDOWN RECOVERY</b>\nPortfolio: $"+str(round(total_val,2))+"\nResuming normal trading")
+                        state["emergency_stop"] = False
                     dl = cfg.get("daily_loss_limit", 200)
                     if state["daily_pnl"] < -dl:
-                        log("DAILY LOSS LIMIT: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl), "WARN")
-                        # Sell all positions before stopping
-                        for _gp_name, _gp_data in state.get("grid_pairs", {}).items():
-                            for _b_idx, _pos in list(_gp_data.get("filled", {}).items()):
-                                _sell_amt = _pos["amount"]
-                                if place_order(_gp_name, "sell", _sell_amt):
-                                    _pnl = (price - _pos["price"]) * _sell_amt
-                                    state["pnl"] += _pnl
-                                    log("LOSS LIMIT SELL level "+str(_b_idx)+" @ $"+str(round(price,2))+" PnL: $"+str(round(_pnl,2)))
-                                    send_telegram("\uD83D\uDD34 <b>LOSS LIMIT SELL</b> "+_gp_name+"\nLevel: "+str(_b_idx)+"\nPrice: $"+str(round(price,2))+"\nP&L: $"+str(round(_pnl,2)))
-                                    del _gp_data["filled"][_b_idx]
-                        state["running"] = False
-                        state["strategy"] = None
-                        state["emergency_stop"] = True
-                        return
+                        if not state.get("emergency_stop"):
+                            log("DAILY LOSS PAUSE: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl)+" — holding, no new buys", "WARN")
+                            send_telegram("\uD83D\uDFE1 <b>DAILY LOSS PAUSE</b>\nLoss: $"+str(round(-state["daily_pnl"],2))+"\nHolding positions, no new buys")
+                            state["emergency_stop"] = True
                     # Save per-pair state back
                     gs.update({
                         "grids": grids, "mid_idx": mid_idx, "filled": filled,
