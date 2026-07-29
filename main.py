@@ -2218,7 +2218,7 @@ def run_grid():
                     if total_val > state.get("peak_balance", 0):
                         state["peak_balance"] = total_val
                     # Drawdown check
-                    dd_pct = cfg.get("max_drawdown_pct", 20)
+                    dd_pct = cfg.get("max_drawdown_pct", 50)
                     pk = state.get("peak_balance", 0)
                     if pk > 0 and total_val < pk * (1 - dd_pct/100):
                         if not state.get("emergency_stop"):
@@ -3557,6 +3557,7 @@ function refresh() {
       var ct = document.getElementById("cfg-trailing"); if (document.activeElement !== ct) ct.value = d.config.trailing_pct || 0.05;
       document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
       document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
+      document.getElementById("cfg-drawdown").value = d.config.max_drawdown_pct || 50;
       document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
     }
   } catch(e) { console.error("refresh error:", e); } }).catch(console.error);
