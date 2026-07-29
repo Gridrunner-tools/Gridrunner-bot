@@ -2087,8 +2087,8 @@ def run_grid():
                     _in_bucket = True
                     break
             if not _in_bucket and filled:
-                if price > grids[-1]:
-                    # Price above grid — run trailing sell for all positions
+                if price > grids[-1] or (price >= grids[mid_idx] and price > grids[0]):
+                    # Price above grid or in sell-zone gap — run trailing sell
                     for buy_idx, pos in list(filled.items()):
                         pos_trail_active = pos.get("trailing_active", False)
                         pos_trail_high = pos.get("trailing_high", 0.0)
