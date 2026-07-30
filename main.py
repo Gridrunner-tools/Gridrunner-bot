@@ -1889,7 +1889,7 @@ def run_grid():
             try:
                 if not gs: continue
                 grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
-                trailing_pct = cfg.get("trailing_pct", 0.005); trailing_high = gs["trailing_high"]
+                trailing_pct = state["config"].get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
                 trailing_sell_active = gs["trailing_sell_active"]
                 trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
                 dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
@@ -2039,7 +2039,7 @@ def run_grid():
                                         state["partial_positions"].pop(str(sl_buy_idx), None)
                                         state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
                             # -- Trailing take profit for all in-profit positions --
-                            if True:  # was: if not is_buy_zone — now runs in all zones
+                            if not is_buy_zone:  # trailing sell only in sell zone
                                 for buy_idx, pos in list(filled.items()):
                                     paired_sell_level = levels - buy_idx
                                     if paired_sell_level >= len(grids):
