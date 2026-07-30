@@ -2732,7 +2732,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.05" min="0.01" max="10" step="0.01"/></div>
       <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="50" min="0" max="100" step="5"/></div>
       <div class="config-field"><label>Grid Spread (%)</label><input type="number" id="cfg-spread" value="5" min="1" max="30" step="0.5"/></div>
-      <div class="config-field"><label>Grid Levels</label><input type="number" id="cfg-levels" value="10" min="3" max="20" step="1"/></div>
+      <div class="config-field"><label>Grid Levels</label><input type="number" id="cfg-levels" value="10" min="3" max="20" step="1" onchange="updateCfg('grid_levels',this.value)"/></div>
       <div class="config-field"><label>Auto-Compound</label><select id="cfg-compound"><option value="true">On</option><option value="false">Off</option></select></div>
     </div>
     <div class="section-label">Quick Presets</div>
