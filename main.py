@@ -1836,7 +1836,7 @@ def _init_grid_pair(pair):
     mid_idx = len(grids) // 2
     return {
         "grids": grids, "mid_idx": mid_idx, "filled": {},
-        "trailing_pct": 0.05, "trailing_high": 0.0, "trailing_sell_active": False,
+        "trailing_pct": cfg.get("trailing_pct", 0.005), "trailing_high": 0.0, "trailing_sell_active": False,
         "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
         "price": price, "levels": levels, "spread": spread,
     }
