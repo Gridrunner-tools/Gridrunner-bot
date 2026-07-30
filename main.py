@@ -1914,7 +1914,7 @@ def run_grid():
                     today_midnight = int(time.time()) // 86400 * 86400
         
                     # ── Grid re-centering ──
-                    if (price < grids[0] or price > grids[-1]) or (not filled and price >= grids[mid_idx]):
+                    if (price < grids[0] or price > grids[-1]) or not filled:
                         has_positions = bool(filled)
                         if not filled and price > grids[mid_idx]:
                             log("["+pair+"] Grid re-centering: no positions at $"+str(price))
