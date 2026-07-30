@@ -186,7 +186,7 @@ cfg = {
     "min_arb_spread":  float(os.environ.get("MIN_ARB_SPREAD", "1.5")),
     "paper_trading":   os.environ.get("PAPER_TRADING", "false" if (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY")) else "true").lower() != "false",
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
-    "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
+    "partial_sell_pct":  max(1, min(100, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
     "grid_levels": int(os.environ.get("GRID_LEVELS", "10")),
     "base_spread": float(os.environ.get("BASE_SPREAD", "0.05")),
     "trailing_pct": float(os.environ.get("TRAILING_PCT", "0.005")),
