@@ -3987,7 +3987,7 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/config":
             if not self._auth_or_401(): return
-            config_keys = ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"]
+            config_keys = ["risk_pct", "max_pos", "grid_levels", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"]
             bool_keys = {"auto_compound"}
             float_keys = {"risk_pct", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
             for key in config_keys:
@@ -3998,7 +3998,7 @@ class Handler(BaseHTTPRequestHandler):
                         try:
                             val = float(data[key])
                             if key == "partial_sell_pct":
-                                val = max(1, min(99, val))
+                                val = max(1, min(100, val))
                             cfg[key] = val
                         except (ValueError, TypeError) as e:
                             log("Config "+key+" parse error: "+str(e), "WARN")
@@ -4006,7 +4006,7 @@ class Handler(BaseHTTPRequestHandler):
                         cfg[key] = data[key]
             # Map saveConfig keys to internal cfg keys
             if "max_pos" in data: cfg["max_pos"] = float(data["max_pos"])
-            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
+            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "grid_levels", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         elif path == "/trade_log":
