@@ -2047,6 +2047,9 @@ def run_grid():
                                     # Only skip if below buy price (not in profit yet)
                                     if price <= pos["price"]:
                                         continue
+                                    # Only activate trailing if price has reached the paired sell level
+                                    if price < grids[paired_sell_level]:
+                                        continue
                                     pos_trail_active = pos.get("trailing_active", False)
                                     pos_trail_high = pos.get("trailing_high", 0.0)
                                     if not pos_trail_active:
@@ -2118,6 +2121,9 @@ def run_grid():
                         if price > grids[-1] or (price >= grids[mid_idx] and price > grids[0]):
                             # Price above grid or in sell-zone gap — run trailing sell
                             for buy_idx, pos in list(filled.items()):
+                                paired_sell_level = levels - buy_idx
+                                if paired_sell_level < len(grids) and price < grids[paired_sell_level]:
+                                    continue
                                 pos_trail_active = pos.get("trailing_active", False)
                                 pos_trail_high = pos.get("trailing_high", 0.0)
                                 if not pos_trail_active:
