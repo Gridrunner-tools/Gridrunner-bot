@@ -3072,6 +3072,17 @@ function applyPreset(name, event) {
   showToast("Preset '" + name + "' applied", "info");
 }
 
+function updateCfg(key, val) {
+  var body = {};
+  body[key] = val;
+  apiFetch("/config", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    showToast("Config updated", "info");
+  });
+}
 function saveConfig() {
   var cfg = {
     risk_pct: parseFloat(document.getElementById("cfg-risk").value) || null,
