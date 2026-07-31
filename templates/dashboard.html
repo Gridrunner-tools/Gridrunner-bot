@@ -726,6 +726,8 @@ function togglePaper() {
 }
 
 function refresh() {
+  if (window._refreshing) return;
+  window._refreshing = true;
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     try {
     var on = d.running;
@@ -794,41 +796,18 @@ function refresh() {
             }
           } catch(e) { console.log("Chart error for " + pair, e); }
         }
-        // Recreate chart if missing (e.g. from previous deploy without _series)
-        if (!card._series || !card._chart) {
-          try {
-            var chartEl = document.getElementById(cardId + "-chart");
-            if (chartEl) {
-              var w = Math.max(chartEl.clientWidth || 380, 380);
-              var ch = LightweightCharts.createChart(chartEl, {
-                width: w, height: 200,
-                layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
-                grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
-                timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
-                rightPriceScale: { borderColor: "#1a1a1a" }
-              });
-              card._chart = ch;
-              card._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
-                upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
-                wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
-              });
-            }
-          } catch(e) { console.log("Chart recovery error for " + pair, e); }
-        }
-        // Update chart data
+        // Skip recovery — never recreate chart on existing card (duplicate charts break the div)
+        // Update chart data — only if we have fresh data
         var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
-        if (card._series) {
+        if (card._series && ph.length >= 1) {
           var chartData = [];
-          if (ph.length >= 1) {
-            for (var j = 0; j < ph.length; j++) {
-              var p = ph[j];
-              var o = j > 0 ? ph[j-1].value : p.value;
-              chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
-            }
-            // If only 1 point, duplicate it so candles render
-            if (ph.length === 1) {
-              chartData.push({time: ph[0].time - 1, open: ph[0].value, high: ph[0].value, low: ph[0].value, close: ph[0].value});
-            }
+          for (var j = 0; j < ph.length; j++) {
+            var p = ph[j];
+            var o = j > 0 ? ph[j-1].value : p.value;
+            chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+          }
+          if (ph.length === 1) {
+            chartData.push({time: ph[0].time - 1, open: ph[0].value, high: ph[0].value, low: ph[0].value, close: ph[0].value});
           }
           if (chartData.length) card._series.setData(chartData);
         }
@@ -1041,7 +1020,9 @@ function refresh() {
       document.getElementById("cfg-levels").value = d.config.grid_levels || 10;
       document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
     }
-  } catch(e) { console.error("refresh error:", e); } }).catch(console.error);
+  } catch(e) { console.error("refresh error:", e); }
+  window._refreshing = false;
+}).catch(function(e) { console.error(e); window._refreshing = false; });
 }
 
 window.addEventListener("resize", function() {
