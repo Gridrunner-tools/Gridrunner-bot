@@ -733,9 +733,14 @@ function refresh() {
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
     // Multi-pair mode: show per-pair charts when 2+ active pairs
+    // Sticky: once shown, keep showing until bot stops (prevents flash during state transitions)
     var multiPair = d.active_pairs && d.active_pairs.length >= 2;
+    var hasAnyPairs = d.active_pairs && d.active_pairs.length > 0;
     var singleRow = document.getElementById("single-chart-row");
     var chartsWrap = document.getElementById("charts-container");
+    if (multiPair) { window._wasMulti = true; }
+    if (!d.running) { window._wasMulti = false; }
+    var showMulti = multiPair || (window._wasMulti && hasAnyPairs);
     // Always clean up and create/update multi-pair cards
     if (chartsWrap && d.active_pairs && d.active_pairs.length) {
       var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
@@ -746,8 +751,8 @@ function refresh() {
         if (!activeSet[cardPair]) card.remove();
       });
     }
-    // Show/hide containers based on pair count
-    if (multiPair) {
+    // Show/hide containers — sticky: don't collapse multi-pair once shown
+    if (showMulti) {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
     } else {
@@ -857,7 +862,7 @@ function refresh() {
         }
       });
     }
-    if (!multiPair && d.price_history && d.price_history.length > 1) {
+    if (!showMulti && d.price_history && d.price_history.length > 1) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
