@@ -3089,13 +3089,15 @@ function refresh() {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
       window._wasMulti = true;
-    } else if (window._wasMulti && d.active_pairs && d.active_pairs.length >= 2) {
-      // Stay in multi mode if we were previously multi and still have pairs
-      if (singleRow) singleRow.style.display = "none";
-      if (chartsWrap) chartsWrap.style.display = "flex";
     } else {
-      // Clean up cards for pairs no longer active (only if we have pair data)
-      if (chartsWrap && d.active_pairs && d.active_pairs.length) {
+      window._wasMulti = false;
+      if (singleRow) singleRow.style.display = "flex";
+      if (chartsWrap) chartsWrap.style.display = "none";
+    }
+    // Render multi-pair cards whenever we have 2+ pairs
+    if (d.active_pairs && d.active_pairs.length >= 2) {
+      // Clean up cards for pairs no longer active
+      if (chartsWrap) {
         var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
         var activeSet = {};
         d.active_pairs.forEach(function(p) { activeSet[p] = true; });
@@ -3184,10 +3186,7 @@ function refresh() {
           infoEl.innerHTML = html;
         }
       });
-        window._wasMulti = false;
-        if (singleRow) singleRow.style.display = "flex";
-        if (chartsWrap) chartsWrap.style.display = "none";
-      }
+    }
     if (!multiPair && d.price_history && d.price_history.length > 1) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
