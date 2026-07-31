@@ -776,6 +776,8 @@ function refresh() {
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
+          // Force layout before creating chart so dimensions are correct
+          card.offsetHeight;
           // Create chart immediately
           try {
             var chartEl = document.getElementById(cardId + "-chart");
@@ -793,6 +795,9 @@ function refresh() {
               upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
               wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
             });
+            // Ensure chart doesn't collapse — force height on container after creation
+            chartEl.style.height = "200px";
+            chartEl.style.display = "block";
             }
           } catch(e) { console.log("Chart error for " + pair, e); }
         }
