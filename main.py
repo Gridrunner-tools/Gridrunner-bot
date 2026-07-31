@@ -2449,7 +2449,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 <div id="toast-container" class="toast-container"></div>
 <div class="wrap">
   <div class="head-row">
-    <div><h1>Trading Bot</h1><div class="sub"><span class="dot" id="dot"></span><span id="status-text">Stopped</span></div></div>
+    <div><h1><span style="color:#fff">Grid</span><span style="color:#00ff9d">Runner</span></h1><div class="sub"><span class="dot" id="dot"></span><span id="status-text">Stopped</span></div></div>
     <div style="display:flex;gap:6px">
       <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
       <button class="btn" onclick="exportCSV()" style="font-size:11px">&#11015; CSV</button>
