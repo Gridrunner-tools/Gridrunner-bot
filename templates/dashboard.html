@@ -1,0 +1,1065 @@
+'<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>GridRunner — Trading Dashboard</title>
+<link rel="manifest" href="/manifest.json"/>
+<meta name="theme-color" content="#0a0a1a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="GridRunner"/>
+<link rel="apple-touch-icon" href="/logo.jpeg"/>
+
+<style>
+:root{--bg:#080808;--card:#111;--border:#1a1a1a;--text:#eee;--text2:#888;--dim:#444;--accent:#00ff9d;--red:#ff6b6b;--blue:#4dabf7;--purple:#cc99ff;--yellow:#ffd43b}
+.light{--bg:#f0f2f5;--card:#fff;--border:#d0d5dd;--text:#1a1a1a;--text2:#555;--dim:#999;--accent:#00b875;--red:#e03131;--blue:#1971c2;--purple:#7c3aed;--yellow:#e67700}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);padding:20px;transition:background .3s,color .3s}
+.wrap{max-width:960px;margin:0 auto}
+.head-row{display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:4px}
+h1{font-size:22px;font-weight:900;color:var(--text)}
+.sub{font-size:13px;color:var(--dim);margin-bottom:24px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.dot{width:8px;height:8px;border-radius:50%;background:#333;display:inline-block;transition:all .3s}
+.dot.on{background:var(--accent);box-shadow:0 0 8px var(--accent)}
+.theme-btn{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:13px;color:var(--text);transition:all .15s}
+.theme-btn:hover{border-color:var(--accent)}
+#chart-container{height:350px;flex:1;min-width:0;border-radius:10px;background:var(--card);border:1px solid var(--border);overflow:hidden;position:relative}
+#chart-container iframe{border-radius:10px}
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
+.stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
+.sl{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
+.sv{font-size:22px;font-weight:900;color:var(--text)}
+.sv.g{color:var(--accent)}.sv.r{color:var(--red)}
+.card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:20px;margin-bottom:16px}
+.ct{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--accent);text-transform:uppercase;margin-bottom:14px}
+.btn-row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px}
+.btn{padding:9px 16px;border:1.5px solid var(--border);border-radius:8px;font-weight:700;font-size:12px;cursor:pointer;background:var(--card);color:var(--text2);transition:all .15s}
+.btn:hover{border-color:var(--accent);color:var(--text)}
+.btn.active-strat{background:var(--accent)18;color:var(--accent);border-color:var(--accent)}
+.btn.active-pair{background:var(--blue)18;color:var(--blue);border-color:var(--blue)}
+.btn.active-chain{background:var(--purple)18;color:var(--purple);border-color:var(--purple)}
+.btn.active-exch{background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)}
+.btn-start{background:var(--accent);color:var(--bg);border:none;padding:13px 32px;font-size:14px;border-radius:8px;font-weight:800;cursor:pointer;transition:all .15s}
+.btn-start:disabled{background:var(--card);color:var(--dim);cursor:not-allowed}
+.btn-stop{background:var(--red)18;color:var(--red);border:1.5px solid var(--red)33;padding:13px 24px;font-size:13px;border-radius:8px;font-weight:700;cursor:pointer}
+.btn-pause{background:var(--yellow)18;color:var(--yellow);border:1.5px solid var(--yellow)33;padding:13px 24px;font-size:13px;border-radius:8px;font-weight:700;cursor:pointer}
+.section-label{font-size:11px;color:var(--dim);font-weight:700;margin-bottom:8px;text-transform:uppercase;letter-spacing:1px}
+select.dd{width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;background:var(--card);color:var(--text);cursor:pointer;margin-bottom:12px;transition:all .15s;appearance:auto}
+select.dd:focus{outline:none;border-color:var(--accent)}
+.config-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:14px}
+.config-field{display:flex;flex-direction:column;gap:4px}
+.config-field label{font-size:10px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:1px}
+.config-field input,.config-field select{padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);transition:all .15s}
+.config-field input:focus,.config-field select:focus{outline:none;border-color:var(--accent)}
+.preset-row{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px}
+.preset-btn{padding:6px 14px;border:1.5px solid var(--border);border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;background:var(--card);color:var(--text2);transition:all .15s}
+.preset-btn:hover{border-color:var(--accent);color:var(--accent)}
+.preset-btn.active{background:var(--accent)18;color:var(--accent);border-color:var(--accent)}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{color:var(--dim);font-weight:700;text-align:left;padding:8px 0;border-bottom:1px solid var(--border);font-size:10px;letter-spacing:1px;text-transform:uppercase}
+td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
+.badge{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;font-weight:700}
+.badge-p{background:var(--accent)18;color:var(--accent)}
+.badge-l{background:var(--red)18;color:var(--red)}
+.badge-s{background:var(--yellow)18;color:var(--yellow)}
+.buy{color:var(--accent);font-weight:700}.sell{color:var(--red);font-weight:700}.stop{color:var(--yellow);font-weight:700}
+.log-box{background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:14px;height:180px;overflow-y:auto;font-family:monospace;font-size:11px;line-height:1.8}
+.li{color:var(--text2)}.lw{color:var(--yellow)}.le{color:var(--red)}
+.arb-row{display:flex;justify-content:space-between;align-items:center;padding:10px 0;border-bottom:1px solid var(--border);font-size:12px}
+.arb-spread{color:var(--accent);font-weight:800;font-size:14px}
+.dex-info{background:var(--purple)11;border:1px solid var(--purple)22;border-radius:8px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--purple);line-height:1.6}
+.summary-cards{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:16px}
+.summary-card{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center}
+.summary-card .label{font-size:9px;color:var(--dim);font-weight:700;text-transform:uppercase;letter-spacing:1px}
+.summary-card .value{font-size:16px;font-weight:900;margin-top:4px;color:var(--text)}
+.summary-card .value.g{color:var(--accent)}.summary-card .value.r{color:var(--red)}
+.toast-container{position:fixed;top:12px;right:12px;z-index:9999;display:flex;flex-direction:column;gap:6px;pointer-events:none}
+.toast{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:10px 16px;font-size:12px;color:var(--text);box-shadow:0 4px 20px rgba(0,0,0,.4);animation:slideIn .3s ease-out;max-width:320px;pointer-events:auto}
+.toast.trade{border-left:3px solid var(--accent)}.toast.error{border-left:3px solid var(--red)}.toast.info{border-left:3px solid var(--blue)}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+@keyframes fadeOut{from{opacity:1}to{opacity:0}}
+.action-bar{display:flex;gap:10px;margin-top:8px;flex-wrap:wrap;align-items:center}
+.twocol{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media(max-width:700px){.stats{grid-template-columns:1fr 1fr}.summary-cards{grid-template-columns:1fr 1fr}.twocol{grid-template-columns:1fr}.config-grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div id="toast-container" class="toast-container"></div>
+<div class="wrap">
+  <div class="head-row">
+    <div><h1>Trading Bot</h1><div class="sub"><span class="dot" id="dot"></span><span id="status-text">Stopped</span></div></div>
+    <div style="display:flex;gap:6px">
+      <button class="theme-btn" id="theme-btn" onclick="toggleTheme()">🌙 Dark</button>
+      <button class="btn" onclick="exportCSV()" style="font-size:11px">&#11015; CSV</button>
+      <button class="btn" onclick="killSwitch()" title="Emergency close all positions" style="font-size:11px;color:var(--red);border-color:var(--red)44">&#128721; Kill</button>
+      <button class="btn" onclick="runBacktest()" style="font-size:11px">📊 Backtest</button>
+    </div>
+  </div>
+
+  <div class="stats">
+    <div class="stat"><div class="sl">Price (Raydium)</div><div class="sv" id="s-price">—</div></div>
+    <div class="stat"><div class="sl">EVM Balance</div><div class="sv" id="s-balance">—</div></div>
+    <div class="stat"><div class="sl">Solana</div><div class="sv" id="s-sol-balance" style="font-size:16px">—</div></div>
+    <div class="stat"><div class="sl">Total P&amp;L</div><div class="sv" id="s-pnl">$0.00</div></div>
+    <div class="stat"><div class="sl">Open Positions</div><div class="sv" id="s-pos">0</div></div>
+    <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
+  </div>
+
+  <div id="charts-container" style="display:none;flex-wrap:wrap;gap:16px;margin-bottom:16px"></div>
+  <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
+    <div id="chart-container" style="flex:1;min-width:0"></div>
+    <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
+      <div class="ct" style="display:flex;align-items:center;gap:8px">
+        Grid Details
+        <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
+      </div>
+      <div id="grid-details-body"></div>
+    </div>
+  </div>
+
+  <div class="summary-cards" id="summary-cards">
+    <div class="summary-card"><div class="label">Win Rate</div><div class="value" id="sm-winrate">0%</div></div>
+    <div class="summary-card"><div class="label">Avg Profit</div><div class="value g" id="sm-avgprofit">$0.00</div></div>
+    <div class="summary-card"><div class="label">Total Trades</div><div class="value" id="sm-trades">0</div></div>
+    <div class="summary-card"><div class="label">Best Trade</div><div class="value g" id="sm-best">—</div></div>
+  </div>
+
+  <div class="card">
+    <div class="ct">Trading</div>
+    <div class="dex-info">Spot grid trading on Solana DEXs (Raydium + Jupiter). Paste your Solana wallet key to start. No API keys needed.</div>
+    <div style="background:var(--accent)11;border:1px solid var(--accent)22;border-radius:8px;padding:10px 14px;margin-bottom:4px;font-size:12px;color:var(--accent)">
+      &#9889; <strong>Solana</strong> — gas &lt;$0.01 per trade, routed via Jupiter aggregator for best prices
+    </div>
+
+    <div class="section-label" style="margin-top:16px">Strategy</div>
+    <select class="dd" id="strat-select" onchange="selectStrat(this.value)">
+      <option value="">— Select Strategy —</option>
+      <option value="dca">DCA — Dollar Cost Average</option>
+      <option value="grid">Grid Trading</option>
+      <option value="rsi_ema">RSI + EMA Crossover</option>
+      <option value="bbands">Bollinger Bands</option>
+      <option value="webhook">TradingView Webhook</option>
+      <option value="scalp">Scalping</option>
+      <option value="copy">Copy Trading</option>
+      <option value="arb">Arbitrage</option>
+    </select>
+
+    <div class="section-label">Trading Pair</div>
+    <div style="display:flex;gap:8px;margin-bottom:12px">
+      <select class="dd" id="pair-select" onchange="selectPair(this.value)" style="flex:1;margin-bottom:0">
+        <option value="">— Select Pair —</option>
+        <optgroup label="USDT Pairs" id="usdt-optgroup" style="display:none">
+          <option value="BTC/USDT">BTC/USDT</option>
+          <option value="ETH/USDT">ETH/USDT</option>
+          <option value="BNB/USDT">BNB/USDT</option>
+          <option value="SOL/USDT">SOL/USDT</option>
+          <option value="MATIC/USDT">MATIC/USDT</option>
+        </optgroup>
+        <optgroup label="USDC Pairs" id="usdc-optgroup">
+          <option value="SOL/USDC">SOL/USDC</option>
+          <option value="BTC/USDC">BTC/USDC</option>
+          <option value="ETH/USDC">ETH/USDC</option>
+          <option value="JUP/USDC">JUP/USDC</option>
+          <option value="WIF/USDC">WIF/USDC</option>
+        </optgroup>
+      </select>
+      <button class="btn" onclick="switchPair()" title="One-click pair switch" style="padding:9px 12px">&#128260;</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
+      <div style="flex:1">
+        <input type="text" id="custom-mint" placeholder="Paste Solana token mint address..." style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text)"/>
+      </div>
+      <div style="width:70px">
+        <input type="text" id="custom-symbol" placeholder="Symbol" maxlength="10" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);text-transform:uppercase"/>
+      </div>
+      <button class="btn" onclick="addCustomToken()" style="white-space:nowrap;font-size:11px">+ Add Token</button>
+    </div>
+
+    <div class="action-bar">
+      <button class="btn-start" id="start-btn" onclick="startBot()" disabled>Select options above</button>
+      <button class="btn-stop" onclick="stopBot()">&#9209; Stop</button>
+      <button class="btn-pause" id="pause-btn" onclick="pauseBot()" style="display:none">⏸ Pause</button>
+      <button class="btn" onclick="var el=document.getElementById('config-card');el.style.display=el.style.display==='none'?'block':'none'" style="background:var(--card);color:var(--text2);border-color:var(--border);padding:13px 16px;margin-right:4px">⚙️</button>
+      <button class="btn" id="paper-btn" onclick="togglePaper()" style="background:var(--yellow)18;color:var(--yellow);border-color:var(--yellow)44;padding:13px 20px">📋 Paper: —</button>
+    </div>
+  </div>
+
+  <div class="card" id="config-card" style="display:none">
+    <div class="ct">Configuration</div>
+    <div class="config-grid">
+      <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="cfg-risk" value="" min="0.1" max="100" step="0.1" placeholder="Loaded from state..."/></div>
+      <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
+      <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
+      <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.05" min="0.01" max="10" step="0.01"/></div>
+      <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="50" min="0" max="100" step="5"/></div>
+      <div class="config-field"><label>Grid Spread (%)</label><input type="number" id="cfg-spread" value="5" min="1" max="30" step="0.5"/></div>
+      <div class="config-field"><label>Grid Levels</label><input type="number" id="cfg-levels" value="10" min="3" max="20" step="1" onchange="updateCfg('grid_levels',this.value)"/></div>
+      <div class="config-field"><label>Auto-Compound</label><select id="cfg-compound"><option value="true">On</option><option value="false">Off</option></select></div>
+    </div>
+    <div class="section-label">Quick Presets</div>
+    <div class="preset-row">
+      <button class="preset-btn" onclick="applyPreset('conservative',event)">&#128737; Conservative</button>
+      <button class="preset-btn" onclick="applyPreset('moderate',event)">&#9878; Moderate</button>
+      <button class="preset-btn" onclick="applyPreset('aggressive',event)">&#128640; Aggressive</button>
+    </div>
+    <button class="btn" onclick="saveConfig()" style="margin-top:8px;background:var(--accent)18;color:var(--accent);border-color:var(--accent)">&#128190; Save Config</button>
+  </div>
+
+  <div class="card" id="arb-card" style="display:none">
+    <div class="ct">Arbitrage Opportunities</div>
+    <div id="arb-list"><div style="color:var(--dim);font-size:13px">Scanning for opportunities...</div></div>
+  </div>
+
+  <div class="card" id="manual-trade-card">
+    <div class="ct">Manual Trade</div>
+    <div style="display:flex;gap:10px;align-items:flex-end;flex-wrap:wrap">
+      <div style="flex:1;min-width:120px">
+        <label style="font-size:10px;color:var(--dim);font-weight:700;text-transform:uppercase">Pair</label>
+        <select id="mt-pair" class="dd" style="margin-bottom:0">
+          <option value="SOL/USDC">SOL/USDC</option>
+          <option value="BTC/USDC">BTC/USDC</option>
+          <option value="ETH/USDC">ETH/USDC</option>
+          <option value="JUP/USDC">JUP/USDC</option>
+          <option value="BONK/USDC">BONK/USDC</option>
+          <option value="WIF/USDC">WIF/USDC</option>
+          <option value="SPCX/USDC">SPCX/USDC</option>
+        </select>
+      </div>
+      <div style="flex:1;min-width:100px">
+        <label style="font-size:10px;color:var(--dim);font-weight:700;text-transform:uppercase">USDC Amount</label>
+        <input type="number" id="mt-amount" value="10" min="0.1" step="1" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;background:var(--card);color:var(--text)"/>
+      </div>
+      <button class="btn-start" onclick="manualBuy()" style="padding:10px 20px;font-size:13px;margin-right:4px">Buy</button>
+      <button class="btn-stop" onclick="manualSell()" style="padding:10px 20px;font-size:13px">Sell</button>
+    </div>
+    <div id="mt-result" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
+  </div>
+
+  <div class="card">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Trade History</span>
+      <button class="btn" onclick="exportCSV()" style="font-size:10px;padding:4px 10px">&#11015; CSV</button>
+    </div>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Pair</th><th>Action</th><th>Price</th><th>Amount</th><th>P&amp;L</th><th>Via</th></tr></thead>
+        <tbody id="trades-body"><tr><td colspan="7" style="color:var(--dim);text-align:center;padding:20px">No trades yet</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+
+
+  <div class="card">
+    <div class="ct">Live Log</div>
+    <div class="log-box" id="log-box"></div>
+  </div>
+</div>
+
+<script>
+var _chartScript = document.createElement('script');
+_chartScript.src = 'https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js';
+document.head.appendChild(_chartScript);
+var sel = {mode:"dex", strat:null, pair:null, exch:null, chain:"solana"};
+var isDark = true;
+var tradeLog = [];
+var _lastTradeTime = null;
+var toastId = 0;
+var notifRequested = false;
+
+function toggleTheme() {
+  isDark = !isDark;
+  document.body.classList.toggle("light", !isDark);
+  document.getElementById("theme-btn").textContent = isDark ? "🌙 Dark" : "☀ Light";
+  if (chart) setTimeout(function() { updateChartTheme(isDark); }, 100);
+}
+
+
+var chart = null;
+var candleSeries = null;
+var gridLines = [];
+
+function aggregateCandles(data, intervalSec) {
+  var candles = [], current = null;
+  data.forEach(function(d) {
+    var bucket = Math.floor(d.time / intervalSec) * intervalSec;
+    if (!current || current.time !== bucket) {
+      if (current) candles.push(current);
+      current = {time: bucket, open: d.value, high: d.value, low: d.value, close: d.value};
+    } else {
+      current.high = Math.max(current.high, d.value);
+      current.low = Math.min(current.low, d.value);
+      current.close = d.value;
+    }
+  });
+  if (current) candles.push(current);
+  return candles;
+}
+function initChart() {
+  try {
+    chart = LightweightCharts.createChart(document.getElementById("chart-container"), {
+      width: document.getElementById("chart-container").clientWidth || 600,
+      height: 350,
+      layout: {
+        background: {type: "solid", color: "transparent"},
+        textColor: "#888",
+      },
+      grid: {
+        vertLines: {color: "#1a1a1a"},
+        horzLines: {color: "#1a1a1a"},
+      },
+      crosshair: {
+        vertLine: {color: "#444", labelBackgroundColor: "#111"},
+        horzLine: {color: "#444", labelBackgroundColor: "#111"},
+      },
+      timeScale: {
+        borderColor: "#1a1a1a",
+        timeVisible: true,
+        secondsVisible: false,
+        barSpacing: 3,
+      },
+      rightPriceScale: {
+        borderColor: "#1a1a1a",
+      },
+    });
+    candleSeries = chart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: "#00ff9d",
+      downColor: "#ff6b6b",
+      borderUpColor: "#00ff9d",
+      borderDownColor: "#ff6b6b",
+      wickUpColor: "#00ff9d",
+      wickDownColor: "#ff6b6b",
+      priceFormat: {type: "price", precision: 4, minMove: 0.0001},
+    });
+  } catch(e) { console.log("Chart init error:", e); }
+}
+
+function updateChartTheme(isDarkMode) {
+  if (!chart) return;
+  chart.applyOptions({
+    layout: {
+      textColor: isDarkMode ? "#888" : "#666",
+    },
+    grid: {
+      vertLines: {color: isDarkMode ? "#1a1a1a" : "#e0e0e0"},
+      horzLines: {color: isDarkMode ? "#1a1a1a" : "#e0e0e0"},
+    },
+    timeScale: {
+      borderColor: isDarkMode ? "#1a1a1a" : "#d0d5dd",
+    },
+    rightPriceScale: {
+      borderColor: isDarkMode ? "#1a1a1a" : "#d0d5dd",
+    },
+  });
+}
+
+function updateChart(data, gridLevels, gridBuyZone, pair) {
+  if (!chart || !candleSeries) return;
+  // Remove old grid lines (do this first, regardless of data)
+  try {
+    gridLines.forEach(function(l) { chart.removeSeries(l); });
+  } catch(e) { console.log("Grid remove error:", e); }
+  gridLines = [];
+  if (!data || data.length < 2) return;
+
+  // Update candles
+  var candles = aggregateCandles(data, 60);
+  candleSeries.setData(candles);
+  var dataStart = candles[0].time;
+  var dataEnd = candles[candles.length - 1].time;
+
+  // Fit content then pin last candle to right edge
+  chart.timeScale().fitContent();
+  chart.timeScale().applyOptions({ barSpacing: 3 });
+  chart.timeScale().scrollToPosition(candles.length + 5, false);
+
+  // Grid overlay
+  if (!gridLevels || gridLevels.length < 2) return;
+
+  var midPrice = gridBuyZone;
+  var buyZone = gridLevels.filter(function(g) { return g <= midPrice; });
+  var sellZone = gridLevels.filter(function(g) { return g > midPrice; });
+
+  try {
+    // Buy zone lines (green)
+    buyZone.forEach(function(g) {
+      var s = chart.addSeries(LightweightCharts.LineSeries, {
+        color: "#00ff9d44",
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      s.setData([{time: dataStart, value: g}, {time: dataEnd, value: g}]);
+      gridLines.push(s);
+    });
+
+    // Sell zone lines (red)
+    sellZone.forEach(function(g) {
+      var s = chart.addSeries(LightweightCharts.LineSeries, {
+        color: "#ff6b6b44",
+        lineWidth: 1,
+        lineStyle: 2,
+        priceLineVisible: false,
+        lastValueVisible: false,
+      });
+      s.setData([{time: dataStart, value: g}, {time: dataEnd, value: g}]);
+      gridLines.push(s);
+    });
+
+    // Midpoint line (yellow, thicker)
+    var midLine = chart.addSeries(LightweightCharts.LineSeries, {
+      color: "#ffd43b88",
+      lineWidth: 2,
+      lineStyle: 2,
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    midLine.setData([{time: dataStart, value: midPrice}, {time: dataEnd, value: midPrice}]);
+    gridLines.push(midLine);
+  } catch(e) { console.log("Grid overlay error:", e); }
+}
+
+
+function showToast(msg, type) {
+  var c = document.getElementById("toast-container");
+  var t = document.createElement("div");
+  t.className = "toast " + (type || "info");
+  t.textContent = msg;
+  t.id = "t" + (++toastId);
+  c.appendChild(t);
+  setTimeout(function(){ var el = document.getElementById(t.id); if(el) el.style.animation = "fadeOut .3s ease-out"; setTimeout(function(){ if(el) el.remove(); }, 300); }, 4000);
+}
+
+function playBeep() {
+  try {
+    var ctx = new (window.AudioContext || window.webkitAudioContext)();
+    var osc = ctx.createOscillator();
+    var gain = ctx.createGain();
+    osc.connect(gain); gain.connect(ctx.destination);
+    osc.frequency.value = 880;
+    gain.gain.value = 0.08;
+    osc.start(); gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.12);
+    osc.stop(ctx.currentTime + 0.12);
+  } catch(e) {}
+}
+
+function sendNotif(title, body) {
+  if ("Notification" in window && Notification.permission === "granted") {
+    new Notification(title, {body: body});
+  }
+}
+
+function requestNotif() {
+  if (!notifRequested && "Notification" in window) {
+    Notification.requestPermission();
+    notifRequested = true;
+  }
+}
+
+function exportCSV() {
+  if (tradeLog.length === 0) { showToast("No trades to export", "error"); return; }
+  var headers = "Time,Pair,Action,Price,Amount,P&L,Via";
+  var rows = tradeLog.map(function(t) {
+    return [t.time, t.pair, t.action, t.price, t.amount, t.pnl, t.via].join(",");
+  });
+  var csv = [headers].concat(rows).join("\\n");
+  var blob = new Blob([csv], {type: "text/csv"});
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement("a");
+  a.href = url; a.download = "trades_" + new Date().toISOString().slice(0,10) + ".csv";
+  a.click(); URL.revokeObjectURL(url);
+  showToast("Exported " + tradeLog.length + " trades", "info");
+}
+
+function addCustomToken() {
+  var mint = document.getElementById("custom-mint").value.trim();
+  var symbol = document.getElementById("custom-symbol").value.trim().toUpperCase();
+  if (!mint || !symbol) { showToast("Enter mint address and symbol", "error"); return; }
+  if (mint.length < 32 || mint.length > 44) { showToast("Invalid mint address", "error"); return; }
+  // Add to dropdown
+  var pair = symbol + "/USDC";
+  var optgroup = document.getElementById("usdc-optgroup");
+  var existing = document.querySelector("#usdc-optgroup option[value='" + pair + "']");
+  if (existing) { showToast(pair + " already exists", "error"); return; }
+  var opt = document.createElement("option");
+  opt.value = pair; opt.textContent = pair;
+  optgroup.appendChild(opt);
+  // Notify server to add mint
+  apiFetch("/add_token", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({symbol: symbol, mint: mint, pair: pair})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      document.getElementById("pair-select").value = pair;
+      selectPair(pair);
+      document.getElementById("custom-mint").value = "";
+      document.getElementById("custom-symbol").value = "";
+      showToast("Added " + pair, "info");
+    } else {
+      showToast(d.error || "Failed to add token", "error");
+    }
+  }).catch(function(e) { showToast("Error adding token", "error"); });
+}
+
+function switchPair() {
+  var common = ["SOL/USDC","BTC/USDC","ETH/USDC","JUP/USDC","BONK/USDC","WIF/USDC"];
+  var current = sel.pair;
+  if (!current) { showToast("Select a pair first", "error"); return; }
+  var idx = common.indexOf(current);
+  var next = common[(idx + 1) % common.length];
+  var ps = document.getElementById("pair-select");
+  ps.value = next;
+  selectPair(next);
+  showToast("Switched to " + next, "info");
+}
+
+function applyPreset(name, event) {
+  var presets = {
+    conservative: {risk: 1, maxpos: 250, stoploss: 6, trailing: 0.3, partial: 25, spread: 3},
+    moderate: {risk: 2, maxpos: 500, stoploss: 8, trailing: 0.5, partial: 50, spread: 5},
+    aggressive: {risk: 5, maxpos: 1000, stoploss: 12, trailing: 1.0, partial: 75, spread: 8}
+  };
+  var p = presets[name];
+  document.getElementById("cfg-risk").value = p.risk;
+  document.getElementById("cfg-maxpos").value = p.maxpos;
+  document.getElementById("cfg-stoploss").value = p.stoploss;
+  document.getElementById("cfg-trailing").value = p.trailing;
+  document.getElementById("cfg-partial").value = p.partial;
+  document.getElementById("cfg-spread").value = p.spread;
+  document.querySelectorAll(".preset-btn").forEach(function(b) { b.classList.remove("active"); });
+  event.target.classList.add("active");
+  showToast("Preset '" + name + "' applied", "info");
+}
+
+function updateCfg(key, val) {
+  var body = {};
+  body[key] = val;
+  apiFetch("/config", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(body)
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    showToast("Config updated", "info");
+  });
+}
+function saveConfig() {
+  var cfg = {
+    risk_pct: parseFloat(document.getElementById("cfg-risk").value) || null,
+    max_pos: parseInt(document.getElementById("cfg-maxpos").value) || 500,
+    grid_stop_loss_pct: parseFloat(document.getElementById("cfg-stoploss").value) || 8,
+    trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.05,
+    partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
+    base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
+        grid_levels: parseInt(document.getElementById("cfg-levels").value) || 10,
+    auto_compound: document.getElementById("cfg-compound").value === "true"
+  };
+  apiFetch("/config", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(cfg)
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    showToast("Config saved", "info");
+  }).catch(function() { showToast("Failed to save config", "error"); });
+}
+
+function selectStrat(s) {
+  if (!s) return;
+  sel.strat = s;
+  document.getElementById("arb-card").style.display = s=="arb"?"block":"none";
+  document.getElementById("config-card").style.display = "block";
+  updateBtn();
+}
+
+function selectPair(p) {
+  if (!p) return;
+  sel.pair = p;
+  updateBtn();
+  // Immediately refresh grid details for selected pair
+  refresh();
+}
+
+function updateBtn() {
+  var btn = document.getElementById("start-btn");
+  // Fall back to reading dropdowns directly if sel not set
+  var st = sel.strat || document.getElementById("strat-select").value;
+  var pr = sel.pair || document.getElementById("pair-select").value;
+  var ready = st && pr;
+  if (ready) {
+    sel.strat = st; sel.pair = pr;
+    btn.disabled = false;
+    btn.textContent = "Start " + st.toUpperCase() + " on " + pr;
+  } else {
+    btn.disabled = true;
+    btn.textContent = "Select strategy and pair above";
+  }
+}
+
+// Also enable button on ANY dropdown change
+document.getElementById("strat-select").addEventListener("change", updateBtn);
+document.getElementById("pair-select").addEventListener("change", updateBtn);
+
+function startBot() {
+  var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
+  apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
+    showToast("Bot started: " + sel.strat.toUpperCase(), "info");
+    document.getElementById("pause-btn").style.display = "inline-block";
+    document.getElementById("pause-btn").textContent = "⏸ Pause";
+  });
+}
+
+function stopBot() {
+  apiFetch("/stop").then(function(r) { return r.json(); }).then(function(d) {
+    showToast("Bot stopped", "info");
+    document.getElementById("pause-btn").style.display = "none";
+  });
+}
+
+function pauseBot() {
+  apiFetch("/pause").then(function(r) { return r.json(); }).then(function(d) {
+    var paused = d.paused || d.status === "paused";
+    document.getElementById("pause-btn").textContent = paused ? "▶ Resume" : "⏸ Pause";
+    showToast(paused ? "Bot paused" : "Bot resumed", "info");
+  }).catch(function() {
+    var btn = document.getElementById("pause-btn");
+    var paused = btn.textContent.indexOf("Pause") !== -1;
+    btn.textContent = paused ? "▶ Resume" : "⏸ Pause";
+    showToast(paused ? "Bot paused" : "Bot resumed", "info");
+  });
+}
+
+function pnlHtml(v) {
+  if (v == null || v === undefined) return "—";
+  var cls = v >= 0 ? "badge badge-p" : "badge badge-l";
+  return "<span class='" + cls + "'>" + (v >= 0 ? "+" : "") + "$" + Math.abs(v).toFixed(2) + "</span>";
+}
+
+function killSwitch() {
+  if (!confirm("🛑 KILL SWITCH: Close ALL positions on ALL pairs? This cannot be undone.")) return;
+  apiFetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
+    showToast("KILL: "+d.closed+" positions closed, $"+d.total_value.toFixed(2),"error");
+  }).catch(function(){showToast("Kill failed","error")});
+}
+
+function runBacktest() {
+  var pair = document.getElementById("pair-select").value;
+  var strategy = document.getElementById("strat-select").value;
+  showToast("Running backtest on " + pair + "...", "info");
+  apiFetch("/backtest", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pair: pair, strategy: strategy})
+  })
+    .then(function(r) { return r.json(); })
+    .then(function(d) {
+      if (d.error) { showToast("Backtest error: " + d.error, "error"); return; }
+      var msg = "Backtest: " + d.total_trades + " trades | Win: " + d.win_rate + "% | PnL: $" + (d.total_pnl||0).toFixed(2) + " | Drawdown: " + (d.max_drawdown||0).toFixed(1) + "%";
+      showToast(msg, "info");
+      if (d.trades && d.trades.length) {
+        var lines = d.trades.slice(0, 5).map(function(t) { return t.action + " @ $" + t.price.toFixed(2) + " PnL: $" + (t.pnl||0).toFixed(2); });
+        console.log("Backtest: " + lines.join(" | "));
+      } else {
+        showToast("Backtest done: 0 simulated trades in range", "info");
+      }
+    })
+    .catch(function(e) { showToast("Backtest failed: " + e, "error"); });
+}
+
+function manualBuy() {
+  var pair = document.getElementById("mt-pair").value;
+  var amt = parseFloat(document.getElementById("mt-amount").value) || 10;
+  if (amt <= 0) { showToast("Enter amount > 0", "error"); return; }
+  document.getElementById("mt-result").innerHTML = '<span style="color:var(--yellow)">Buying ' + amt + ' USDC of ' + pair + '...</span>';
+  apiFetch("/manual_trade", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pair: pair, side: "buy", amount_usdc: amt})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--accent)">✓ Bought ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + '</span>';
+      showToast("Buy executed: " + d.amount + " " + pair.split('/')[0], "trade");
+    } else {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ ' + (d.error || "Buy failed") + '</span>';
+      showToast("Buy failed: " + (d.error || "unknown"), "error");
+    }
+  }).catch(function(e) {
+    document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ Error: ' + e + '</span>';
+    showToast("Buy error", "error");
+  });
+}
+
+function manualSell() {
+  var pair = document.getElementById("mt-pair").value;
+  var amt = parseFloat(document.getElementById("mt-amount").value) || 10;
+  if (amt <= 0) { showToast("Enter amount > 0", "error"); return; }
+  document.getElementById("mt-result").innerHTML = '<span style="color:var(--yellow)">Selling ' + amt + ' USDC worth of ' + pair + '...</span>';
+  apiFetch("/manual_trade", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pair: pair, side: "sell", amount_usdc: amt})
+  }).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok) {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--accent)">✓ Sold ' + d.amount + ' ' + pair.split('/')[0] + ' @ $' + d.price.toFixed(2) + ' | Received: $' + d.received.toFixed(2) + '</span>';
+      showToast("Sell executed: $" + d.received.toFixed(2), "trade");
+    } else {
+      document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ ' + (d.error || "Sell failed") + '</span>';
+      showToast("Sell failed: " + (d.error || "unknown"), "error");
+    }
+  }).catch(function(e) {
+    document.getElementById("mt-result").innerHTML = '<span style="color:var(--red)">✗ Error: ' + e + '</span>';
+    showToast("Sell error", "error");
+  });
+}
+
+function togglePaper() {
+  apiFetch("/toggle_paper").then(function(r) { return r.json(); }).then(function(d) {
+    var btn = document.getElementById("paper-btn");
+    var on = d.paper_trading;
+    btn.textContent = "📋 Paper: " + (on ? "ON" : "OFF");
+    btn.style.color = on ? "var(--yellow)" : "var(--red)";
+    btn.style.borderColor = on ? "var(--yellow)44" : "var(--red)44";
+    btn.style.background = on ? "var(--yellow)18" : "var(--red)18";
+    showToast("Paper trading: " + (on ? "ON" : "OFF"), "info");
+  });
+}
+
+function refresh() {
+  apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
+    try {
+    var on = d.running;
+    document.getElementById("dot").className = "dot" + (on ? " on" : "");
+    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
+    document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
+    // Multi-pair mode: show per-pair charts when 2+ active pairs
+    var multiPair = d.active_pairs && d.active_pairs.length >= 2;
+    var singleRow = document.getElementById("single-chart-row");
+    var chartsWrap = document.getElementById("charts-container");
+    // Always clean up and create/update multi-pair cards
+    if (chartsWrap && d.active_pairs && d.active_pairs.length) {
+      var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
+      var activeSet = {};
+      d.active_pairs.forEach(function(p) { activeSet[p] = true; });
+      allCards.forEach(function(card) {
+        var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
+        if (!activeSet[cardPair]) card.remove();
+      });
+    }
+    // Show/hide containers based on pair count
+    if (multiPair) {
+      if (singleRow) singleRow.style.display = "none";
+      if (chartsWrap) chartsWrap.style.display = "flex";
+    } else {
+      if (singleRow) singleRow.style.display = "flex";
+      if (chartsWrap) chartsWrap.style.display = "none";
+    }
+    // Create/update cards for all active pairs
+    if (d.active_pairs && d.active_pairs.length) {
+      var multiPairs = d.active_pairs;
+      multiPairs.forEach(function(pair) {
+        var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
+        var card = document.getElementById(cardId);
+        if (!card) {
+          card = document.createElement("div");
+          card.id = cardId;
+          card.style.cssText = "flex:1;min-width:320px;max-width:calc(50% - 8px);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;";
+          card.innerHTML = '<div style="font-weight:600;color:#14b8a6;margin-bottom:8px">' + pair + '</div>' +
+            '<div id="' + cardId + '-price" style="font-size:18px;font-weight:700;margin-bottom:8px">--</div>' +
+            '<div id="' + cardId + '-chart" style="height:200px"></div>' +
+            '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
+          chartsWrap.appendChild(card);
+          // Create chart immediately
+          try {
+            var chartEl = document.getElementById(cardId + "-chart");
+            if (chartEl) {
+              var w = Math.max(chartEl.clientWidth || 380, 380);
+              var ch = LightweightCharts.createChart(chartEl, {
+                width: w, height: 200,
+              layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+              grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+              timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
+              rightPriceScale: { borderColor: "#1a1a1a" }
+            });
+            card._chart = ch;
+            card._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
+              upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+              wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
+            });
+            }
+          } catch(e) { console.log("Chart error for " + pair, e); }
+        }
+        // Recreate chart if missing (e.g. from previous deploy without _series)
+        if (!card._series || !card._chart) {
+          try {
+            var chartEl = document.getElementById(cardId + "-chart");
+            if (chartEl) {
+              var w = Math.max(chartEl.clientWidth || 380, 380);
+              var ch = LightweightCharts.createChart(chartEl, {
+                width: w, height: 200,
+                layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+                grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+                timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
+                rightPriceScale: { borderColor: "#1a1a1a" }
+              });
+              card._chart = ch;
+              card._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
+                upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+                wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
+              });
+            }
+          } catch(e) { console.log("Chart recovery error for " + pair, e); }
+        }
+        // Update chart data
+        var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
+        if (card._series) {
+          var chartData = [];
+          if (ph.length >= 1) {
+            for (var j = 0; j < ph.length; j++) {
+              var p = ph[j];
+              var o = j > 0 ? ph[j-1].value : p.value;
+              chartData.push({time: p.time, open: o, high: Math.max(o, p.value), low: Math.min(o, p.value), close: p.value});
+            }
+            // If only 1 point, duplicate it so candles render
+            if (ph.length === 1) {
+              chartData.push({time: ph[0].time - 1, open: ph[0].value, high: ph[0].value, low: ph[0].value, close: ph[0].value});
+            }
+          }
+          if (chartData.length) card._series.setData(chartData);
+        }
+        // Update price
+        var lastPrice = ph.length ? ph[ph.length-1].value : (d.price || 0);
+        var priceEl = document.getElementById(cardId + "-price");
+        if (priceEl && lastPrice !== undefined && lastPrice !== null) priceEl.textContent = "$" + (typeof lastPrice === "number" ? lastPrice.toFixed(6) : lastPrice);
+        // Update info with full grid details
+        var gp = d.grid_pairs && d.grid_pairs[pair];
+        var infoEl = document.getElementById(cardId + "-info");
+        if (infoEl && gp && gp.grids) {
+          var gl = gp.grids;
+          var midIdx = gp.mid_idx != null ? gp.mid_idx : Math.floor(gl.length / 2);
+          var fc = gp.filled ? Object.keys(gp.filled).length : 0;
+          var curP = lastPrice || 0;
+          var trailActive = gp.trailing_sell_active || false;
+          var html = '<div style="font-size:11px;margin-top:8px">';
+          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + '</span>';
+          if (trailActive) html += ' <span style="color:#ff6b6b">⚠ Trailing</span>';
+          html += '<div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:2px;font-size:10px">';
+          for (var i = 0; i < gl.length; i++) {
+            var isFilled = gp.filled && gp.filled[i] != null;
+            var isMid = i === midIdx;
+            var isBuy = i < midIdx;
+            var color = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
+            var marker = isFilled ? "●" : isMid ? "◇" : isBuy ? "△" : "▽";
+            html += '<span style="color:' + color + '">' + marker + '$' + gl[i].toFixed(2) + '</span>';
+          }
+          html += '</div></div>';
+          infoEl.innerHTML = html;
+        }
+      });
+    }
+    if (!multiPair && d.price_history && d.price_history.length > 1) {
+      // Show grid for currently selected pair
+      var viewPair = sel.pair || d.pair || "SOL/USDC";
+      var gp = d.grid_pairs && d.grid_pairs[viewPair];
+      var levels = gp ? gp.grids : d.grid_levels;
+      var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
+      updateChart(d.price_history, levels, buyZone, viewPair);
+      // Override grid details for selected pair
+      if (gp) {
+        d.grid_levels = gp.grids;
+        d.grid_buy_zone = gp.grids[gp.mid_idx];
+        d.grid_filled = gp.filled;
+        d.grid_mid_idx = gp.mid_idx;
+        d.grid_trailing_active = gp.trailing_sell_active;
+        d.grid_trailing_high = gp.trailing_high;
+      }
+    }
+    document.getElementById("s-balance").textContent = d.balance > 0 ? "$" + (d.balance||0).toFixed(2) : "—";
+    document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + (d.sol_usdc||0).toFixed(2) + " USDT: $" + (d.sol_usdt||0).toFixed(2) + ")" : "—";
+    document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
+    document.getElementById("s-mode").style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
+    var pb = document.getElementById("paper-btn");
+    if (pb) {
+      pb.textContent = "📋 Paper: " + (d.paper_trading ? "ON" : "OFF");
+      pb.style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
+      pb.style.borderColor = d.paper_trading ? "var(--yellow)44" : "var(--red)44";
+      pb.style.background = d.paper_trading ? "var(--yellow)18" : "var(--red)18";
+    }
+    document.getElementById("s-pnl").innerHTML = d.pnl != null ? pnlHtml(d.pnl) : "$0.00";
+    document.getElementById("s-pos").textContent = d.positions != null && d.positions.length != null ? d.positions.length : 0;
+
+    // Update pause button state
+    if (on) {
+      document.getElementById("pause-btn").style.display = "inline-block";
+      document.getElementById("pause-btn").textContent = d.paused ? "▶ Resume" : "⏸ Pause";
+    } else {
+      document.getElementById("pause-btn").style.display = "none";
+    }
+
+    // Update summary cards
+    document.getElementById("sm-winrate").textContent = d.win_rate != null ? d.win_rate + "%" : "0%";
+    document.getElementById("sm-avgprofit").textContent = d.avg_profit != null ? "$" + (d.avg_profit||0).toFixed(2) : "$0.00";
+    document.getElementById("sm-trades").textContent = d.trades_count != null ? d.trades_count : 0;
+    document.getElementById("sm-best").textContent = d.best_trade != null ? "$" + (d.best_trade||0).toFixed(2) : "—";
+
+    // Update trade table
+    if (d.trades_list && d.trades_list.length) {
+      var html = "";
+      tradeLog = [];
+      d.trades_list.forEach(function(t) {
+        var actionClass = t.action === "buy" ? "buy" : t.action === "sell" ? "sell" : "stop";
+        var pnlBadge = t.pnl != null ? pnlHtml(t.pnl) : "—";
+        html += "<tr><td>" + (t.pair || "—") + "</td><td class='" + actionClass + "'>" + t.action.toUpperCase() + "</td><td>$" + t.price + "</td><td>" + t.amount + "</td><td>" + pnlBadge + "</td><td>" + (t.via || "—") + "</td></tr>";
+        // Log to trade log for CSV export
+        tradeLog.push({time: t.time, action: t.action, price: t.price, amount: t.amount, pnl: t.pnl, via: t.via || "", strategy: d.strategy, pair: t.pair || d.pair});
+      });
+      document.getElementById("trades-body").innerHTML = html;
+    }
+
+    // Update positions with badges
+    if (d.positions_list && d.positions_list.length) {
+      var pHtml = "";
+      d.positions_list.forEach(function(p) {
+        var badge = p.pnl != null ? pnlHtml(p.pnl) : "—";
+        pHtml += "<div class='arb-row'><span>" + p.token + " @ $" + p.entry + "</span><span>" + badge + "</span></div>";
+      });
+      // Could add a positions card here
+    }
+    // ── Grid Details ──
+    var gdCard = document.getElementById("grid-details-card");
+    // Fall back to grid_pairs if top-level grid data is empty (e.g. after crash)
+    if (!d.grid_levels || d.grid_levels.length < 2) {
+      var pairs = d.grid_pairs || {};
+      var keys = Object.keys(pairs);
+      if (keys.length > 0) {
+        var first = pairs[keys[0]];
+        if (first.grids && first.grids.length >= 2) {
+          d.grid_levels = first.grids;
+          d.grid_mid_idx = first.mid_idx;
+          d.grid_filled = first.filled || {};
+          d.grid_trailing_active = first.trailing_sell_active || false;
+          d.grid_trailing_high = first.trailing_high || 0;
+        }
+      }
+    }
+    if (d.grid_levels && d.grid_levels.length >= 2) {
+      gdCard.style.display = "block";
+      var gl = d.grid_levels;
+      var midIdx = d.grid_mid_idx != null ? d.grid_mid_idx : Math.floor(gl.length / 2);
+      var midPrice = gl[midIdx];
+      var curPrice = d.price || 0;
+      var filled = d.grid_filled || {};
+      var trailActive = d.grid_trailing_active || false;
+      var trailHigh = d.grid_trailing_high || 0;
+      var trailingPct = 0.5;
+      document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
+      var html = '<div style="margin-top:12px">';
+      var minP = gl[0], maxP = gl[gl.length-1], range = maxP - minP;
+      var curPct = range > 0 ? ((curPrice - minP) / range * 100) : 50;
+      html += '<div style="position:relative;height:6px;background:linear-gradient(90deg,#00ff9d44,#ffd43b44,#ff6b6b44);border-radius:3px;margin-bottom:16px">';
+      html += '<div style="position:absolute;left:' + curPct.toFixed(0) + '%;top:-4px;width:3px;height:14px;background:#3399ff;border-radius:1px"></div>';
+      html += '<div style="display:flex;justify-content:space-between;font-size:10px;color:var(--dim);margin-top:8px">';
+      html += '<span style="color:#00ff9d">$' + minP.toFixed(0) + '</span>';
+      html += '<span style="color:#ffd43b">Mid $' + midPrice.toFixed(0) + '</span>';
+      html += '<span style="color:#ff6b6b">$' + maxP.toFixed(0) + '</span></div></div>';
+      html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;font-size:11px;color:var(--dim);padding:4px 8px;text-transform:uppercase;letter-spacing:0.5px">';
+      html += '<span>Zone</span><span>Price</span><span>Status</span><span style="text-align:right">Dist</span></div>';
+      for (var i = gl.length - 1; i >= 0; i--) {
+        var isMid = i === midIdx;
+        var isBuy = i < midIdx;
+        var isFilled = filled[i] != null;
+        var isCur = (i < gl.length - 1 && curPrice >= gl[i] && curPrice < gl[i+1]) || (i === gl.length - 1 && curPrice >= gl[i]);
+        var zone = isMid ? "MID" : isBuy ? "BUY" : "SELL";
+        var zoneColor = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
+        var bgColor = isMid ? "#ffd43b08" : isBuy ? "#00ff9d08" : "#ff6b6b08";
+        var borderColor = isMid ? "#ffd43b44" : isBuy ? "#00ff9d44" : "#ff6b6b44";
+        if (isCur) { zone = "\u25CF"; zoneColor = "#3399ff"; bgColor = "#3399ff10"; borderColor = "#3399ff"; }
+        if (isFilled) { zoneColor = "#00ff9d"; bgColor = "#00ff9d15"; borderColor = "#00ff9d"; }
+        var dist = curPrice > 0 ? (gl[i] - curPrice) : 0;
+        var distStr = dist > 0 ? "+$" + dist.toFixed(0) : dist < 0 ? "-$" + Math.abs(dist).toFixed(0) : "\u2014";
+        var status = isFilled ? "\u2705 $" + filled[i].price.toFixed(0) : isCur ? "\u2190 Current" : isMid ? "Buy Zone \u2191" : "Waiting";
+        if (isFilled && trailActive && i < midIdx) status = "\u2705 Trailing...";
+        if (isFilled && !trailActive && i < midIdx) status = "\u2705 Filled";
+        html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;align-items:center;padding:5px 8px;border-radius:4px;margin-bottom:2px;font-size:12px;background:' + bgColor + ';border-left:2px solid ' + borderColor + '">';
+        html += '<span style="font-weight:600;color:' + zoneColor + ';font-size:10px;text-transform:uppercase">' + zone + '</span>';
+        html += '<span style="font-family:monospace;font-weight:600">$' + gl[i].toFixed(2) + '</span>';
+        html += '<span style="color:' + (isFilled ? "#00ff9d" : isCur ? "#3399ff" : "var(--text)") + '">' + status + '</span>';
+        html += '<span style="text-align:right;font-family:monospace;font-size:11px;color:' + (dist > 0 ? "#ff6b6b" : dist < 0 ? "#00ff9d" : "var(--dim)") + '">' + distStr + '</span></div>';
+      }
+      html += '</div>';
+      if (trailActive && trailHigh > 0) {
+        var sellTrigger = trailHigh * (1 - trailingPct / 100);
+        var distToSell = curPrice - sellTrigger;
+        html += '<div style="margin-top:12px;padding:10px 12px;background:#ffd43b08;border:1px solid #ffd43b33;border-radius:6px">';
+        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
+        html += '<span>🎯</span><span style="font-weight:600;color:#ffd43b">Take-profit triggered \u2014 waiting for pullback</span></div>';
+        html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">';
+        html += '<div><span style="color:var(--dim);font-size:10px">Peak</span><div style="font-weight:600;font-family:monospace;color:#ffd43b">$' + trailHigh.toFixed(2) + '</div></div>';
+        html += '<div><span style="color:var(--dim);font-size:10px">Sell Trigger</span><div style="font-weight:600;font-family:monospace;color:#ff6b6b">$' + sellTrigger.toFixed(2) + '</div></div>';
+        html += '<div><span style="color:var(--dim);font-size:10px">Distance</span><div style="font-weight:600;font-family:monospace;color:' + (distToSell > 0 ? "#ffd43b" : "#00ff9d") + '">$' + Math.abs(distToSell).toFixed(2) + '</div></div></div></div>';
+      }
+      document.getElementById("grid-details-body").innerHTML = html;
+    } else {
+      gdCard.style.display = "block";
+      document.getElementById("gdt-status").textContent = "\u23F8 Idle \u2014 start a Grid strategy to see levels";
+      document.getElementById("grid-details-body").innerHTML = '<div style="padding:20px;text-align:center;color:var(--dim);font-size:13px;margin-top:40px">Start a Grid strategy to see buy/sell levels, filled positions, and trailing sell status here.</div>';
+    }
+    // Update log
+    if (d.log && d.log.length) {
+      var logHtml = d.log.slice(0, 30).map(function(l) {
+        var cls = "li";
+        if (l.includes("BUY") || l.includes("buy")) cls = "lw";
+        if (l.includes("SELL") || l.includes("sell")) cls = "buy";
+        if (l.includes("ERROR") || l.includes("error")) cls = "le";
+        return "<div class='" + cls + "'>" + l + "</div>";
+      }).join("");
+      document.getElementById("log-box").innerHTML = logHtml;
+    }
+
+    // Toast on new trade (only once per trade)
+    if (d.last_trade && d.last_trade.action && d.last_trade.time != _lastTradeTime) {
+      _lastTradeTime = d.last_trade.time;
+      showToast(d.last_trade.action.toUpperCase() + " " + d.last_trade.pair + " @ $" + d.last_trade.price, "trade");
+      playBeep();
+      requestNotif();
+      sendNotif("GridRunner", d.last_trade.action.toUpperCase() + " " + d.last_trade.pair + " @ $" + d.last_trade.price);
+    }
+
+    // Update config display
+    if (d.config) {
+      document.getElementById("cfg-risk").value = d.config.risk_pct || "";
+      document.getElementById("cfg-maxpos").value = d.config.max_pos || 500;
+      document.getElementById("cfg-stoploss").value = d.config.grid_stop_loss_pct || 8;
+      var ct = document.getElementById("cfg-trailing"); if (document.activeElement !== ct) ct.value = d.config.trailing_pct || 0.05;
+      document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
+      document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
+      document.getElementById("cfg-levels").value = d.config.grid_levels || 10;
+      document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
+    }
+  } catch(e) { console.error("refresh error:", e); } }).catch(console.error);
+}
+
+window.addEventListener("resize", function() {
+  if (chart) {
+    var w = document.getElementById("chart-container").clientWidth || 600;
+    chart.applyOptions({width: w});
+  }
+});
+
+  var API_SECRET = "{{ api_secret }}";
+  function apiFetch(url, opts) {
+    opts = opts || {};
+    opts.headers = opts.headers || {};
+    if (API_SECRET) opts.headers["X-API-Secret"] = API_SECRET;
+    return fetch(url, opts);
+  }
+setInterval(refresh, 3000);
+refresh();
+function _startChart() {
+  if (typeof LightweightCharts !== 'undefined') { initChart(); }
+  else { setTimeout(_startChart, 200); }
+}
+_startChart();
+</script>
+</body>
+</html>
