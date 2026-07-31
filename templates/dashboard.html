@@ -1047,7 +1047,9 @@ window.addEventListener("resize", function() {
 setInterval(refresh, 3000);
 refresh();
 function _startChart() {
-  if (typeof LightweightCharts !== 'undefined') { initChart(); }
+  if (typeof LightweightCharts !== 'undefined') {
+    if (!window._wasMulti) { initChart(); }
+  }
   else { setTimeout(_startChart, 200); }
 }
 _startChart();
