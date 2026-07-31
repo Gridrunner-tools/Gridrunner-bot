@@ -3081,14 +3081,24 @@ function refresh() {
     if (multiPair) {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
+      window._wasMulti = true;
+    } else {
+      window._wasMulti = false;
+      if (singleRow) singleRow.style.display = "flex";
+      if (chartsWrap) chartsWrap.style.display = "none";
+    }
+    // Render multi-pair cards whenever we have 2+ pairs
+    if (d.active_pairs && d.active_pairs.length >= 2) {
       // Clean up cards for pairs no longer active
-      var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
-      var activeSet = {};
-      d.active_pairs.forEach(function(p) { activeSet[p] = true; });
-      allCards.forEach(function(card) {
-        var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
-        if (!activeSet[cardPair]) card.remove();
-      });
+      if (chartsWrap) {
+        var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
+        var activeSet = {};
+        d.active_pairs.forEach(function(p) { activeSet[p] = true; });
+        allCards.forEach(function(card) {
+          var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
+          if (!activeSet[cardPair]) card.remove();
+        });
+      }
       var multiPairs = d.active_pairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
@@ -3169,9 +3179,6 @@ function refresh() {
           infoEl.innerHTML = html;
         }
       });
-    } else {
-      if (singleRow) singleRow.style.display = "flex";
-      if (chartsWrap) chartsWrap.style.display = "none";
     }
     if (!multiPair && d.price_history && d.price_history.length > 1) {
       // Show grid for currently selected pair
