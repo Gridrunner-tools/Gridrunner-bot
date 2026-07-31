@@ -1872,7 +1872,7 @@ def run_grid():
             gs = state["grid_pairs"].get(pair)
             if not gs: continue
             grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
-            trailing_pct = state["config"].get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
+            trailing_pct = cfg.get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
             trailing_sell_active = gs["trailing_sell_active"]
             trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
@@ -2726,14 +2726,7 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataEnd = candles[candles.length - 1].time;
 
   // Pin to right edge without stretching candles
-  if (candles.length > 60) {
-    chart.timeScale().setVisibleLogicalRange({
-      from: candles.length - 60,
-      to: candles.length + 1
-    });
-  } else {
-    chart.timeScale().scrollToPosition(candles.length, false);
-  }
+    chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
