@@ -1872,7 +1872,7 @@ def run_grid():
             gs = state["grid_pairs"].get(pair)
             if not gs: continue
             grids = gs["grids"]; mid_idx = gs["mid_idx"]; filled = gs["filled"]
-            trailing_pct = state["config"].get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
+            trailing_pct = cfg.get("trailing_pct", 0.5); trailing_high = gs["trailing_high"]
             trailing_sell_active = gs["trailing_sell_active"]
             trailing_low = gs["trailing_low"]; trailing_buy_active = gs["trailing_buy_active"]
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
@@ -3088,14 +3088,22 @@ function refresh() {
     if (multiPair) {
       if (singleRow) singleRow.style.display = "none";
       if (chartsWrap) chartsWrap.style.display = "flex";
-      // Clean up cards for pairs no longer active
-      var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
-      var activeSet = {};
-      d.active_pairs.forEach(function(p) { activeSet[p] = true; });
-      allCards.forEach(function(card) {
-        var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
-        if (!activeSet[cardPair]) card.remove();
-      });
+      window._wasMulti = true;
+    } else if (window._wasMulti && d.active_pairs && d.active_pairs.length >= 2) {
+      // Stay in multi mode if we were previously multi and still have pairs
+      if (singleRow) singleRow.style.display = "none";
+      if (chartsWrap) chartsWrap.style.display = "flex";
+    } else {
+      // Clean up cards for pairs no longer active (only if we have pair data)
+      if (chartsWrap && d.active_pairs && d.active_pairs.length) {
+        var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
+        var activeSet = {};
+        d.active_pairs.forEach(function(p) { activeSet[p] = true; });
+        allCards.forEach(function(card) {
+          var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
+          if (!activeSet[cardPair]) card.remove();
+        });
+      }
       var multiPairs = d.active_pairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
@@ -3176,10 +3184,10 @@ function refresh() {
           infoEl.innerHTML = html;
         }
       });
-    } else {
-      if (singleRow) singleRow.style.display = "flex";
-      if (chartsWrap) chartsWrap.style.display = "none";
-    }
+        window._wasMulti = false;
+        if (singleRow) singleRow.style.display = "flex";
+        if (chartsWrap) chartsWrap.style.display = "none";
+      }
     if (!multiPair && d.price_history && d.price_history.length > 1) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
