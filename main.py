@@ -181,6 +181,20 @@ def validate_license():
     return True, info
 
 # ── Config from environment ───────────────────────────────────────────────────
+PAPER_MODE_FILE = "paper_mode.json"
+def _load_paper_mode(default):
+    if os.environ.get("PAPER_TRADING") is not None: return default
+    try:
+        with open(PAPER_MODE_FILE) as f:
+            value = json.load(f).get("paper_trading")
+            if isinstance(value, bool): return value
+    except (OSError, ValueError, TypeError): pass
+    return default
+def _save_paper_mode(value):
+    tmp = PAPER_MODE_FILE + ".tmp"
+    with open(tmp, "w") as f: json.dump({"paper_trading": bool(value)}, f)
+    os.replace(tmp, PAPER_MODE_FILE)
+
 cfg = {
     # CEX
     "api_key":      os.environ.get("API_KEY", ""),
@@ -234,7 +248,7 @@ state = {
     "log":           [],
     "error":         None,
     "arb_opps":      [],
-    "paper_trading": load_paper_mode(cfg["paper_trading"]),
+    "paper_trading": (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
     "license_valid":  True,
     "license_type":   "demo",
     "license_expires": None,
@@ -3212,13 +3226,15 @@ function refresh() {
         }
       });
     }
-    if (!multiPair && d.price_history && d.price_history.length > 1) {
+    if (!multiPair) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
+      var pairHistory = d.price_history_pairs && d.price_history_pairs[viewPair];
+      var chartHistory = (pairHistory && pairHistory.length) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart((d.price_history_pairs && d.price_history_pairs[viewPair]) || [], levels, buyZone, viewPair);
+      updateChart(chartHistory, levels, buyZone, viewPair);
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
