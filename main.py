@@ -162,6 +162,20 @@ def validate_license():
     return True, info
 
 # ── Config from environment ───────────────────────────────────────────────────
+PAPER_MODE_FILE = "paper_mode.json"
+def _load_paper_mode(default):
+    if os.environ.get("PAPER_TRADING") is not None: return default
+    try:
+        with open(PAPER_MODE_FILE) as f:
+            value = json.load(f).get("paper_trading")
+            if isinstance(value, bool): return value
+    except (OSError, ValueError, TypeError): pass
+    return default
+def _save_paper_mode(value):
+    tmp = PAPER_MODE_FILE + ".tmp"
+    with open(tmp, "w") as f: json.dump({"paper_trading": bool(value)}, f)
+    os.replace(tmp, PAPER_MODE_FILE)
+
 cfg = {
     # CEX
     "api_key":      os.environ.get("API_KEY", ""),
@@ -215,7 +229,7 @@ state = {
     "log":           [],
     "error":         None,
     "arb_opps":      [],
-    "paper_trading": cfg["paper_trading"],
+    "paper_trading": _load_paper_mode(cfg["paper_trading"]),
     "license_valid":  True,
     "license_type":   "demo",
     "license_expires": None,
@@ -777,9 +791,13 @@ def start_background_loops():
                 p = get_price(pair)
                 if p > 0:
                     state["price"] = p
-                    state["price_history"].append({"time": int(time.time()), "value": p})
-                    if len(state["price_history"]) > 1440:
-                        state["price_history"] = state["price_history"][-1440:]
+                    now = int(time.time())
+                    point = {"time": now, "value": p}
+                    state["price_history"].append(point)
+                    if len(state["price_history"]) > 1440: state["price_history"] = state["price_history"][-1440:]
+                    pair_history = state["price_history_pairs"].setdefault(pair, [])
+                    if not pair_history or pair_history[-1]["time"] != now: pair_history.append(point)
+                    if len(pair_history) > 200: state["price_history_pairs"][pair] = pair_history[-200:]
             except Exception as e:
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
@@ -3180,13 +3198,15 @@ function refresh() {
         }
       });
     }
-    if (!multiPair && d.price_history && d.price_history.length > 1) {
+    if (!multiPair) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
+      var pairHistory = d.price_history_pairs && d.price_history_pairs[viewPair];
+      var chartHistory = (pairHistory && pairHistory.length) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart(d.price_history, levels, buyZone, viewPair);
+      updateChart(chartHistory, levels, buyZone, viewPair);
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
@@ -3588,6 +3608,8 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(403,"application/json",json.dumps({"error":"Cannot enable live trading — invalid license"}).encode())
                 return
             state["paper_trading"] = not state["paper_trading"]
+            try: _save_paper_mode(state["paper_trading"])
+            except OSError as ex: log("Could not persist trading mode: "+str(ex), "WARN")
             mode = "PAPER" if state["paper_trading"] else "LIVE"
             log("Switched to "+mode+" trading mode")
             self.respond(200,"application/json",json.dumps({"paper_trading":state["paper_trading"]}).encode())
