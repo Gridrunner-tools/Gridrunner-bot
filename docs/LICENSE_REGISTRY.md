@@ -37,6 +37,53 @@ python scripts/process_purchase.py --email customer@example.com --stripe-id <ses
 Keep the generated key in the approved customer-delivery channel; it is not a
 source-control artifact.
 
+## Lost-key recovery (operator-only)
+
+A lost key is recovered by an operator; it is not reissued automatically by a
+public endpoint. This workflow preserves the one-key-per-installation rule:
+
+1. **Open a private support case.** Record the customer's verified account or
+   purchase details and the exact installation identifier (for example, the
+   Render service ID or an internal install ID). Do not ask the customer to
+   post a key, database URL, wallet secret, or other credential in a public
+   issue, chat, or form.
+2. **Verify identity and ownership before lookup.** Use the approved private
+   support channel and independently verify the customer's identity and
+   ownership of that purchase/install using records available to the operator
+   (such as the matching purchase record plus a previously verified account
+   detail). An install identifier alone is not proof of ownership. If
+   verification fails or records conflict, do not disclose a key; escalate
+   through the private operator process.
+
+3. **Look up the existing record privately.** From a trusted operator machine,
+   connect to the private Neon registry through `DATABASE_URL` and query the
+   existing license record using the verified customer/install identifier. Do
+   not query through a customer-facing route, create a public lookup endpoint,
+   export the registry, or paste the query/result into logs, GitHub, tickets,
+   or chat. Redact key values from command history and terminal capture.
+4. **Confirm uniqueness and status.** Confirm that the record belongs to the
+   verified installation and is active/eligible. Return the already-issued key
+   only; never generate a replacement by copying a key or reuse that key for a
+   different customer, Render service, environment, or installation. If the
+   installation changed, issue a new unique key through the normal issuance
+   process and mark/retire the old association according to operator records.
+
+5. **Disclose once, privately.** Send the key through the approved private,
+   authenticated customer-delivery channel (not a public endpoint, logs,
+   GitHub, or chat). Ask the customer to enter it only in that installation's
+   secret environment and to remove any accidental local exposure. Do not
+   include the key in support screenshots or transcripts.
+
+6. **Record a redacted audit trail.** Record the verification performed, the
+   operator, install identifier, and outcome without recording the key,
+   `DATABASE_URL`, or other secrets. If exposure is suspected, treat the key
+   as compromised, revoke/retire it, issue a fresh unique key, and repeat
+   verification and private delivery.
+
+Never disclose a key when ownership cannot be verified. The registry and its
+operator credentials remain private; application runtime and public clients
+must not gain a key-recovery capability.
+
 ## Render configuration
 
 Set `DATABASE_URL` as a secret environment variable on the Render service. The
