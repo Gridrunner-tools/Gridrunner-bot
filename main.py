@@ -7,6 +7,25 @@ Strategies: DCA, Grid, Scalping, Copy Trading, Arbitrage
 """
 import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string
 
+PAPER_MODE_FILE = os.environ.get("PAPER_MODE_FILE", "/tmp/gridrunner-paper-mode.json")
+
+def load_paper_mode(default):
+    try:
+        with open(PAPER_MODE_FILE) as f:
+            value = json.load(f).get("paper_trading")
+            return bool(value) if isinstance(value, bool) else default
+    except (OSError, ValueError, TypeError):
+        return default
+
+def save_paper_mode(value):
+    tmp = PAPER_MODE_FILE + ".tmp"
+    try:
+        with open(tmp, "w") as f:
+            json.dump({"paper_trading": bool(value)}, f)
+        os.replace(tmp, PAPER_MODE_FILE)
+    except OSError as exc:
+        log("Could not persist paper mode: " + str(exc), "WARN")
+
 TRADE_LOG = "trade_history.log"  # persistent trade log
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -215,7 +234,7 @@ state = {
     "log":           [],
     "error":         None,
     "arb_opps":      [],
-    "paper_trading": cfg["paper_trading"],
+    "paper_trading": load_paper_mode(cfg["paper_trading"]),
     "license_valid":  True,
     "license_type":   "demo",
     "license_expires": None,
@@ -777,9 +796,19 @@ def start_background_loops():
                 p = get_price(pair)
                 if p > 0:
                     state["price"] = p
-                    state["price_history"].append({"time": int(time.time()), "value": p})
+                    now = int(time.time())
+                    point = {"time": now, "value": p}
+                    state["price_history"].append(point)
                     if len(state["price_history"]) > 1440:
                         state["price_history"] = state["price_history"][-1440:]
+                    pair_history = state["price_history_pairs"].setdefault(pair, [])
+                    # Keep chart data scoped to the selected pair; never mix BTC with another asset.
+                    if not pair_history or pair_history[-1].get("time") != now:
+                        pair_history.append(point)
+                    else:
+                        pair_history[-1] = point
+                    if len(pair_history) > 1440:
+                        state["price_history_pairs"][pair] = pair_history[-1440:]
             except Exception as e:
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
@@ -2638,7 +2667,10 @@ var gridLines = [];
 
 function aggregateCandles(data, intervalSec) {
   var candles = [], current = null;
+  data = (data || []).filter(function(d) { return d && Number.isFinite(Number(d.time)) && Number.isFinite(Number(d.value)) && Number(d.value) > 0; })
+    .slice().sort(function(a, b) { return Number(a.time) - Number(b.time); });
   data.forEach(function(d) {
+    d.time = Number(d.time); d.value = Number(d.value);
     var bucket = Math.floor(d.time / intervalSec) * intervalSec;
     if (!current || current.time !== bucket) {
       if (current) candles.push(current);
@@ -3186,7 +3218,7 @@ function refresh() {
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart(d.price_history, levels, buyZone, viewPair);
+      updateChart((d.price_history_pairs && d.price_history_pairs[viewPair]) || [], levels, buyZone, viewPair);
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
@@ -3588,6 +3620,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(403,"application/json",json.dumps({"error":"Cannot enable live trading — invalid license"}).encode())
                 return
             state["paper_trading"] = not state["paper_trading"]
+            save_paper_mode(state["paper_trading"])
             mode = "PAPER" if state["paper_trading"] else "LIVE"
             log("Switched to "+mode+" trading mode")
             self.respond(200,"application/json",json.dumps({"paper_trading":state["paper_trading"]}).encode())
