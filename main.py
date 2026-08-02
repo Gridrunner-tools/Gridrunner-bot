@@ -182,8 +182,28 @@ def validate_license():
 
 # ── Config from environment ───────────────────────────────────────────────────
 PAPER_MODE_FILE = "paper_mode.json"
+def _env_paper_mode():
+    """Return explicit environment mode, or None when no valid override is set.
+
+    PAPER_MODE is the public setting; PAPER_TRADING remains supported for
+    existing installations. Invalid values are ignored so persisted state (or
+    the wallet-based default) remains the safe fallback.
+    """
+    for name in ("PAPER_MODE", "PAPER_TRADING"):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+    return None
+
 def _load_paper_mode(default):
-    if os.environ.get("PAPER_TRADING") is not None: return default
+    env_mode = _env_paper_mode()
+    if env_mode is not None:
+        return env_mode
     try:
         with open(PAPER_MODE_FILE) as f:
             value = json.load(f).get("paper_trading")
@@ -216,7 +236,9 @@ cfg = {
     "source_wallet":os.environ.get("SOURCE_WALLET", ""),
     # Default to live if wallet is configured, paper otherwise
     "min_arb_spread":  float(os.environ.get("MIN_ARB_SPREAD", "1.5")),
-    "paper_trading":   os.environ.get("PAPER_TRADING", "false" if (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY")) else "true").lower() != "false",
+    # Explicit env mode wins over persisted state; otherwise default live only
+    # when a signing key is configured.
+    "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
     "license_key":   os.environ.get("LICENSE_KEY", ""),
