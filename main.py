@@ -1814,6 +1814,20 @@ def get_price_history(pair, lookback=100):
     state["_price_buf_" + pair] = buf
     return buf
 
+def seed_history(pair):
+    """Seed pair history with four hours of one-minute Kraken closes."""
+    try:
+        if not requests: return
+        mapping = {"BTC/USDC":"XXBTZUSD", "BTC/USDT":"XXBTZUSD", "ETH/USDC":"XETHZUSD", "SOL/USDC":"SOLUSD"}
+        r = requests.get("https://api.kraken.com/0/public/OHLC", params={"pair":mapping.get(pair,pair.replace("/","")), "interval":1, "since":int(time.time())-14400}, timeout=10)
+        payload = r.json()
+        candles = next((v for k,v in payload.get("result",{}).items() if k != "last"), [])
+        history = [{"time":int(c[0]),"value":float(c[4])} for c in candles][-1440:]
+        if history:
+            state["price_history_pairs"][pair] = history
+            if pair == state.get("pair"): state["price_history"] = history[:]
+            log(f"Seeded {len(history)} candles from Kraken for {pair}")
+    except Exception as e: log(f"Seed history failed for {pair}: {e}", "WARN")
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
     buy_prices = []
@@ -1920,6 +1934,7 @@ def run_grid():
             gs = _init_grid_pair(p)
             if gs:
                 state["grid_pairs"][p] = gs
+                seed_history(p)
                 log("Grid initialized for "+p+": "+str(gs["grids"]), "INFO")
     if not state["active_pairs"]:
         log("No active pairs to grid", "WARN"); return
@@ -2742,6 +2757,8 @@ function initChart() {
         timeVisible: true,
         secondsVisible: false,
         barSpacing: 3,
+        minBarSpacing: 3,
+        rightOffset: 20,
       },
       rightPriceScale: {
         borderColor: "#1a1a1a",
@@ -2793,8 +2810,10 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Pin to right edge without stretching candles
-    chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
+  // Keep 3px candles, pin the latest candle, and expose history through horizontal scrolling.
+  chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
+  var visibleBars = Math.max(1, Math.ceil((document.getElementById("chart-container").clientWidth || 600) / 3));
+  chart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length + 20});
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
