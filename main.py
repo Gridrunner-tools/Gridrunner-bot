@@ -2411,15 +2411,21 @@ STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"a
 
 def start_bot(strategy, pair, mode, exchange=None, chain=None):
     if state["running"]:
-        # Multi-pair: if grid is already running, add new pair without restarting
+        # Multi-pair: if grid is already running, add new pair without restarting.
+        # Seed here rather than relying on run_grid so the dashboard gets history
+        # immediately and behavior is consistent across strategies.
         if strategy == "grid" and pair not in state.get("active_pairs", []):
             state["active_pairs"].append(pair)
+            seed_history(pair)
             log("Added "+pair+" to active grids ("+str(len(state["active_pairs"]))+" total)")
             return
         log("Already running — stop first","WARN"); return
     state["strategy"]=strategy
     state["pair"]=pair
     state["mode"]=mode
+    # Chart history is initialized on the shared bot-start path, not inside a
+    # strategy loop. This keeps startup history available for every strategy.
+    seed_history(pair)
     if exchange: state["exchange"]=exchange
     if chain: state["chain"]=chain
     else: state["chain"]="solana"
@@ -4014,6 +4020,9 @@ if __name__=="__main__":
         error_msg = linfo.get("error", "License validation failed")
         log(f"LICENSE INVALID — {error_msg}. Live trading disabled. Paper mode only.", "WARN")
         state["paper_trading"] = True  # force paper-only
+    # Seed the selected/default pair before serving the dashboard. Strategy
+    # startup also refreshes this through start_bot for pair changes.
+    seed_history(state.get("pair", "SOL/USDC"))
     start_background_loops()
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
