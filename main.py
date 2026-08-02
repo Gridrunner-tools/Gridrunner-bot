@@ -1962,8 +1962,8 @@ def run_grid():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0:
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
@@ -2262,8 +2262,8 @@ def run_rsi_ema():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0: time.sleep(30); continue
             # Build price buffer
             buf = get_price_history(pair, 100)
@@ -2344,8 +2344,8 @@ def run_bbands():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
@@ -2816,10 +2816,11 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Keep 3px candles, pin the latest candle, and expose history through horizontal scrolling.
-  chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
+  // Keep 3px candles and pin the newest candle at the right edge on each refresh.
+  // A positive logical end leaves the live candle drifting left as data arrives.
+  chart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
   var visibleBars = Math.max(1, Math.ceil((document.getElementById("chart-container").clientWidth || 600) / 3));
-  chart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length + 20});
+  chart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length});
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
@@ -3241,7 +3242,13 @@ function refresh() {
               chartData.push({time: ph[0].time - 1, open: ph[0].value, high: ph[0].value, low: ph[0].value, close: ph[0].value});
             }
           }
-          if (chartData.length) card._series.setData(chartData);
+          if (chartData.length) {
+            card._series.setData(chartData);
+            // Keep the latest pair candle anchored while retaining the 3px density.
+            ch.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
+            var pairVisibleBars = Math.max(1, Math.ceil((chartEl.clientWidth || 380) / 3));
+            ch.timeScale().setVisibleLogicalRange({from: Math.max(0, chartData.length - pairVisibleBars), to: chartData.length});
+          }
         }
         // Update price
         var lastPrice = ph.length ? ph[ph.length-1].value : (d.price || 0);
@@ -3870,8 +3877,8 @@ class Handler(BaseHTTPRequestHandler):
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 200:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-200:]
+                if len(state["price_history_pairs"][pair]) > 1440:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
             if price <= 0:
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
