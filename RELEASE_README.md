@@ -15,9 +15,10 @@ Run automated spot grid trading on Solana DEXs (Raydium, Jupiter). Multi-pair, s
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `LICENSE_KEY` | Yes | Your LeverBot license key (LB-XXXX-XXXX-XXXX) |
+| `LICENSE_KEY` | Yes for paid/live use | Your GridRunner license key (LB-XXXX-XXXX-XXXX) |
+| `DATABASE_URL` | Yes for paid/live use | Private Neon/PostgreSQL license registry connection string |
 | `SOLANA_PRIVATE_KEY` | Yes (live) | Solana wallet private key |
-| `PAPER_TRADING` | No | Set to `true` for demo mode (default: true) |
+| `PAPER_TRADING` | No | Set to `true` for demo mode; an invalid license always forces paper-only mode |
 | `API_SECRET` | No | Dashboard API authentication |
 | `TG_BOT_TOKEN` | No | Telegram bot token for alerts |
 | `TG_CHAT_ID` | No | Telegram chat ID for alerts |
@@ -27,7 +28,7 @@ Full config in `.env.example`.
 
 ## License
 
-LeverBot requires a valid license key. Get yours at [aitrader.ctonew.app](https://aitrader.ctonew.app).
+GridRunner validates paid licenses against the private Neon/PostgreSQL registry configured through `DATABASE_URL`. Do not publish or commit license keys, registry exports, or the database URL.
 
 - Trial: 7 days, full functionality
 - Full: One-time purchase, no recurring fees
@@ -37,6 +38,8 @@ LeverBot requires a valid license key. Get yours at [aitrader.ctonew.app](https:
 ```bash
 pip install -r requirements.txt
 export LICENSE_KEY="LB-YOUR-KEY-HERE"
+# Set this through your secret manager; do not paste a real value into docs or source control.
+export DATABASE_URL="<private-postgres-connection-string>"
 export PAPER_TRADING="true"
 python main.py
 ```

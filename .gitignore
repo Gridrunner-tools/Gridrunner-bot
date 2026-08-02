@@ -5,3 +5,9 @@ __pycache__/
 .DS_Store
 venv/
 .venv/
+# License/customer runtime data must never enter source control.
+keys.json
+customers.db
+.license_cache
+trial.json
+paper_mode.json

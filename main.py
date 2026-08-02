@@ -38,7 +38,10 @@ TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, 
 
 
 # ── License Validation ──────────────────────────────────────────────────────────
-LICENSE_URL = "https://raw.githubusercontent.com/gridrunner-tools/gridrunner-bot/release/keys.json"
+# Paid licenses are stored in the private Neon/PostgreSQL registry. DATABASE_URL
+# is a secret Render environment variable; no public keys.json URL is used.
+from license_registry import LicenseRegistryUnavailable, lookup_license
+
 LICENSE_CACHE_FILE = ".license_cache"
 GRACE_HOURS = 48
 
@@ -56,11 +59,34 @@ def _cache_read():
     except Exception:
         return None
 
-def validate_license():
+def _cached_license(license_key):
+    """Return a matching, recently verified record or None.
+
+    The cache is only an outage grace period. It cannot validate a new key and
+    is ignored after GRACE_HOURS, so missing registry access fails closed.
     """
-    Validate the LICENSE_KEY env var against the hosted keys.json.
-    Returns (valid: bool, info: dict) where info has expires/type/days_remaining.
-    On network failure, allows a 48-hour grace period from last successful check.
+    cache = _cache_read()
+    if not cache or cache.get("key") != license_key:
+        return None
+    last_ok = cache.get("last_checked")
+    if not last_ok:
+        return None
+    try:
+        last_dt = datetime.fromisoformat(last_ok)
+        if last_dt.tzinfo is None:
+            last_dt = last_dt.replace(tzinfo=timezone.utc)
+        if (datetime.now(timezone.utc) - last_dt) < timedelta(hours=GRACE_HOURS):
+            return cache.get("info")
+    except (TypeError, ValueError):
+        pass
+    return None
+
+def validate_license():
+    """Validate LICENSE_KEY against the private Neon/PostgreSQL registry.
+
+    Returns (valid: bool, info: dict). A registry outage gets a maximum
+    48-hour grace period only for the exact key that was previously verified.
+    Otherwise the caller receives an invalid result and forces paper mode.
     """
     license_key = os.environ.get("LICENSE_KEY", "").strip()
     if not license_key:
@@ -107,47 +133,18 @@ def validate_license():
             print(f"Trial error: {e}")
             return True, {"valid": True, "type": "demo", "expires": None, "days_remaining": None}
 
-    # Try to fetch the keys file
-    keys_data = None
-    fetch_ok = False
-    for attempt in range(3):
-        try:
-            import urllib.request
-            req = urllib.request.Request(LICENSE_URL, headers={"User-Agent": "GridRunner/1.0"})
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                keys_data = json.loads(resp.read().decode())
-            fetch_ok = True
-            break
-        except Exception as e:
-            wait = 2 ** attempt
-            print(f"License fetch attempt {attempt+1} failed: {e} — retrying in {wait}s")
-            time.sleep(wait)
-
-    if not fetch_ok or keys_data is None:
-        # Grace period: check cache
-        cache = _cache_read()
-        if cache and cache.get("key") == license_key:
-            last_ok = cache.get("last_checked")
-            if last_ok:
-                try:
-                    last_dt = datetime.fromisoformat(last_ok)
-                    if (datetime.now(timezone.utc) - last_dt) < timedelta(hours=GRACE_HOURS):
-                        print(f"License: using cached validation (last check: {last_ok})")
-                        return True, cache.get("info", {"valid": True, "type": "cached", "expires": None, "days_remaining": None})
-                except Exception:
-                    pass
-        print("License validation failed — network error and no valid cache. Restart when online.")
-        return False, {"valid": False, "type": "error", "expires": None, "days_remaining": None, "error": "Cannot reach license server"}
-
-    # Search for the key
-    match = None
-    for entry in keys_data:
-        if entry.get("key") == license_key:
-            match = entry
-            break
+    try:
+        match = lookup_license(license_key)
+    except LicenseRegistryUnavailable:
+        cached_info = _cached_license(license_key)
+        if cached_info:
+            print("License: using cached validation during registry outage")
+            return True, cached_info
+        print("License validation failed — registry unavailable and no valid cache. Restart when online.")
+        return False, {"valid": False, "type": "error", "expires": None, "days_remaining": None, "error": "Cannot reach license registry"}
 
     if not match:
-        print(f"Invalid license key: {license_key[:12]}...")
+        print("Invalid license key — not present in private registry")
         return False, {"valid": False, "type": "invalid", "expires": None, "days_remaining": None, "error": "License key not found"}
 
     # Check expiry
@@ -155,13 +152,16 @@ def validate_license():
     if expires_str:
         try:
             expires_dt = datetime.fromisoformat(expires_str)
+            if expires_dt.tzinfo is None:
+                expires_dt = expires_dt.replace(tzinfo=timezone.utc)
             now = datetime.now(timezone.utc)
             if now > expires_dt:
                 print(f"License expired on {expires_str[:10]}")
                 return False, {"valid": False, "type": match.get("type", "trial"), "expires": expires_str, "days_remaining": 0, "error": "License expired"}
             days_left = (expires_dt - now).days
-        except Exception:
-            days_left = None
+        except (TypeError, ValueError):
+            print("License validation failed — registry returned an invalid expiration.")
+            return False, {"valid": False, "type": "error", "expires": None, "days_remaining": None, "error": "Invalid license expiration"}
     else:
         days_left = None  # Full key, no expiry
 

@@ -81,26 +81,16 @@ echo "→ Copying supporting files..."
 # Always include these
 cp "$ROOT_DIR/requirements.txt" "$DIST_DIR/"
 cp "$ROOT_DIR/.env.example" "$DIST_DIR/"
+cp "$ROOT_DIR/license_registry.py" "$DIST_DIR/"
 cp "$ROOT_DIR/config.json" "$DIST_DIR/"
-cp "$ROOT_DIR/generate_keys.py" "$DIST_DIR/"
 cp "$ROOT_DIR/config_loader.py" "$DIST_DIR/"
 cp "$ROOT_DIR/jupiter_fix.py" "$DIST_DIR/"
 
 # Copy modules directory
 cp -r "$ROOT_DIR/modules" "$DIST_DIR/modules"
 
-# Create a fresh keys.json placeholder
-cat > "$DIST_DIR/keys.json" << 'KEYS_EOF'
-[
-  {
-    "key": "LB-TEST-TEST-TEST",
-    "created": "2026-01-01T00:00:00+00:00",
-    "expires": "2099-12-31T23:59:59+00:00",
-    "type": "full"
-  }
-]
-KEYS_EOF
-
+# License keys are stored only in the private PostgreSQL registry.
+# Do not package or publish a keys.json file.
 # Copy render.yaml if it exists
 if [ -f "$ROOT_DIR/render.yaml" ]; then
     cp "$ROOT_DIR/render.yaml" "$DIST_DIR/"
