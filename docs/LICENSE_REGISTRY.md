@@ -17,7 +17,10 @@ Do not commit the connection string, generated keys, exports, or database dumps.
 ## Seed / issue a license
 
 After the schema exists, issue the first license (and every subsequent purchase)
-from a trusted environment:
+from a trusted environment. Every deployed installation must receive its own newly
+issued unique `LICENSE_KEY`; never reuse a key across customers, Render services,
+or paper/live environments. The registry's unique constraint rejects duplicate keys,
+but operators must still maintain the installation-to-key record outside this repo.
 
 ```bash
 python scripts/issue_license.py --email customer@example.com --type full --days 365
