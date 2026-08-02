@@ -15,6 +15,8 @@ services:
         value: "10000"
       - key: LICENSE_KEY
         sync: false
+      - key: DATABASE_URL
+        sync: false
       - key: SOLANA_PRIVATE_KEY
         sync: false
       - key: PAPER_TRADING
