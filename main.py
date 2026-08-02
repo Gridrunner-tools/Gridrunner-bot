@@ -2816,10 +2816,11 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   var dataStart = candles[0].time;
   var dataEnd = candles[candles.length - 1].time;
 
-  // Keep 3px candles, pin the latest candle, and expose history through horizontal scrolling.
-  chart.timeScale().applyOptions({ barSpacing: 3, rightOffset: 0 });
+  // Keep 3px candles and pin the newest candle at the right edge on each refresh.
+  // A positive logical end leaves the live candle drifting left as data arrives.
+  chart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
   var visibleBars = Math.max(1, Math.ceil((document.getElementById("chart-container").clientWidth || 600) / 3));
-  chart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length + 20});
+  chart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length});
 
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
