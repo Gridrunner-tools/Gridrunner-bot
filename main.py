@@ -270,7 +270,7 @@ state = {
     "log":           [],
     "error":         None,
     "arb_opps":      [],
-    "paper_trading": (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
+    "paper_trading": _load_paper_mode(cfg["paper_trading"]),
     "license_valid":  True,
     "license_type":   "demo",
     "license_expires": None,
