@@ -181,6 +181,40 @@ def validate_license():
     return True, info
 
 # ── Config from environment ───────────────────────────────────────────────────
+PAPER_MODE_FILE = "paper_mode.json"
+def _env_paper_mode():
+    """Return explicit environment mode, or None when no valid override is set.
+
+    PAPER_MODE is the public setting; PAPER_TRADING remains supported for
+    existing installations. Invalid values are ignored so persisted state (or
+    the wallet-based default) remains the safe fallback.
+    """
+    for name in ("PAPER_MODE", "PAPER_TRADING"):
+        raw = os.environ.get(name)
+        if raw is None:
+            continue
+        value = raw.strip().lower()
+        if value in ("1", "true", "yes", "on"):
+            return True
+        if value in ("0", "false", "no", "off"):
+            return False
+    return None
+
+def _load_paper_mode(default):
+    env_mode = _env_paper_mode()
+    if env_mode is not None:
+        return env_mode
+    try:
+        with open(PAPER_MODE_FILE) as f:
+            value = json.load(f).get("paper_trading")
+            if isinstance(value, bool): return value
+    except (OSError, ValueError, TypeError): pass
+    return default
+def _save_paper_mode(value):
+    tmp = PAPER_MODE_FILE + ".tmp"
+    with open(tmp, "w") as f: json.dump({"paper_trading": bool(value)}, f)
+    os.replace(tmp, PAPER_MODE_FILE)
+
 cfg = {
     # CEX
     "api_key":      os.environ.get("API_KEY", ""),
@@ -202,7 +236,9 @@ cfg = {
     "source_wallet":os.environ.get("SOURCE_WALLET", ""),
     # Default to live if wallet is configured, paper otherwise
     "min_arb_spread":  float(os.environ.get("MIN_ARB_SPREAD", "1.5")),
-    "paper_trading":   os.environ.get("PAPER_TRADING", "false" if (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY")) else "true").lower() != "false",
+    # Explicit env mode wins over persisted state; otherwise default live only
+    # when a signing key is configured.
+    "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
     "license_key":   os.environ.get("LICENSE_KEY", ""),
@@ -234,7 +270,7 @@ state = {
     "log":           [],
     "error":         None,
     "arb_opps":      [],
-    "paper_trading": load_paper_mode(cfg["paper_trading"]),
+    "paper_trading": _load_paper_mode(cfg["paper_trading"]),
     "license_valid":  True,
     "license_type":   "demo",
     "license_expires": None,
@@ -3212,13 +3248,15 @@ function refresh() {
         }
       });
     }
-    if (!multiPair && d.price_history && d.price_history.length > 1) {
+    if (!multiPair) {
       // Show grid for currently selected pair
       var viewPair = sel.pair || d.pair || "SOL/USDC";
+      var pairHistory = d.price_history_pairs && d.price_history_pairs[viewPair];
+      var chartHistory = (pairHistory && pairHistory.length) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart((d.price_history_pairs && d.price_history_pairs[viewPair]) || [], levels, buyZone, viewPair);
+      updateChart(chartHistory, levels, buyZone, viewPair);
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
