@@ -223,11 +223,18 @@ def test_trailing_not_execute_when_not_armed():
 # Test 7: A sell cell liquidates only its mirrored buy tranche.
 # ──────────────────────────────────────────────────────────────────────────────
 def test_sell_cell_targets_only_paired_tranche():
-    filled = {0: {"amount": 1.0}, 1: {"amount": 2.0}, 2: {"amount": 3.0}}
-    levels = 5
-    # Cell 4 is paired only with buy index 1; lower buys must remain open.
-    targets = [idx for idx in filled if levels - idx == 4]
-    assert targets == [1], f"Unexpected sell targets: {targets}"
+    # Exercise the production helper so geometry changes cannot drift from tests.
+    import sys, types
+    sys.modules.setdefault("requests", types.SimpleNamespace())
+    from main import _grid_sell_indices
+    levels = 5  # five intervals; sell-zone cells are 3 and 4
+    filled = {idx: {"amount": float(idx + 1)} for idx in range(3)}
+    assert _grid_sell_indices(filled, 3, levels) == [1, 2]
+    assert _grid_sell_indices(filled, 4, levels) == [0]
+    # Every buy tranche must be reachable from an actual sell-zone cell.
+    for buy_idx in filled:
+        assert any(buy_idx in _grid_sell_indices(filled, cell, levels)
+                   for cell in range(3, levels)), f"Stranded tranche: {buy_idx}"
     print("PASS  test_sell_cell_targets_only_paired_tranche")
 # ──────────────────────────────────────────────────────────────────────────────
 # Entry point
@@ -240,4 +247,4 @@ if __name__ == "__main__":
     test_no_sell_below_buy_entry()
     test_trailing_not_execute_when_not_armed()
     test_sell_cell_targets_only_paired_tranche()
-    print("\nAll 6 regression tests passed.")
+    print("\nAll 7 regression tests passed.")

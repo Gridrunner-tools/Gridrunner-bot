@@ -1949,7 +1949,13 @@ def _grid_sell_indices(filled, grid_idx, levels):
     mirrored sell level (level ``levels - buy_idx``).  Keeping this mapping
     explicit prevents a sell at one cell from liquidating every lower buy.
     """
-    return [buy_idx for buy_idx in filled if levels - buy_idx == grid_idx]
+    # ``levels`` is the number of intervals (``len(grids) - 1``).  The
+    # last interval is the highest sell cell; clamp mirrored indices to the
+    # sell-zone floor so the midpoint buy tranche is not stranded in the
+    # midpoint interval.
+    sell_floor = levels // 2 + (levels % 2)
+    return [buy_idx for buy_idx in filled
+            if max(sell_floor, levels - 1 - buy_idx) == grid_idx]
 def run_grid():
     pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
