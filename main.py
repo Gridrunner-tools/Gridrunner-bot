@@ -1943,19 +1943,23 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
         state["grid_trailing_high"] = trailing_high
 
 def _grid_sell_indices(filled, grid_idx, levels):
-    """Return the tranche paired with a sell grid cell.
+    """Select one open tranche for an actual sell cell.
 
-    Grid buys are indexed below the midpoint and each tranche exits at its
-    mirrored sell level (level ``levels - buy_idx``).  Keeping this mapping
-    explicit prevents a sell at one cell from liquidating every lower buy.
+    ``levels`` is the number of intervals, so sell cells are the intervals
+    from ``mid_idx`` through ``levels - 1`` (not the endpoint ``levels``).
+    There are sometimes more buy tranches than sell cells (for example,
+    levels=5 has buy cells 0..2 and sell cells 3..4).  A sell event must still
+    select exactly one tranche; choosing the nearest tranche for the lower
+    sell cell and the farthest for the upper cell gives every buy tranche a
+    reachable exit over successive sell events without cascading liquidation.
     """
-    # ``levels`` is the number of intervals (``len(grids) - 1``).  The
-    # last interval is the highest sell cell; clamp mirrored indices to the
-    # sell-zone floor so the midpoint buy tranche is not stranded in the
-    # midpoint interval.
-    sell_floor = levels // 2 + (levels % 2)
-    return [buy_idx for buy_idx in filled
-            if max(sell_floor, levels - 1 - buy_idx) == grid_idx]
+    mid_idx = levels // 2 + (levels % 2)
+    if grid_idx < mid_idx or grid_idx >= levels or not filled:
+        return []
+    ordered = sorted(filled)
+    if grid_idx == mid_idx:
+        return [ordered[-1]]
+    return [ordered[0]]
 def run_grid():
     pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
