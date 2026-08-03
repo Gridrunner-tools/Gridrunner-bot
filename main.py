@@ -3142,6 +3142,22 @@ function manualSell() {
   });
 }
 
+// Replay pair history after asynchronous chart creation.
+function setMultiPairChartData(card, ph, chartEl) {
+  if (!card || !card._series || !ph || !ph.length) return;
+  var chartData = ph.map(function(p, j) {
+    var o = j > 0 ? ph[j - 1].value : p.value;
+    return {time:p.time, open:o, high:Math.max(o,p.value), low:Math.min(o,p.value), close:p.value};
+  });
+  if (chartData.length === 1) chartData.unshift({time:ph[0].time-1, open:ph[0].value, high:ph[0].value, low:ph[0].value, close:ph[0].value});
+  card._series.setData(chartData);
+  if (card._chart) {
+    card._chart.timeScale().applyOptions({barSpacing:3, minBarSpacing:3, rightOffset:0});
+    var width = chartEl && chartEl.clientWidth || 380;
+    var visibleBars = Math.max(1, Math.ceil(width / 3));
+    card._chart.timeScale().setVisibleLogicalRange({from:Math.max(0, chartData.length-visibleBars), to:chartData.length});
+  }
+}
 function togglePaper() {
   apiFetch("/toggle_paper").then(function(r) { return r.json(); }).then(function(d) {
     var btn = document.getElementById("paper-btn");
@@ -3191,6 +3207,7 @@ function refresh() {
       var multiPairs = activePairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
+        var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
         var card = document.getElementById(cardId);
         if (!card) {
           card = document.createElement("div");
@@ -3201,6 +3218,9 @@ function refresh() {
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
+          // Capture this card's history before the deferred chart callback.
+          // Each pair gets its own immutable replay payload.
+          var chartHistoryAtInit = ph;
           // Create chart after DOM layout (ensures proper width)
           setTimeout(function() {
             try {
@@ -3219,6 +3239,9 @@ function refresh() {
               upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
               wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
             });
+            // The initial refresh may have run before this deferred callback.
+            // Replay the captured history now that the series is initialized.
+            setMultiPairChartData(card, chartHistoryAtInit, chartEl);
             } catch(e) { console.log("Chart error for " + pair, e); }
           }, 50);
         }
@@ -3227,7 +3250,6 @@ function refresh() {
         // raised ReferenceError and stopped the pair loop, leaving ETH blank.
         var chartEl = document.getElementById(cardId + "-chart");
         var chart = card._chart;
-        var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
         if (card._series && chart && chartEl) {
           var chartData = [];
           if (ph.length >= 1) {
