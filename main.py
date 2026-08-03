@@ -3273,23 +3273,23 @@ function refresh() {
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     try {
     var on = d.running;
+    // Keep the last confirmed grid pairs across transient /state payloads.
+    // Cards are cleared only after an explicit stop, never because a refresh
+    // briefly omits active_pairs while the worker is still running.
+    if (!on) window._gridPairs = [];
+    if (on && d.strategy === "grid" && d.active_pairs && d.active_pairs.length) {
+      window._gridPairs = d.active_pairs.slice();
+    }
+    var activePairs = (on && d.strategy === "grid" && window._gridPairs) ? window._gridPairs : (d.active_pairs || []);
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
-    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
+    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
     // Multi-pair mode: show per-pair charts when 2+ active pairs
-    var multiPair = d.active_pairs && d.active_pairs.length >= 2;
+    var multiPair = activePairs.length >= 2;
     var singleRow = document.getElementById("single-chart-row");
     var chartsWrap = document.getElementById("charts-container");
-    // Always clean up and create/update multi-pair cards
-    if (chartsWrap && d.active_pairs && d.active_pairs.length) {
-      var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
-      var activeSet = {};
-      d.active_pairs.forEach(function(p) { activeSet[p] = true; });
-      allCards.forEach(function(card) {
-        var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
-        if (!activeSet[cardPair]) card.remove();
-      });
-    }
+    // Do not reconcile/remove cards against a transient payload. A running
+    // grid owns its cards until the explicit stop path below clears them.
     // Show/hide containers based on pair count
     if (multiPair) {
       if (singleRow) singleRow.style.display = "none";
@@ -3297,10 +3297,13 @@ function refresh() {
     } else {
       if (singleRow) singleRow.style.display = "flex";
       if (chartsWrap) chartsWrap.style.display = "none";
+      if (!on && chartsWrap) {
+        chartsWrap.querySelectorAll('[id^="mpcard-"]').forEach(function(card) { card.remove(); });
+      }
     }
     // Create/update cards for all active pairs
-    if (d.active_pairs && d.active_pairs.length) {
-      var multiPairs = d.active_pairs;
+    if (activePairs.length) {
+      var multiPairs = activePairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
         var card = document.getElementById(cardId);
