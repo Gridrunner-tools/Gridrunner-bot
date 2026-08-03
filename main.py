@@ -3166,7 +3166,7 @@ function refresh() {
     }
     var activePairs = (on && d.strategy === "grid" && window._gridPairs) ? window._gridPairs : (d.active_pairs || []);
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
-    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + activePairs.join(", ") + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
+    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
     // Multi-pair mode: show per-pair charts when 2+ active pairs
     var multiPair = activePairs.length >= 2;
@@ -3180,19 +3180,14 @@ function refresh() {
       window._wasMulti = false;
       if (singleRow) singleRow.style.display = "flex";
       if (chartsWrap) chartsWrap.style.display = "none";
+      if (!on && chartsWrap) {
+        chartsWrap.querySelectorAll('[id^="mpcard-"]').forEach(function(card) { card.remove(); });
+      }
     }
+    // Do not reconcile/remove cards against a transient payload. A running
+    // grid owns its cards until the explicit stop path below clears them.
     // Render multi-pair cards whenever we have 2+ pairs
     if (activePairs.length >= 2) {
-      // Use retained pairs so transient state responses do not tear down cards.
-      if (chartsWrap) {
-        var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
-        var activeSet = {};
-        activePairs.forEach(function(p) { activeSet[p] = true; });
-        allCards.forEach(function(card) {
-          var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
-          if (!activeSet[cardPair]) card.remove();
-        });
-      }
       var multiPairs = activePairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
