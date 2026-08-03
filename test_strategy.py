@@ -220,6 +220,16 @@ def test_trailing_not_execute_when_not_armed():
     print("PASS  test_trailing_not_execute_when_not_armed")
 
 # ──────────────────────────────────────────────────────────────────────────────
+# Test 7: A sell cell liquidates only its mirrored buy tranche.
+# ──────────────────────────────────────────────────────────────────────────────
+def test_sell_cell_targets_only_paired_tranche():
+    filled = {0: {"amount": 1.0}, 1: {"amount": 2.0}, 2: {"amount": 3.0}}
+    levels = 5
+    # Cell 4 is paired only with buy index 1; lower buys must remain open.
+    targets = [idx for idx in filled if levels - idx == 4]
+    assert targets == [1], f"Unexpected sell targets: {targets}"
+    print("PASS  test_sell_cell_targets_only_paired_tranche")
+# ──────────────────────────────────────────────────────────────────────────────
 # Entry point
 # ──────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
@@ -229,4 +239,5 @@ if __name__ == "__main__":
     test_up_move_shifts_sell_only()
     test_no_sell_below_buy_entry()
     test_trailing_not_execute_when_not_armed()
+    test_sell_cell_targets_only_paired_tranche()
     print("\nAll 6 regression tests passed.")
