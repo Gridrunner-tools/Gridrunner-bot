@@ -3222,9 +3222,13 @@ function refresh() {
             } catch(e) { console.log("Chart error for " + pair, e); }
           }, 50);
         }
-        // Update chart data
+        // Update chart data using the chart instance owned by this card. The
+        // deferred chart creation callback's `ch` is out of scope here; using it
+        // raised ReferenceError and stopped the pair loop, leaving ETH blank.
+        var chartEl = document.getElementById(cardId + "-chart");
+        var chart = card._chart;
         var ph = d.price_history_pairs && d.price_history_pairs[pair] ? d.price_history_pairs[pair] : [];
-        if (card._series) {
+        if (card._series && chart && chartEl) {
           var chartData = [];
           if (ph.length >= 1) {
             for (var j = 0; j < ph.length; j++) {
@@ -3240,9 +3244,9 @@ function refresh() {
           if (chartData.length) {
             card._series.setData(chartData);
             // Keep the latest pair candle anchored while retaining the 3px density.
-            ch.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
+            chart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
             var pairVisibleBars = Math.max(1, Math.ceil((chartEl.clientWidth || 380) / 3));
-            ch.timeScale().setVisibleLogicalRange({from: Math.max(0, chartData.length - pairVisibleBars), to: chartData.length});
+            chart.timeScale().setVisibleLogicalRange({from: Math.max(0, chartData.length - pairVisibleBars), to: chartData.length});
           }
         }
         // Update price
