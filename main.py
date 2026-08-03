@@ -3142,6 +3142,16 @@ function manualSell() {
   });
 }
 
+function setMultiPairChartData(card, ph) {
+  if (!card || !card._series || !ph || !ph.length) return;
+  var chartData = ph.map(function(p, j) {
+    var o = j > 0 ? ph[j - 1].value : p.value;
+    return {time:p.time, open:o, high:Math.max(o,p.value), low:Math.min(o,p.value), close:p.value};
+  });
+  if (chartData.length === 1) chartData.unshift({time:ph[0].time-1, open:ph[0].value, high:ph[0].value, low:ph[0].value, close:ph[0].value});
+  card._series.setData(chartData);
+  if (card._chart) card._chart.timeScale().scrollToPosition(chartData.length, false);
+}
 function togglePaper() {
   apiFetch("/toggle_paper").then(function(r) { return r.json(); }).then(function(d) {
     var btn = document.getElementById("paper-btn");
