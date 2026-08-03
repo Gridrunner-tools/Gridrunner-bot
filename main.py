@@ -285,6 +285,8 @@ state = {
     
     "best_trade":    None,
     "trades_list":   [],
+    # Per-pair completed-trade metrics used by dashboard summary cards.
+    "pair_stats":    {},
     "positions_list": [],
     "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
     "last_trade":    None,
@@ -1743,6 +1745,22 @@ def record_trade(side, price, amount, pnl=None, pair=None):
             state["trades"] = state["trades"][-500:]
         state["last_trade"] = {"action": side, "pair": _pair, "price": price, "time": time.time()}
         state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
+        # Rebuild pair stats from completed (PnL-bearing) trades.  Buy entries
+        # intentionally do not count as trades until their matching sell has a
+        # realized PnL; this keeps BTC/ETH metrics consistent with trade history.
+        pair_stats = {}
+        for t in state["trades"]:
+            pnl = t.get("pnl")
+            pair = t.get("pair") or state.get("pair", "")
+            if pnl is None or not pair: continue
+            stats = pair_stats.setdefault(pair, {"trades": 0, "wins": 0, "pnl": 0.0})
+            stats["trades"] += 1
+            stats["wins"] += 1 if pnl > 0 else 0
+            stats["pnl"] += float(pnl)
+        for stats in pair_stats.values():
+            stats["avg_profit"] = stats["pnl"] / stats["trades"] if stats["trades"] else 0.0
+            stats["win_rate"] = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0.0
+        state["pair_stats"] = pair_stats
     # Persist to file
     log_trade_to_file({"event":"TRADE","time":trade["time"],"side":side,"pair":trade["pair"],"price":price,"amount":amount,"pnl":pnl})
 
@@ -3320,11 +3338,22 @@ function refresh() {
       document.getElementById("pause-btn").style.display = "none";
     }
 
-    // Update summary cards
-    document.getElementById("sm-winrate").textContent = d.win_rate != null ? d.win_rate + "%" : "0%";
-    document.getElementById("sm-avgprofit").textContent = d.avg_profit != null ? "$" + (d.avg_profit||0).toFixed(2) : "$0.00";
-    document.getElementById("sm-trades").textContent = d.trades_count != null ? d.trades_count : 0;
-    document.getElementById("sm-best").textContent = d.best_trade != null ? "$" + (d.best_trade||0).toFixed(2) : "—";
+    // Update summary cards from realized P&L for the selected pair. The legacy
+    // top-level fields are not pair-aware and remain zero during multi-grid runs.
+    var metricPair = sel.pair || d.pair || "";
+    var pairMetric = d.pair_stats && d.pair_stats[metricPair];
+    var pairTrades = d.trades_list ? d.trades_list.filter(function(t) {
+      return (t.pair || d.pair || "") === metricPair && t.pnl != null;
+    }) : [];
+    var metricCount = pairMetric ? pairMetric.trades : pairTrades.length;
+    var metricAvg = pairMetric ? pairMetric.avg_profit : (metricCount ? pairTrades.reduce(function(sum, t) { return sum + Number(t.pnl || 0); }, 0) / metricCount : 0);
+    var metricWins = pairMetric ? pairMetric.wins : pairTrades.filter(function(t) { return Number(t.pnl) > 0; }).length;
+    var metricWinRate = metricCount ? (pairMetric ? pairMetric.win_rate : metricWins / metricCount * 100) : 0;
+    var metricBest = pairTrades.length ? Math.max.apply(null, pairTrades.map(function(t) { return Number(t.pnl || 0); })) : null;
+    document.getElementById("sm-winrate").textContent = metricWinRate.toFixed(1).replace(/\.0$/, "") + "%";
+    document.getElementById("sm-avgprofit").textContent = "$" + Number(metricAvg || 0).toFixed(2);
+    document.getElementById("sm-trades").textContent = metricCount;
+    document.getElementById("sm-best").textContent = metricBest != null ? "$" + metricBest.toFixed(2) : "—";
 
     // Update trade table
     if (d.trades_list && d.trades_list.length) {
@@ -3510,6 +3539,16 @@ class Handler(BaseHTTPRequestHandler):
                 b"self.addEventListener('fetch',function(e){e.respondWith(fetch(e.request).catch(function(){return caches.match(e.request)}))})")
         elif path=="/state":
             state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
+            pair_stats = {}
+            for t in state["trades"]:
+                pnl = t.get("pnl"); pair = t.get("pair") or state.get("pair", "")
+                if pnl is None or not pair: continue
+                stats = pair_stats.setdefault(pair, {"trades": 0, "wins": 0, "pnl": 0.0})
+                stats["trades"] += 1; stats["wins"] += 1 if pnl > 0 else 0; stats["pnl"] += float(pnl)
+            for stats in pair_stats.values():
+                stats["avg_profit"] = stats["pnl"] / stats["trades"] if stats["trades"] else 0.0
+                stats["win_rate"] = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0.0
+            state["pair_stats"] = pair_stats
             state["positions_count"] = len(state.get("positions", []))
             if not self._check_auth():
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
