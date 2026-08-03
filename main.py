@@ -2582,14 +2582,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="section-label" style="margin-top:16px">Strategy</div>
     <select class="dd" id="strat-select" onchange="selectStrat(this.value)">
       <option value="">— Select Strategy —</option>
-      <option value="dca">DCA — Dollar Cost Average</option>
       <option value="grid">Grid Trading</option>
-      <option value="rsi_ema">RSI + EMA Crossover</option>
-      <option value="bbands">Bollinger Bands</option>
-      <option value="webhook">TradingView Webhook</option>
-      <option value="scalp">Scalping</option>
-      <option value="copy">Copy Trading</option>
-      <option value="arb">Arbitrage</option>
     </select>
 
     <div class="section-label">Trading Pair</div>
@@ -3165,11 +3158,18 @@ function refresh() {
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     try {
     var on = d.running;
+    if (!on) window._gridPairs = [];
+    // Keep the last known pair set while the bot is running. A transient state
+    // response must not tear down multi-grid cards (or their chart state).
+    if (on && d.strategy === "grid" && d.active_pairs && d.active_pairs.length) {
+      window._gridPairs = d.active_pairs.slice();
+    }
+    var activePairs = (on && d.strategy === "grid" && window._gridPairs) ? window._gridPairs : (d.active_pairs || []);
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
-    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (d.active_pairs ? d.active_pairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
+    document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + activePairs.join(", ") + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
     // Multi-pair mode: show per-pair charts when 2+ active pairs
-    var multiPair = d.active_pairs && d.active_pairs.length >= 2;
+    var multiPair = activePairs.length >= 2;
     var singleRow = document.getElementById("single-chart-row");
     var chartsWrap = document.getElementById("charts-container");
     if (multiPair) {
@@ -3182,18 +3182,18 @@ function refresh() {
       if (chartsWrap) chartsWrap.style.display = "none";
     }
     // Render multi-pair cards whenever we have 2+ pairs
-    if (d.active_pairs && d.active_pairs.length >= 2) {
-      // Clean up cards for pairs no longer active
+    if (activePairs.length >= 2) {
+      // Use retained pairs so transient state responses do not tear down cards.
       if (chartsWrap) {
         var allCards = chartsWrap.querySelectorAll('[id^="mpcard-"]');
         var activeSet = {};
-        d.active_pairs.forEach(function(p) { activeSet[p] = true; });
+        activePairs.forEach(function(p) { activeSet[p] = true; });
         allCards.forEach(function(card) {
           var cardPair = card.id.replace("mpcard-", "").replace(/_/g, "/");
           if (!activeSet[cardPair]) card.remove();
         });
       }
-      var multiPairs = d.active_pairs;
+      var multiPairs = activePairs;
       multiPairs.forEach(function(pair) {
         var cardId = "mpcard-" + pair.replace(/[^a-zA-Z0-9]/g, "_");
         var card = document.getElementById(cardId);
