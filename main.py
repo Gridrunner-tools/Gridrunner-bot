@@ -2495,15 +2495,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 
     <div class="section-label" style="margin-top:16px">Strategy</div>
     <select class="dd" id="strat-select" onchange="selectStrat(this.value)">
-      <option value="">— Select Strategy —</option>
-      <option value="dca">DCA — Dollar Cost Average</option>
-      <option value="grid">Grid Trading</option>
-      <option value="rsi_ema">RSI + EMA Crossover</option>
-      <option value="bbands">Bollinger Bands</option>
-      <option value="webhook">TradingView Webhook</option>
-      <option value="scalp">Scalping</option>
-      <option value="copy">Copy Trading</option>
-      <option value="arb">Arbitrage</option>
+      <option value="grid" selected>Grid Trading</option>
     </select>
 
     <div class="section-label">Trading Pair</div>
