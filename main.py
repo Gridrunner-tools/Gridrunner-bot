@@ -3923,9 +3923,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/config":
             if not self._auth_or_401(): return
-            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
+            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
             bool_keys = {"auto_compound"}
-            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
+            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
             for key in config_keys:
                 if key in data and data[key] is not None:
                     if key in bool_keys:
@@ -3940,10 +3940,13 @@ class Handler(BaseHTTPRequestHandler):
                             log("Config "+key+" parse error: "+str(e), "WARN")
                     else:
                         cfg[key] = data[key]
+            # Keep the shared stop-loss control aligned for both grid and non-grid loops.
+            if "grid_stop_loss_pct" in data:
+                cfg["stop_loss"] = cfg["grid_stop_loss_pct"]
             # Persist every dashboard control into the live cfg used by trade loops.
             # The former handler omitted Render's max_loss/take_profit/min_arb_spread,
             # so those controls appeared to save but never affected a trade.
-            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
+            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         elif path == "/trade_log":
