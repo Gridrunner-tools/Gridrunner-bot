@@ -317,7 +317,8 @@ def send_telegram(msg):
     if not token or not chat_id:
         return
     try:
-        r = requests.post(f"https://api.telegram.org/bot{token}/sendMessage",
+        r = requests.post("https://api.telegram.org/sendMessage",
+            params={"bot": token},
             json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
             timeout=5)
         if r.status_code != 200:
@@ -3114,7 +3115,7 @@ function pnlHtml(v) {
 
 function killSwitch() {
   if (!confirm("🛑 KILL SWITCH: Close ALL positions on ALL pairs? This cannot be undone.")) return;
-  fetch("/kill",{method:"POST"}).then(function(r){return r.json()}).then(function(d){
+  apiFetch("/kill",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirm:true})}).then(function(r){return r.json()}).then(function(d){
     showToast("KILL: "+d.closed+" positions closed, $"+d.total_value.toFixed(2),"error");
   }).catch(function(){showToast("Kill failed","error")});
 }
@@ -3540,11 +3541,9 @@ window.addEventListener("resize", function() {
 setInterval(refresh, 3000);
 refresh();
 initChart();
-  var API_SECRET = "{API_SECRET}";
   function apiFetch(url, opts) {
     opts = opts || {};
-    opts.headers = opts.headers || {};
-    if (API_SECRET) opts.headers["X-API-Secret"] = API_SECRET;
+    opts.credentials = "same-origin";
     return fetch(url, opts);
   }
   document.querySelectorAll("#config-card input, #config-card select").forEach(function(el) {
@@ -3557,11 +3556,13 @@ initChart();
 
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
-    API_SECRET = os.environ.get("API_SECRET", "")
 
     def _check_auth(self):
         sent = self.headers.get("X-API-Secret", "")
-        if self.API_SECRET and sent != self.API_SECRET:
+        cookie = self.headers.get("Cookie", "")
+        cookie_secret = cookie.split("api_auth=", 1)[1].split(";", 1)[0] if "api_auth=" in cookie else ""
+        secret = os.environ.get("API_SECRET", "")
+        if not secret or not hmac.compare_digest(sent or cookie_secret, secret):
             self.respond(401, "text/plain", b"Unauthorized")
             return False
         return True
@@ -3571,13 +3572,15 @@ class Handler(BaseHTTPRequestHandler):
             return False
         return True
 
+    def do_OPTIONS(self):
+        self.respond(204, "text/plain", b"")
     def do_GET(self):
         parsed=urlparse(self.path)
         path=parsed.path
         params=parse_qs(parsed.query)
 
         if path=="/":
-            self.respond(200,"text/html",DASHBOARD.replace("{API_SECRET}", os.environ.get("API_SECRET","")).encode())
+            self.respond(200,"text/html",DASHBOARD.encode(), extra_headers=[("Set-Cookie", "api_auth=" + os.environ["API_SECRET"] + "; HttpOnly; Secure; SameSite=Strict; Path=/")])
         elif path=="/logo.jpeg":
             try:
                 with open("logo.jpeg","rb") as f: logo_data=f.read()
@@ -3634,20 +3637,6 @@ class Handler(BaseHTTPRequestHandler):
             if not self._auth_or_401(): return
             stop_bot()
             self.respond(200,"application/json",b'{"ok":true}')
-        elif path=="/kill":
-            if not self._auth_or_401(): return
-            closed = 0; total_val = 0.0
-            for pair in list(state.get("active_pairs",[])):
-                gs = state["grid_pairs"].get(pair,{})
-                filled = gs.get("filled",{})
-                for idx, pos in list(filled.items()):
-                    if place_order(pair, "sell", pos["amount"]):
-                        total_val += pos["amount"] * pos.get("price", 0)
-                        closed += 1
-                        del filled[idx]
-            state["running"] = False
-            state["active_pairs"] = []
-            self.respond(200,"application/json",json.dumps({"closed":closed,"total_value":round(total_val,2)}).encode())
         elif path=="/backtest":
             if not self._auth_or_401(): return
             try: data = json.loads(self.rfile.read(int(self.headers.get("Content-Length",0))))
@@ -3922,7 +3911,12 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(404,"text/plain",b"Not found")
 
     def do_POST(self):
-        content_len = int(self.headers.get("Content-Length", 0))
+        try:
+            content_len = int(self.headers.get("Content-Length", 0))
+        except ValueError:
+            self.respond(400, "text/plain", b"Invalid Content-Length"); return
+        if content_len > 1024 * 1024:
+            self.respond(413, "text/plain", b"Payload Too Large"); return
         if content_len > 0:
             body = self.rfile.read(content_len)
             try: data = json.loads(body)
@@ -3931,6 +3925,18 @@ class Handler(BaseHTTPRequestHandler):
                 data = {}
         else: data = {}
         path = urlparse(self.path).path
+        if path == "/kill":
+            if not self._auth_or_401(): return
+            if data.get("confirm") is not True:
+                self.respond(400, "application/json", b'{"error":"confirmation required"}'); return
+            closed = 0; total_val = 0.0
+            for pair in list(state.get("active_pairs", [])):
+                filled = state["grid_pairs"].get(pair, {}).get("filled", {})
+                for idx, pos in list(filled.items()):
+                    if place_order(pair, "sell", pos["amount"]):
+                        total_val += pos["amount"] * pos.get("price", 0); closed += 1; del filled[idx]
+            state["running"] = False; state["active_pairs"] = []
+            self.respond(200, "application/json", json.dumps({"closed": closed, "total_value": round(total_val, 2)}).encode()); return
         if path == "/config":
             if not self._auth_or_401(): return
             config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
@@ -3943,8 +3949,10 @@ class Handler(BaseHTTPRequestHandler):
                     elif key in float_keys:
                         try:
                             val = float(data[key])
-                            if key == "partial_sell_pct":
-                                val = max(1, min(99, val))
+                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "grid_stop_loss_pct": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 99), "base_spread": (0, 1)}
+                            lo, hi = bounds[key]
+                            if not math.isfinite(val) or not lo <= val <= hi:
+                                raise ValueError("out of bounds")
                             cfg[key] = val
                         except (ValueError, TypeError) as e:
                             log("Config "+key+" parse error: "+str(e), "WARN")
@@ -4106,8 +4114,17 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.respond(404,"text/plain",b"Not found")
     
-    def respond(self,code,ctype,body):
+    def respond(self,code,ctype,body,extra_headers=None):
         self.send_response(code)
+        origin = self.headers.get("Origin")
+        allowed = os.environ.get("DASHBOARD_ORIGIN", "")
+        if origin and allowed and origin == allowed:
+            self.send_header("Access-Control-Allow-Origin", allowed)
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, X-API-Secret")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Vary", "Origin")
+        if extra_headers:
+            for key, value in extra_headers: self.send_header(key, value)
         self.send_header("Content-Type",ctype)
         self.send_header("Content-Length",str(len(body)))
         self.end_headers()
@@ -4117,6 +4134,8 @@ class Handler(BaseHTTPRequestHandler):
 
 if __name__=="__main__":
     port=int(os.environ.get("PORT",10000))
+    if not os.environ.get("API_SECRET", ""):
+        raise RuntimeError("API_SECRET must be set")
     log("Bot dashboard starting on port "+str(port))
     valid, linfo = validate_license()
     state["license_valid"] = valid
