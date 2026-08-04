@@ -2663,6 +2663,9 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="ct">Configuration</div>
     <div class="config-grid">
       <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="cfg-risk" value="" min="0.1" max="100" step="0.1" placeholder="Loaded from state..."/></div>
+      <div class="config-field"><label>Daily Loss Limit ($)</label><input type="number" id="cfg-maxloss" value="200" min="0" step="1"/></div>
+      <div class="config-field"><label>Take Profit (%)</label><input type="number" id="cfg-takeprofit" value="15" min="0" step="0.5"/></div>
+      <div class="config-field"><label>Arbitrage Min Spread (%)</label><input type="number" id="cfg-arbspread" value="1.5" min="0" step="0.1"/></div>
       <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
       <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
       <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.5" min="0.1" max="10" step="0.1"/></div>
@@ -3010,14 +3013,23 @@ function applyPreset(name) {
   showToast("Preset '" + name + "' applied", "info");
 }
 
+var configDirty = false;
+function markConfigDirty() { configDirty = true; }
+function configNumber(id, fallback) {
+  var value = parseFloat(document.getElementById(id).value);
+  return Number.isFinite(value) ? value : fallback;
+}
 function saveConfig() {
   var cfg = {
-    risk_pct: parseFloat(document.getElementById("cfg-risk").value) || null,
-    max_pos: parseInt(document.getElementById("cfg-maxpos").value) || 500,
-    grid_stop_loss_pct: parseFloat(document.getElementById("cfg-stoploss").value) || 8,
-    trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.5,
-    partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
-    base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
+    risk_pct: configNumber("cfg-risk", 2),
+    max_pos: configNumber("cfg-maxpos", 500),
+    max_loss: configNumber("cfg-maxloss", 200),
+    take_profit: configNumber("cfg-takeprofit", 15),
+    min_arb_spread: configNumber("cfg-arbspread", 1.5),
+    grid_stop_loss_pct: configNumber("cfg-stoploss", 8),
+    trailing_pct: configNumber("cfg-trailing", 0.5),
+    partial_sell_pct: configNumber("cfg-partial", 50),
+    base_spread: configNumber("cfg-spread", 5) / 100,
     auto_compound: document.getElementById("cfg-compound").value === "true"
   };
   apiFetch("/config", {
@@ -3503,9 +3515,12 @@ function refresh() {
     }
 
     // Update config display
-    if (d.config) {
+    if (d.config && !configDirty && !document.querySelector("#config-card input:focus, #config-card select:focus")) {
       document.getElementById("cfg-risk").value = d.config.risk_pct || "";
-      document.getElementById("cfg-maxpos").value = d.config.max_pos || 500;
+      document.getElementById("cfg-maxpos").value = d.config.max_pos ?? 500;
+      document.getElementById("cfg-maxloss").value = d.config.max_loss ?? 200;
+      document.getElementById("cfg-takeprofit").value = d.config.take_profit ?? 15;
+      document.getElementById("cfg-arbspread").value = d.config.min_arb_spread ?? 1.5;
       document.getElementById("cfg-stoploss").value = d.config.grid_stop_loss_pct || 8;
       document.getElementById("cfg-trailing").value = d.config.trailing_pct || 0.5;
       document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
@@ -3532,6 +3547,10 @@ initChart();
     if (API_SECRET) opts.headers["X-API-Secret"] = API_SECRET;
     return fetch(url, opts);
   }
+  document.querySelectorAll("#config-card input, #config-card select").forEach(function(el) {
+    el.addEventListener("input", markConfigDirty);
+    el.addEventListener("change", markConfigDirty);
+  });
 </script>
 </body>
 </html>'''
@@ -3914,9 +3933,9 @@ class Handler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/config":
             if not self._auth_or_401(): return
-            config_keys = ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
+            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound"]
             bool_keys = {"auto_compound"}
-            float_keys = {"risk_pct", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
+            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
             for key in config_keys:
                 if key in data and data[key] is not None:
                     if key in bool_keys:
@@ -3931,9 +3950,13 @@ class Handler(BaseHTTPRequestHandler):
                             log("Config "+key+" parse error: "+str(e), "WARN")
                     else:
                         cfg[key] = data[key]
-            # Map saveConfig keys to internal cfg keys
-            if "max_pos" in data: cfg["max_pos"] = float(data["max_pos"])
-            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
+            # Keep the shared stop-loss control aligned for both grid and non-grid loops.
+            if "grid_stop_loss_pct" in data:
+                cfg["stop_loss"] = cfg["grid_stop_loss_pct"]
+            # Persist every dashboard control into the live cfg used by trade loops.
+            # The former handler omitted Render's max_loss/take_profit/min_arb_spread,
+            # so those controls appeared to save but never affected a trade.
+            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         elif path == "/trade_log":
