@@ -3511,7 +3511,7 @@ function refresh() {
       showToast(d.last_trade.action.toUpperCase() + " " + d.last_trade.pair + " @ $" + d.last_trade.price, "trade");
       playBeep();
       requestNotif();
-      sendNotif("LeverBot", d.last_trade.action.toUpperCase() + " " + d.last_trade.pair + " @ $" + d.last_trade.price);
+      sendNotif("GridRunner", d.last_trade.action.toUpperCase() + " " + d.last_trade.pair + " @ $" + d.last_trade.price);
     }
 
     // Update config display
