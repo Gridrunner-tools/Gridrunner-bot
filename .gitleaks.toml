@@ -1,4 +1,4 @@
-title = "LeverBot Gitleaks config"
+title = "GridRunner Gitleaks config"
 
 [allowlist]
   description = "Global allowlist"

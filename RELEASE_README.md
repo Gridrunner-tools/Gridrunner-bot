@@ -1,4 +1,4 @@
-# LeverBot — Automated Grid Trading Bot for Solana DEXs
+# GridRunner — Automated Grid Trading Bot for Solana DEXs
 
 Run automated spot grid trading on Solana DEXs (Raydium, Jupiter). Multi-pair, smart trailing buys/sells, partial profit taking, auto-compounding.
 
