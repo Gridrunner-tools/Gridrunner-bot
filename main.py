@@ -1921,6 +1921,14 @@ def _init_grid_pair(pair):
         "price": price, "previous_price": None, "levels": levels, "spread": spread,
     }
 
+def _grid_crossed_buy_indices(grids, mid_idx, filled, previous_price, price):
+    """Return unfilled buy levels crossed on an upward tick of the final grid."""
+    if price <= 0 or (previous_price is not None and price < previous_price):
+        return set()
+    floor = previous_price if previous_price is not None else price
+    return {idx for idx, level in enumerate(grids[:mid_idx])
+            if idx not in filled and floor <= level <= price}
+
 def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high):
     """Sync per-pair grid state to state dict for dashboard display."""
     gp = state["grid_pairs"].get(pair, {})
@@ -2033,11 +2041,8 @@ def run_grid():
             # Compute crossings against the final grid, after any recentering.
             # Downward movement defers buys until a later upward tick.
             moving_up = previous_price is None or price >= previous_price
-            crossed_buy_indices = set()
-            if price > 0 and moving_up:
-                floor = previous_price if previous_price is not None else price
-                crossed_buy_indices = {idx for idx, level in enumerate(grids[:mid_idx])
-                                       if idx not in filled and floor <= level <= price}
+            crossed_buy_indices = _grid_crossed_buy_indices(
+                grids, mid_idx, filled, previous_price, price)
             gs["previous_price"] = price
             bal = get_balance()
             effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
