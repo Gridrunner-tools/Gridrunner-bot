@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# build_release.sh — Build the LeverBot release package.
+# build_release.sh — Build the GridRunner release package.
 #
 # Usage:
 #   ./scripts/build_release.sh [--version v1.0.0] [--mode pyarmor|pyc]
@@ -24,7 +24,7 @@ RELEASE_BRANCH="release"
 
 cd "$ROOT_DIR"
 
-echo "=== LeverBot Release Builder ==="
+echo "=== GridRunner Release Builder ==="
 echo "Version: $VERSION"
 echo "Mode:    $MODE"
 echo ""
