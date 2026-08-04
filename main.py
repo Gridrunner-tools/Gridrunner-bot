@@ -3013,17 +3013,23 @@ function applyPreset(name) {
   showToast("Preset '" + name + "' applied", "info");
 }
 
+var configDirty = false;
+function markConfigDirty() { configDirty = true; }
+function configNumber(id, fallback) {
+  var value = parseFloat(document.getElementById(id).value);
+  return Number.isFinite(value) ? value : fallback;
+}
 function saveConfig() {
   var cfg = {
-    risk_pct: parseFloat(document.getElementById("cfg-risk").value) || null,
-    max_pos: parseFloat(document.getElementById("cfg-maxpos").value) || 500,
-    max_loss: parseFloat(document.getElementById("cfg-maxloss").value) || 0,
-    take_profit: parseFloat(document.getElementById("cfg-takeprofit").value) || 0,
-    min_arb_spread: parseFloat(document.getElementById("cfg-arbspread").value) || 0,
-    grid_stop_loss_pct: parseFloat(document.getElementById("cfg-stoploss").value) || 8,
-    trailing_pct: parseFloat(document.getElementById("cfg-trailing").value) || 0.5,
-    partial_sell_pct: parseInt(document.getElementById("cfg-partial").value) || 50,
-    base_spread: parseFloat(document.getElementById("cfg-spread").value) / 100 || 0.05,
+    risk_pct: configNumber("cfg-risk", 2),
+    max_pos: configNumber("cfg-maxpos", 500),
+    max_loss: configNumber("cfg-maxloss", 200),
+    take_profit: configNumber("cfg-takeprofit", 15),
+    min_arb_spread: configNumber("cfg-arbspread", 1.5),
+    grid_stop_loss_pct: configNumber("cfg-stoploss", 8),
+    trailing_pct: configNumber("cfg-trailing", 0.5),
+    partial_sell_pct: configNumber("cfg-partial", 50),
+    base_spread: configNumber("cfg-spread", 5) / 100,
     auto_compound: document.getElementById("cfg-compound").value === "true"
   };
   apiFetch("/config", {
@@ -3509,7 +3515,7 @@ function refresh() {
     }
 
     // Update config display
-    if (d.config) {
+    if (d.config && !configDirty && !document.querySelector("#config-card input:focus, #config-card select:focus")) {
       document.getElementById("cfg-risk").value = d.config.risk_pct || "";
       document.getElementById("cfg-maxpos").value = d.config.max_pos ?? 500;
       document.getElementById("cfg-maxloss").value = d.config.max_loss ?? 200;
@@ -3541,6 +3547,10 @@ initChart();
     if (API_SECRET) opts.headers["X-API-Secret"] = API_SECRET;
     return fetch(url, opts);
   }
+  document.querySelectorAll("#config-card input, #config-card select").forEach(function(el) {
+    el.addEventListener("input", markConfigDirty);
+    el.addEventListener("change", markConfigDirty);
+  });
 </script>
 </body>
 </html>'''
