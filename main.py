@@ -1993,6 +1993,15 @@ def run_grid():
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
 
             price = get_price(pair)
+            previous_price = gs.get("previous_price")
+            # Buys are enabled on upward ticks only; downward touches defer.
+            moving_up = previous_price is None or price >= previous_price
+            crossed_buy_indices = set()
+            if price > 0 and moving_up:
+                floor = previous_price if previous_price is not None else price
+                crossed_buy_indices = {idx for idx, level in enumerate(grids[:mid_idx])
+                                       if idx not in filled and floor <= level <= price}
+            gs["previous_price"] = price
             if price > 0:
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
@@ -2035,7 +2044,7 @@ def run_grid():
             size = max(min_order, min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels)
             for i,g in enumerate(grids[:-1]):
                 ng = grids[i+1]
-                if g <= price < ng:
+                if (g <= price < ng) or (i in crossed_buy_indices):
                     is_buy_zone = i < mid_idx
                     # ── BUY ZONE: trailing buy (buy on bounce) ──
                     if is_buy_zone:
@@ -2051,7 +2060,8 @@ def run_grid():
                         dip_mult = 1.5 if state.get("dip_active") else 1.0
                         # Buy: immediately if no dip, or on 0.5% bounce if dipped
                         if trailing_buy_active and i not in filled and size > 1:
-                            should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                            # Every reached level executes immediately on upward movement.
+                            should_buy = moving_up
                             if should_buy:
                                 amt = round(size*dip_mult/price,6)
                                 if place_order(pair,"buy",amt):
