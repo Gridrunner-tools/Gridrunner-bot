@@ -1918,7 +1918,7 @@ def _init_grid_pair(pair):
         "grids": grids, "mid_idx": mid_idx, "filled": {},
         "trailing_pct": 0.5, "trailing_high": 0.0, "trailing_sell_active": False,
         "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
-        "price": price, "levels": levels, "spread": spread,
+        "price": price, "previous_price": None, "levels": levels, "spread": spread,
     }
 
 def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high):
@@ -1994,14 +1994,6 @@ def run_grid():
 
             price = get_price(pair)
             previous_price = gs.get("previous_price")
-            # Buys are enabled on upward ticks only; downward touches defer.
-            moving_up = previous_price is None or price >= previous_price
-            crossed_buy_indices = set()
-            if price > 0 and moving_up:
-                floor = previous_price if previous_price is not None else price
-                crossed_buy_indices = {idx for idx, level in enumerate(grids[:mid_idx])
-                                       if idx not in filled and floor <= level <= price}
-            gs["previous_price"] = price
             if price > 0:
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
@@ -2038,6 +2030,15 @@ def run_grid():
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     state["partial_positions"] = {}
                     log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+            # Compute crossings against the final grid, after any recentering.
+            # Downward movement defers buys until a later upward tick.
+            moving_up = previous_price is None or price >= previous_price
+            crossed_buy_indices = set()
+            if price > 0 and moving_up:
+                floor = previous_price if previous_price is not None else price
+                crossed_buy_indices = {idx for idx, level in enumerate(grids[:mid_idx])
+                                       if idx not in filled and floor <= level <= price}
+            gs["previous_price"] = price
             bal = get_balance()
             effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
             min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))  # $5 minimum per grid level

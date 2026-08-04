@@ -32,3 +32,22 @@ if __name__ == "__main__":
     test_upward_touch_executes_each_reached_buy_point()
     test_downward_touch_defers_buy_points_until_drop_is_over()
     print("PASS grid buy trigger regressions")
+
+def test_recenter_uses_final_grid_for_crossings():
+    # A recenter replaces the old levels before crossing eligibility is built.
+    # The stale pre-recenter grid would incorrectly include level 0 (90).
+    final_grids = [80, 90, 100, 110, 120, 130]
+    assert buy_levels_to_execute(final_grids, 3, {}, 89, 101) == [1, 2]
+
+
+def test_run_grid_computes_crossings_after_recenter_block():
+    from pathlib import Path
+    source = Path("main.py").read_text()
+    recenter = source.index("# ── Grid re-centering")
+    crossing = source.index("# Compute crossings against the final grid", recenter)
+    assert crossing > recenter
+
+if __name__ == "__main__":
+    test_recenter_uses_final_grid_for_crossings()
+    test_run_grid_computes_crossings_after_recenter_block()
+    print("PASS recentering regressions")
