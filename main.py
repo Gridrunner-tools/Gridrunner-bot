@@ -5,7 +5,7 @@ DEX mode: Wallet-based spot grid trading on Solana via Raydium/Jupiter
 Price feeds: Kraken (no key needed)
 Strategies: DCA, Grid, Scalping, Copy Trading, Arbitrage
 """
-import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string
+import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string, math
 
 PAPER_MODE_FILE = os.environ.get("PAPER_MODE_FILE", "/tmp/gridrunner-paper-mode.json")
 
@@ -215,17 +215,17 @@ def _save_paper_mode(value):
     with open(tmp, "w") as f: json.dump({"paper_trading": bool(value)}, f)
     os.replace(tmp, PAPER_MODE_FILE)
 
+def _secret(name):
+    """Read credentials only at point of use; never retain them in global config/state."""
+    return os.environ.get(name, "")
+
 cfg = {
     # CEX
-    "api_key":      os.environ.get("API_KEY", ""),
-    "api_secret":   os.environ.get("API_SECRET", ""),
     "exchange":     os.environ.get("EXCHANGE", "bybit"),
     # DEX/EVM
     "wallet":       os.environ.get("WALLET_ADDRESS", ""),
-    "private_key":  os.environ.get("PRIVATE_KEY", ""),
     # Solana
     "sol_wallet":   os.environ.get("SOL_WALLET_ADDRESS", ""),
-    "sol_key":      os.environ.get("SOL_PRIVATE_KEY", ""),
     # Trading
     "pair":         os.environ.get("TRADING_PAIR", "SOL/USDC"),
     "risk_pct":     float(os.environ.get("RISK_PCT", "2")),
@@ -241,9 +241,6 @@ cfg = {
     "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
-    "license_key":   os.environ.get("LICENSE_KEY", ""),
-    "tg_bot_token":    os.environ.get("TG_BOT_TOKEN", ""),
-    "tg_chat_id":      os.environ.get("TG_CHAT_ID", ""),
 }
 
 import threading
@@ -312,13 +309,14 @@ state = {
 }
 
 def send_telegram(msg):
-    token = cfg.get("tg_bot_token", "")
-    chat_id = cfg.get("tg_chat_id", "")
+    # Telegram requires the bot token in its endpoint, but POST avoids token-bearing
+    # GET requests and prevents credentials from being sent via query parameters.
+    token = _secret("TG_BOT_TOKEN")
+    chat_id = _secret("TG_CHAT_ID")
     if not token or not chat_id:
         return
     try:
-        r = requests.post("https://api.telegram.org/sendMessage",
-            params={"bot": token},
+        r = requests.post("https://api.telegram.org/bot" + token + "/sendMessage",
             json={"chat_id": chat_id, "text": msg, "parse_mode": "HTML"},
             timeout=5)
         if r.status_code != 200:
@@ -491,7 +489,7 @@ def _get_cex_exchange(name):
     global _cex_exchanges
     if name not in _cex_exchanges:
         import ccxt
-        opts = {'apiKey': cfg['api_key'], 'secret': cfg['api_secret']}
+        opts = {'apiKey': _secret("API_KEY"), 'secret': _secret("API_SECRET")}
         if name == 'lbank':
             opts['options'] = {
                 'createMarketBuyOrderRequiresPrice': False,
@@ -520,9 +518,9 @@ def cex_get_balance():
         if exchange == "binance":
             ts = str(int(time.time()*1000))
             params = "timestamp="+ts
-            sig = hmac.new(cfg["api_secret"].encode(), params.encode(), hashlib.sha256).hexdigest()
+            sig = hmac.new(_secret("API_SECRET").encode(), params.encode(), hashlib.sha256).hexdigest()
             r = requests.get("https://api.binance.com/api/v3/account",
-                headers={"X-MBX-APIKEY": cfg["api_key"]},
+                headers={"X-MBX-APIKEY": _secret("API_KEY")},
                 params={"timestamp":ts,"signature":sig}, timeout=5)
             data = r.json()
             for b in data.get("balances",[]):
@@ -531,10 +529,10 @@ def cex_get_balance():
                     return float(b["free"])
         elif exchange == "bybit":
             ts = str(int(time.time()*1000))
-            params = "timestamp="+ts+"&api_key="+cfg["api_key"]
-            sig = hmac.new(cfg["api_secret"].encode(), params.encode(), hashlib.sha256).hexdigest()
+            params = "timestamp="+ts+"&api_key="+_secret("API_KEY")
+            sig = hmac.new(_secret("API_SECRET").encode(), params.encode(), hashlib.sha256).hexdigest()
             r = requests.get("https://api.bybit.com/v2/private/wallet/balance",
-                params={"timestamp":ts,"api_key":cfg["api_key"],"sign":sig,"coin":"USDT"}, timeout=5)
+                params={"timestamp":ts,"api_key":_secret("API_KEY"),"sign":sig,"coin":"USDT"}, timeout=5)
             data = r.json()
             usdt = data.get("result",{}).get("USDT",{}).get("available_balance",0)
             state["balance"] = float(usdt)
@@ -544,9 +542,9 @@ def cex_get_balance():
             ts = datetime.datetime.utcnow().strftime('%Y-%m-%dT%H:%M:%S.000Z')
             path = "/api/v5/account/balance"
             sign_str = ts+"GET"+path+""
-            sig = base64.b64encode(hmac.new(cfg["api_secret"].encode(),sign_str.encode(),hashlib.sha256).digest()).decode()
+            sig = base64.b64encode(hmac.new(_secret("API_SECRET").encode(),sign_str.encode(),hashlib.sha256).digest()).decode()
             r = requests.get("https://www.okx.com"+path,
-                headers={"OK-ACCESS-KEY":cfg["api_key"],"OK-ACCESS-SIGN":sig,"OK-ACCESS-TIMESTAMP":ts,"OK-ACCESS-PASSPHRASE":os.environ.get("OKX_PASSPHRASE","")}, timeout=5)
+                headers={"OK-ACCESS-KEY":_secret("API_KEY"),"OK-ACCESS-SIGN":sig,"OK-ACCESS-TIMESTAMP":ts,"OK-ACCESS-PASSPHRASE":os.environ.get("OKX_PASSPHRASE","")}, timeout=5)
             data = r.json()
             for d in data.get("data",[{}])[0].get("details",[]):
                 if d.get("ccy")=="USDT":
@@ -561,9 +559,9 @@ def cex_get_balance():
             ts = str(int(time.time()*1000))
             path = "/api/v1/accounts"
             sign_str = ts+"GET"+path
-            sig = hmac.new(cfg["api_secret"].encode(), sign_str.encode(), hashlib.sha256).hexdigest()
+            sig = hmac.new(_secret("API_SECRET").encode(), sign_str.encode(), hashlib.sha256).hexdigest()
             r = requests.get("https://api.kucoin.com"+path,
-                headers={"KC-API-KEY":cfg["api_key"],"KC-API-SIGN":sig,"KC-API-TIMESTAMP":ts,"KC-API-PASSPHRASE":os.environ.get("KUCOIN_PASSPHRASE","")}, timeout=5)
+                headers={"KC-API-KEY":_secret("API_KEY"),"KC-API-SIGN":sig,"KC-API-TIMESTAMP":ts,"KC-API-PASSPHRASE":os.environ.get("KUCOIN_PASSPHRASE","")}, timeout=5)
             data = r.json()
             for a in data.get("data",[]):
                 if a.get("currency")=="USDT" and a.get("type")=="trade":
@@ -572,9 +570,9 @@ def cex_get_balance():
             ts = str(int(time.time()))
             path = "/0/private/Balance"
             sig_str = "/0/private/Balance"+hashlib.sha256((str(ts)+"nonce="+ts).encode()).hexdigest()
-            sig = base64.b64encode(hmac.new(cfg["api_secret"].encode(), sig_str.encode(), hashlib.sha512).digest()).decode()
+            sig = base64.b64encode(hmac.new(_secret("API_SECRET").encode(), sig_str.encode(), hashlib.sha512).digest()).decode()
             r = requests.post("https://api.kraken.com"+path,
-                headers={"API-Key":cfg["api_key"],"API-Sign":sig},
+                headers={"API-Key":_secret("API_KEY"),"API-Sign":sig},
                 data={"nonce": ts}, timeout=5)
             data = r.json()
             if not data.get("error"):
@@ -593,18 +591,18 @@ def cex_place_order(pair, side, amount):
         if exchange == "binance":
             ts = str(int(time.time()*1000))
             params = "symbol="+sym+"&side="+side.upper()+"&type=MARKET&quantity="+str(amount)+"&timestamp="+ts
-            sig = hmac.new(cfg["api_secret"].encode(), params.encode(), hashlib.sha256).hexdigest()
+            sig = hmac.new(_secret("API_SECRET").encode(), params.encode(), hashlib.sha256).hexdigest()
             r = requests.post("https://api.binance.com/api/v3/order",
-                headers={"X-MBX-APIKEY":cfg["api_key"]},
+                headers={"X-MBX-APIKEY":_secret("API_KEY")},
                 params={"symbol":sym,"side":side.upper(),"type":"MARKET","quantity":amount,"timestamp":ts,"signature":sig}, timeout=10)
             data = r.json()
             return data.get("orderId")
         elif exchange == "bybit":
             ts = str(int(time.time()*1000))
             body = json.dumps({"symbol":sym,"side":side.capitalize(),"orderType":"Market","qty":str(amount),"timeInForce":"GoodTillCancel"})
-            sig = hmac.new(cfg["api_secret"].encode(),(ts+cfg["api_key"]+"5000"+body).encode(),hashlib.sha256).hexdigest()
+            sig = hmac.new(_secret("API_SECRET").encode(),(ts+_secret("API_KEY")+"5000"+body).encode(),hashlib.sha256).hexdigest()
             r = requests.post("https://api.bybit.com/v5/order/create",
-                headers={"X-BAPI-API-KEY":cfg["api_key"],"X-BAPI-SIGN":sig,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":"5000","Content-Type":"application/json"},
+                headers={"X-BAPI-API-KEY":_secret("API_KEY"),"X-BAPI-SIGN":sig,"X-BAPI-TIMESTAMP":ts,"X-BAPI-RECV-WINDOW":"5000","Content-Type":"application/json"},
                 data=body, timeout=10)
             data = r.json()
             return data.get("result",{}).get("orderId")
@@ -638,9 +636,9 @@ def cex_place_order(pair, side, amount):
                 "sz": str(amount),
             })
             sign_str = ts+"POST"+path+body
-            sig = base64.b64encode(hmac.new(cfg["api_secret"].encode(),sign_str.encode(),hashlib.sha256).digest()).decode()
+            sig = base64.b64encode(hmac.new(_secret("API_SECRET").encode(),sign_str.encode(),hashlib.sha256).digest()).decode()
             r = requests.post("https://www.okx.com"+path,
-                headers={"OK-ACCESS-KEY":cfg["api_key"],"OK-ACCESS-SIGN":sig,"OK-ACCESS-TIMESTAMP":ts,"OK-ACCESS-PASSPHRASE":os.environ.get("OKX_PASSPHRASE",""),"Content-Type":"application/json"},
+                headers={"OK-ACCESS-KEY":_secret("API_KEY"),"OK-ACCESS-SIGN":sig,"OK-ACCESS-TIMESTAMP":ts,"OK-ACCESS-PASSPHRASE":os.environ.get("OKX_PASSPHRASE",""),"Content-Type":"application/json"},
                 data=body, timeout=10)
             data = r.json()
             return data.get("data",[{}])[0].get("ordId")
@@ -655,9 +653,9 @@ def cex_place_order(pair, side, amount):
                 "size": str(amount),
             })
             sign_str = ts+"POST"+path+body
-            sig = hmac.new(cfg["api_secret"].encode(), sign_str.encode(), hashlib.sha256).hexdigest()
+            sig = hmac.new(_secret("API_SECRET").encode(), sign_str.encode(), hashlib.sha256).hexdigest()
             r = requests.post("https://api.kucoin.com"+path,
-                headers={"KC-API-KEY":cfg["api_key"],"KC-API-SIGN":sig,"KC-API-TIMESTAMP":ts,"KC-API-PASSPHRASE":os.environ.get("KUCOIN_PASSPHRASE",""),"Content-Type":"application/json"},
+                headers={"KC-API-KEY":_secret("API_KEY"),"KC-API-SIGN":sig,"KC-API-TIMESTAMP":ts,"KC-API-PASSPHRASE":os.environ.get("KUCOIN_PASSPHRASE",""),"Content-Type":"application/json"},
                 data=body, timeout=10)
             data = r.json()
             return data.get("data",{}).get("orderId")
@@ -666,9 +664,9 @@ def cex_place_order(pair, side, amount):
             path = "/0/private/AddOrder"
             post_data = "pair="+sym+"&type="+("buy" if "buy" in side.lower() else "sell")+"&ordertype=market&volume="+str(amount)
             sig_str = "/0/private/AddOrder"+hashlib.sha256((str(ts)+post_data).encode()).hexdigest()
-            sig = base64.b64encode(hmac.new(cfg["api_secret"].encode(), sig_str.encode(), hashlib.sha512).digest()).decode()
+            sig = base64.b64encode(hmac.new(_secret("API_SECRET").encode(), sig_str.encode(), hashlib.sha512).digest()).decode()
             r = requests.post("https://api.kraken.com"+path,
-                headers={"API-Key":cfg["api_key"],"API-Sign":sig},
+                headers={"API-Key":_secret("API_KEY"),"API-Sign":sig},
                 data=post_data, timeout=10)
             data = r.json()
             if not data.get("error"):
@@ -1035,7 +1033,7 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
         from solders import message as solders_message
         import base64 as b64
 
-        private_key = cfg.get("sol_key","")
+        private_key = _secret("SOL_PRIVATE_KEY")
         wallet      = cfg.get("sol_wallet","")
         if not private_key or not wallet:
             log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set", "WARN")
@@ -1313,7 +1311,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
         from solders import message as solders_message
         import base64 as b64
 
-        private_key = cfg.get("sol_key","")
+        private_key = _secret("SOL_PRIVATE_KEY")
         wallet      = cfg.get("sol_wallet","")
         if not private_key or not wallet:
             log("SOL_PRIVATE_KEY or SOL_WALLET_ADDRESS not set", "WARN")
