@@ -1918,8 +1918,16 @@ def _init_grid_pair(pair):
         "grids": grids, "mid_idx": mid_idx, "filled": {},
         "trailing_pct": 0.5, "trailing_high": 0.0, "trailing_sell_active": False,
         "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
-        "price": price, "levels": levels, "spread": spread,
+        "price": price, "previous_price": None, "levels": levels, "spread": spread,
     }
+
+def _grid_crossed_buy_indices(grids, mid_idx, filled, previous_price, price):
+    """Return unfilled buy levels crossed on an upward tick of the final grid."""
+    if price <= 0 or (previous_price is not None and price < previous_price):
+        return set()
+    floor = previous_price if previous_price is not None else price
+    return {idx for idx, level in enumerate(grids[:mid_idx])
+            if idx not in filled and floor <= level <= price}
 
 def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high):
     """Sync per-pair grid state to state dict for dashboard display."""
@@ -1993,6 +2001,7 @@ def run_grid():
             dip_occurred = gs["dip_occurred"]; levels = gs["levels"]; spread = gs["spread"]
 
             price = get_price(pair)
+            previous_price = gs.get("previous_price")
             if price > 0:
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
@@ -2029,13 +2038,19 @@ def run_grid():
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     state["partial_positions"] = {}
                     log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+            # Compute crossings against the final grid, after any recentering.
+            # Downward movement defers buys until a later upward tick.
+            moving_up = previous_price is None or price >= previous_price
+            crossed_buy_indices = _grid_crossed_buy_indices(
+                grids, mid_idx, filled, previous_price, price)
+            gs["previous_price"] = price
             bal = get_balance()
             effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
             min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))  # $5 minimum per grid level
             size = max(min_order, min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels)
             for i,g in enumerate(grids[:-1]):
                 ng = grids[i+1]
-                if g <= price < ng:
+                if (g <= price < ng) or (i in crossed_buy_indices):
                     is_buy_zone = i < mid_idx
                     # ── BUY ZONE: trailing buy (buy on bounce) ──
                     if is_buy_zone:
@@ -2051,7 +2066,8 @@ def run_grid():
                         dip_mult = 1.5 if state.get("dip_active") else 1.0
                         # Buy: immediately if no dip, or on 0.5% bounce if dipped
                         if trailing_buy_active and i not in filled and size > 1:
-                            should_buy = (not dip_occurred) or (price >= trailing_low * (1 + trailing_pct / 100))
+                            # Every reached level executes immediately on upward movement.
+                            should_buy = moving_up
                             if should_buy:
                                 amt = round(size*dip_mult/price,6)
                                 if place_order(pair,"buy",amt):
