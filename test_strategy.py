@@ -255,3 +255,35 @@ if __name__ == "__main__":
     test_trailing_not_execute_when_not_armed()
     test_sell_cell_targets_only_paired_tranche()
     print("\nAll 7 regression tests passed.")
+"""Regression tests for run_grid buy direction and recentering semantics."""
+import sys, types
+# main imports requests; tests stub it so strategy logic runs in minimal environments.
+sys.modules.setdefault("requests", types.SimpleNamespace())
+from main import _grid_crossed_buy_indices
+
+
+def test_upward_touch_executes_each_reached_buy_point():
+    grids = [90, 95, 100, 105, 110, 115]
+    assert _grid_crossed_buy_indices(grids, 3, {}, 89, 101) == {0, 1, 2}
+    assert _grid_crossed_buy_indices(grids, 3, {1: {"price": 95}}, 89, 101) == {0, 2}
+
+
+def test_downward_touch_defers_buy_points_until_drop_is_over():
+    grids = [90, 95, 100, 105, 110, 115]
+    assert _grid_crossed_buy_indices(grids, 3, {}, 103, 94) == set()
+    assert _grid_crossed_buy_indices(grids, 3, {}, 94, 96) == {1}
+
+
+def test_recenter_uses_final_grid_for_crossings():
+    # This is the grid after run_grid's recenter block. A stale old grid
+    # must not be used to derive index eligibility for these final levels.
+    final_grids = [80, 90, 100, 110, 120, 130]
+    assert _grid_crossed_buy_indices(final_grids, 3, {}, 89, 101) == {1, 2}
+
+
+def test_run_grid_computes_crossings_after_recenter_block():
+    from pathlib import Path
+    source = Path("main.py").read_text()
+    recenter = source.index("# ── Grid re-centering")
+    crossing = source.index("_grid_crossed_buy_indices(", recenter)
+    assert crossing > recenter
