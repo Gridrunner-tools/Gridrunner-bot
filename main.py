@@ -34,6 +34,12 @@ os.environ["TZ"] = "US/Eastern"
 time.tzset()
 
 logging.basicConfig(level=logging.WARNING)
+def _normalize_partial_sell_pct(value):
+    """Return a safe partial-sell percentage (1-100, inclusive)."""
+    try:
+        return max(1, min(100, float(value)))
+    except (TypeError, ValueError):
+        return 50.0
 TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6, "SPCX": 6}
 
 
@@ -240,7 +246,8 @@ cfg = {
     # when a signing key is configured.
     "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
-    "partial_sell_pct":  max(1, min(99, float(os.environ.get("PARTIAL_SELL_PCT", "50")))),
+    "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
+    "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
 }
 
 import threading
