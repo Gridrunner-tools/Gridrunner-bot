@@ -3280,7 +3280,7 @@ function refresh() {
         if (!card) {
           card = document.createElement("div");
           card.id = cardId;
-          card.style.cssText = "flex:1;min-width:320px;max-width:calc(50% - 8px);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;";
+          card.style.cssText = "flex:1 1 calc(33.333% - 11px);min-width:280px;max-width:none;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;";
           card.innerHTML = '<div style="font-weight:600;color:#14b8a6;margin-bottom:8px">' + pair + '</div>' +
             '<div id="' + cardId + '-price" style="font-size:18px;font-weight:700;margin-bottom:8px">--</div>' +
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
