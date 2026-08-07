@@ -2609,7 +2609,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div class="stat"><div class="sl">Mode</div><div class="sv" id="s-mode" style="font-size:14px">—</div></div>
   </div>
 
-  <div id="charts-container" style="display:none;flex-wrap:wrap;gap:16px;margin-bottom:16px"></div>
+  <div id="charts-container" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));justify-content:end;align-items:start;gap:16px;width:100%;margin-bottom:16px;box-sizing:border-box"></div>
   <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
     <div id="chart-container" style="flex:1;min-width:0"></div>
     <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
@@ -3210,7 +3210,8 @@ function manualSell() {
   });
 }
 
-// Replay pair history after asynchronous chart creation.
+// Replay pair history after asynchronous chart creation. History is supplied
+// by the owning card so refreshes cannot overwrite another pair's candles.
 function setMultiPairChartData(card, ph, chartEl) {
   if (!card || !card._series || !ph || !ph.length) return;
   var chartData = ph.map(function(p, j) {
@@ -3258,7 +3259,7 @@ function refresh() {
     var chartsWrap = document.getElementById("charts-container");
     if (multiPair) {
       if (singleRow) singleRow.style.display = "none";
-      if (chartsWrap) chartsWrap.style.display = "flex";
+      if (chartsWrap) chartsWrap.style.display = "grid";
       window._wasMulti = true;
     } else {
       window._wasMulti = false;
@@ -3280,19 +3281,20 @@ function refresh() {
         if (!card) {
           card = document.createElement("div");
           card.id = cardId;
-          card.style.cssText = "flex:1;min-width:320px;max-width:calc(50% - 8px);background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;";
+          // A card owns its complete chart/history/info panel. Grid sizing keeps
+          // every card wide enough while anchoring the collection to the right.
+          card.style.cssText = "width:100%;min-width:0;background:var(--card);border:1px solid var(--border);border-radius:8px;padding:12px;box-sizing:border-box;";
           card.innerHTML = '<div style="font-weight:600;color:#14b8a6;margin-bottom:8px">' + pair + '</div>' +
             '<div id="' + cardId + '-price" style="font-size:18px;font-weight:700;margin-bottom:8px">--</div>' +
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
-          // Capture this card's history before the deferred chart callback.
-          // Each pair gets its own immutable replay payload.
-          var chartHistoryAtInit = ph;
-          // Create chart after DOM layout (ensures proper width)
+          // Create chart after DOM layout (ensures proper width). Use an IIFE
+          // to isolate card, pair, and history from subsequent refresh iterations.
+          (function(ownerCard, ownerPair, ownerHistory) {
           setTimeout(function() {
             try {
-              var chartEl = document.getElementById(cardId + "-chart");
+              var chartEl = document.getElementById(ownerCard.id + "-chart");
               if (!chartEl) return;
               var w = chartEl.clientWidth || 380;
               var ch = LightweightCharts.createChart(chartEl, {
@@ -3302,16 +3304,17 @@ function refresh() {
               timeScale: { borderColor: "#1a1a1a", timeVisible: true, barSpacing: 3 },
               rightPriceScale: { borderColor: "#1a1a1a" }
             });
-            card._chart = ch;
-            card._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
+            ownerCard._chart = ch;
+            ownerCard._series = ch.addSeries(LightweightCharts.CandlestickSeries, {
               upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
               wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
             });
             // The initial refresh may have run before this deferred callback.
             // Replay the captured history now that the series is initialized.
-            setMultiPairChartData(card, chartHistoryAtInit, chartEl);
-            } catch(e) { console.log("Chart error for " + pair, e); }
+            setMultiPairChartData(ownerCard, ownerHistory, chartEl);
+            } catch(e) { console.log("Chart error for " + ownerPair, e); }
           }, 50);
+          })(card, pair, ph.slice());
         }
         // Update chart data using the chart instance owned by this card. The
         // deferred chart creation callback's `ch` is out of scope here; using it
