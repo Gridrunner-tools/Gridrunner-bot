@@ -32,6 +32,14 @@ def test_history_is_replayed_after_async_chart_creation():
     assert callback.index('ownerCard._series') < callback.index('setMultiPairChartData(ownerCard')
     assert re.search(r'setVisibleLogicalRange\(\{from:.*to:chartData.length\}', SOURCE)
 
+def test_spcx_card_identity_and_history_are_pair_specific():
+    # SPCX must use the same owner-scoped path as BTC; a refresh for one pair
+    # cannot write the other pair's chart or silently lose its history.
+    assert 'SPCX/USDC' in SOURCE
+    assert 'pair.replace(/[^a-zA-Z0-9]/g, "_")' in SOURCE
+    assert 'var ph = d.price_history_pairs && d.price_history_pairs[pair]' in SOURCE
+    assert 'var chart = card._chart' in SOURCE
+
 
 def test_no_unresolved_merge_markers_in_dashboard_source():
     assert not re.search(r'^<<<<<<<|^=======|^>>>>>>>', SOURCE, re.MULTILINE)
