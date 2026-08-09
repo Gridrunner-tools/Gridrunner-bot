@@ -43,3 +43,16 @@ def test_spcx_card_identity_and_history_are_pair_specific():
 
 def test_no_unresolved_merge_markers_in_dashboard_source():
     assert not re.search(r'^<<<<<<<|^=======|^>>>>>>>', SOURCE, re.MULTILINE)
+
+def test_three_day_startup_and_rolling_history_window():
+    # One-minute candles: 3 days = 4,320 points; startup fetch and every
+    # append path must retain that rolling window for each pair.
+    assert 'since":int(time.time())-259200' in SOURCE
+    assert '[-4320:]' in SOURCE
+    assert 'len(state["price_history_pairs"][pair]) > 4320' in SOURCE
+    assert 'len(pair_history) > 4320' in SOURCE
+
+def test_three_px_candles_allow_full_history_scroll():
+    assert 'barSpacing: 3' in SOURCE
+    assert 'minBarSpacing: 3' in SOURCE
+    assert 'setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length})' in SOURCE
