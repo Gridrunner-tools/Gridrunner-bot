@@ -842,16 +842,16 @@ def start_background_loops():
                     now = int(time.time())
                     point = {"time": now, "value": p}
                     state["price_history"].append(point)
-                    if len(state["price_history"]) > 1440:
-                        state["price_history"] = state["price_history"][-1440:]
+                    if len(state["price_history"]) > 4320:
+                        state["price_history"] = state["price_history"][-4320:]
                     pair_history = state["price_history_pairs"].setdefault(pair, [])
                     # Keep chart data scoped to the selected pair; never mix BTC with another asset.
                     if not pair_history or pair_history[-1].get("time") != now:
                         pair_history.append(point)
                     else:
                         pair_history[-1] = point
-                    if len(pair_history) > 1440:
-                        state["price_history_pairs"][pair] = pair_history[-1440:]
+                    if len(pair_history) > 4320:
+                        state["price_history_pairs"][pair] = pair_history[-4320:]
             except Exception as e:
                 log("price loop error: "+str(e), "WARN")
             time.sleep(5)
@@ -1842,10 +1842,10 @@ def seed_history(pair):
     try:
         if not requests: return
         mapping = {"BTC/USDC":"XXBTZUSD", "BTC/USDT":"XXBTZUSD", "ETH/USDC":"XETHZUSD", "SOL/USDC":"SOLUSD"}
-        r = requests.get("https://api.kraken.com/0/public/OHLC", params={"pair":mapping.get(pair,pair.replace("/","")), "interval":1, "since":int(time.time())-14400}, timeout=10)
+        r = requests.get("https://api.kraken.com/0/public/OHLC", params={"pair":mapping.get(pair,pair.replace("/","")), "interval":1, "since":int(time.time())-259200}, timeout=10)
         payload = r.json()
         candles = next((v for k,v in payload.get("result",{}).items() if k != "last"), [])
-        history = [{"time":int(c[0]),"value":float(c[4])} for c in candles][-1440:]
+        history = [{"time":int(c[0]),"value":float(c[4])} for c in candles][-4320:]
         if history:
             state["price_history_pairs"][pair] = history
             if pair == state.get("pair"): state["price_history"] = history[:]
@@ -2012,8 +2012,8 @@ def run_grid():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 1440:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
+                if len(state["price_history_pairs"][pair]) > 4320:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-4320:]
             if price <= 0:
                 _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
                 time.sleep(5); continue
@@ -2318,8 +2318,8 @@ def run_rsi_ema():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 1440:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
+                if len(state["price_history_pairs"][pair]) > 4320:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-4320:]
             if price <= 0: time.sleep(30); continue
             # Build price buffer
             buf = get_price_history(pair, 100)
@@ -2400,8 +2400,8 @@ def run_bbands():
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 1440:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
+                if len(state["price_history_pairs"][pair]) > 4320:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-4320:]
             if price <= 0: time.sleep(30); continue
             buf = get_price_history(pair, 100)
             if len(buf) < period + 5:
@@ -4008,8 +4008,8 @@ class Handler(BaseHTTPRequestHandler):
                 if pair not in state["price_history_pairs"]:
                     state["price_history_pairs"][pair] = []
                 state["price_history_pairs"][pair].append({"time": int(time.time()), "value": price})
-                if len(state["price_history_pairs"][pair]) > 1440:
-                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-1440:]
+                if len(state["price_history_pairs"][pair]) > 4320:
+                    state["price_history_pairs"][pair] = state["price_history_pairs"][pair][-4320:]
             if price <= 0:
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
