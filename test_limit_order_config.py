@@ -16,3 +16,8 @@ def test_server_side_strategy_side_and_failure_terminal_state():
  assert 'strategy side mismatch' in SOURCE
  assert 'status":"rejected"' in SOURCE and 'state["running"] = False' in SOURCE
  assert 'paper mode requires explicit paper confirmation' in SOURCE
+
+def test_rejected_validation_is_terminal_and_custom_mint_is_routed():
+ assert '"status": "rejected"' in SOURCE
+ assert '"custom_mint": params.get("custom_mint"' in SOURCE
+ assert '"quote_token": params.get("quote_token"' in SOURCE

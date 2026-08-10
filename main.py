@@ -2497,6 +2497,7 @@ def run_limit_order():
     pair = state["pair"]
     valid, reason = validate_limit_order(amount_usdc, side, order_type, limit_price, cfg.get("max_pos"))
     if not valid:
+        state["last_trade"] = {"action": side, "pair": pair, "amount": amount_usdc, "order_type": order_type, "limit_price": limit_price, "status": "rejected", "error": reason, "time": int(time.time())}
         log("Limit order rejected: "+reason, "WARN"); state["running"] = False; state["strategy"] = None; return
     log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type)
     while state["running"] and state["strategy"] in ("limit_buy", "limit_sell"):
@@ -3743,7 +3744,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(400, "application/json", json.dumps({"error":"strategy side mismatch"}).encode()); return
                 if params.get("confirm", ["false"])[0].lower() != "true":
                     self.respond(400, "application/json", json.dumps({"error":"explicit order confirmation required"}).encode()); return
-                order_mode = params.get("mode", ["dex"])[0]
                 if state.get("paper_trading") and params.get("paper_confirm", ["false"])[0].lower() != "true":
                     self.respond(400, "application/json", json.dumps({"error":"paper mode requires explicit paper confirmation"}).encode()); return
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
@@ -3755,7 +3755,7 @@ class Handler(BaseHTTPRequestHandler):
                 params.get("mode",["dex"])[0],
                 params.get("exchange",[cfg["exchange"]])[0],
                 params.get("chain",["solana"])[0],
-                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0]} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
+                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0]} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
