@@ -3188,7 +3188,7 @@ function startBot() {
     var amount=parseFloat(document.getElementById("limit-amount").value), price=parseFloat(document.getElementById("limit-price").value), typ=document.getElementById("limit-type").value, side=document.getElementById("limit-side").value;
     if (!(amount>0) || (typ=="limit" && !(price>0))) { showToast("Enter a positive amount and limit price", "error"); return; }
     if (!document.getElementById("limit-confirm").checked) { showToast("Confirm order details and trading mode", "error"); return; }
-    params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side+"&confirm=true";
+    params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side+"&trade_mode=live&confirm=true";
   }
   apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
