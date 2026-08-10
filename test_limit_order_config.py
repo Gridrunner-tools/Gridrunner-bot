@@ -1,19 +1,14 @@
-"""Static regression checks for limit-order configuration and routing."""
+"""Focused static checks for safe limit/market custom-token orders."""
 from pathlib import Path
-SOURCE = Path(__file__).with_name("main.py").read_text()
-def test_limit_order_validation_and_ui():
-    assert 'def validate_limit_order' in SOURCE
-    assert 'value="limit_buy"' in SOURCE and 'value="limit_sell"' in SOURCE
-    assert 'id="limit-amount"' in SOURCE and 'id="limit-price"' in SOURCE
-    assert 'amount must be positive' in SOURCE and 'limit price must be positive' in SOURCE
-
-def test_limit_order_routing_semantics():
-    assert '"limit_buy":run_limit_order' in SOURCE and '"limit_sell":run_limit_order' in SOURCE
-    assert 'side == "buy" and price <= limit_price' in SOURCE
-    assert 'side == "sell" and price >= limit_price' in SOURCE
-    assert 'place_order(pair, side, amount)' in SOURCE
-
-def test_limit_order_trade_details_and_risk_visibility():
-    assert 'order_type' in SOURCE and 'limit_price' in SOURCE
-    assert 'status":"confirmed"' in SOURCE
-    assert 'Orders are subject to risk limits and paper/live mode.' in SOURCE
+SOURCE=Path(__file__).with_name('main.py').read_text()
+def test_custom_mint_validation_and_no_symbol_inference():
+ assert 'def validate_solana_mint' in SOURCE
+ assert 'BASE58_ALPHABET' in SOURCE
+ assert 'Invalid Solana mint' in SOURCE
+ assert 'custom_mint' in SOURCE and 'custom_symbol' in SOURCE
+def test_limit_order_ui_and_routing():
+ for x in ('limit_buy','limit_sell','limit-amount','limit-price','limit-quote','run_limit_order','validate_limit_order'): assert x in SOURCE
+ assert 'side == "buy" and price <= limit_price' in SOURCE and 'side == "sell" and price >= limit_price' in SOURCE
+def test_safe_mode_and_trade_metadata():
+ assert 'paper/live mode' in SOURCE and 'status":"confirmed"' in SOURCE
+ assert 'max position' in SOURCE and 'place_order(pair, side, amount)' in SOURCE

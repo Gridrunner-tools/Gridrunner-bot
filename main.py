@@ -906,6 +906,14 @@ SOL_TOKENS = {
 }
 
 # Shared Solana RPC endpoints — set SOLANA_RPC env var to override all
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+def validate_solana_mint(mint):
+    """Validate canonical base58 Solana public-key length without symbol inference."""
+    if not isinstance(mint, str) or not (32 <= len(mint) <= 44) or any(c not in BASE58_ALPHABET for c in mint):
+        return False
+    n = 0
+    for c in mint: n = n * 58 + BASE58_ALPHABET.index(c)
+    return len(n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")) == 32
 SOLANA_RPC = os.environ.get("SOLANA_RPC", "")
 SOL_RPCS = [SOLANA_RPC] if SOLANA_RPC else [
     "https://api.mainnet-beta.solana.com",
@@ -2709,13 +2717,14 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
         <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
         <div class="config-field"><label>Order Type</label><select id="limit-type"><option value="limit">Limit</option><option value="market">Market</option></select></div>
+        <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
         <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
       </div>
       <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders are subject to risk limits and paper/live mode.</div>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1">
-        <input type="text" id="custom-mint" placeholder="Paste Solana token mint address..." style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text)"/>
+        <input type="text" id="custom-mint" placeholder="Validated Solana mint (base58)..." style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text)"/>
       </div>
       <div style="width:70px">
         <input type="text" id="custom-symbol" placeholder="Symbol" maxlength="10" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);text-transform:uppercase"/>
@@ -3153,6 +3162,11 @@ document.getElementById("pair-select").addEventListener("change", updateBtn);
 
 function startBot() {
   var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
+  if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
+    var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
+    if (!sym || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { showToast("Enter a symbol and valid base58 Solana mint", "error"); return; }
+    sel.pair = sym+"/"+quote; params = "strategy="+sel.strat+"&pair="+encodeURIComponent(sel.pair)+"&mode=dex&chain=solana&custom_mint="+encodeURIComponent(mint)+"&custom_symbol="+encodeURIComponent(sym);
+  }
   if (sel.strat=="limit_buy" || sel.strat=="limit_sell") {
     var amount=parseFloat(document.getElementById("limit-amount").value), price=parseFloat(document.getElementById("limit-price").value), typ=document.getElementById("limit-type").value, side=document.getElementById("limit-side").value;
     if (!(amount>0) || (typ=="limit" && !(price>0))) { showToast("Enter a positive amount and limit price", "error"); return; }
@@ -3706,6 +3720,13 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, "application/json", json.dumps(info).encode())
         elif path=="/start":
             if not self._auth_or_401(): return
+            if params.get("custom_mint", [""])[0]:
+                custom_mint = params["custom_mint"][0]; custom_symbol = params.get("custom_symbol", [""])[0].upper()
+                if not validate_solana_mint(custom_mint) or not custom_symbol or not custom_symbol.isalnum():
+                    self.respond(400,"application/json",json.dumps({"error":"Invalid custom token mint or symbol"}).encode()); return
+                if custom_symbol in SOL_TOKENS and SOL_TOKENS[custom_symbol] != custom_mint:
+                    self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped"}).encode()); return
+                SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
             if start_strategy in ("limit_buy", "limit_sell"):
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
@@ -3880,6 +3901,10 @@ class Handler(BaseHTTPRequestHandler):
             pair = token_data.get("pair", "")
             if not symbol or not mint:
                 self.respond(400,"application/json",json.dumps({"error":"Symbol and mint required"}).encode()); return
+            if not validate_solana_mint(mint):
+                self.respond(400,"application/json",json.dumps({"error":"Invalid Solana mint: expected base58 32-byte public key"}).encode()); return
+            if symbol in SOL_TOKENS and SOL_TOKENS[symbol] != mint:
+                self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped; use a unique symbol"}).encode()); return
             SOL_TOKENS[symbol] = mint
             TOKEN_DECIMALS[symbol] = 6  # default 6 decimals
             log("Added custom token: "+symbol+" ("+mint+")")
