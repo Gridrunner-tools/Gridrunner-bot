@@ -2473,6 +2473,15 @@ def run_webhook():
         while state["paused"]: time.sleep(1)
         time.sleep(5)  # Just keep alive; trades come in via webhook handler
 
+def resolve_order_mode(params):
+    """Resolve explicit order mode; never infer from ambient environment."""
+    raw = params.get("trade_mode", ["live"])[0].strip().lower()
+    if raw not in ("live", "paper"):
+        return None, "trade_mode must be live or paper"
+    if raw == "paper" and params.get("paper_confirm", ["false"])[0].lower() != "true":
+        return None, "paper mode requires explicit paper confirmation"
+    return raw, None
+
 def validate_limit_order(amount_usdc, side, order_type, limit_price, max_position=None):
     """Validate limit-order inputs without performing any network/trading action."""
     try:
@@ -3744,8 +3753,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(400, "application/json", json.dumps({"error":"strategy side mismatch"}).encode()); return
                 if params.get("confirm", ["false"])[0].lower() != "true":
                     self.respond(400, "application/json", json.dumps({"error":"explicit order confirmation required"}).encode()); return
-                if state.get("paper_trading") and params.get("paper_confirm", ["false"])[0].lower() != "true":
-                    self.respond(400, "application/json", json.dumps({"error":"paper mode requires explicit paper confirmation"}).encode()); return
+                effective_mode, mode_error = resolve_order_mode(params)
+                if mode_error:
+                    self.respond(400, "application/json", json.dumps({"error":mode_error}).encode()); return
+                state["paper_trading"] = (effective_mode == "paper")
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
                 if not ok:
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
@@ -3755,7 +3766,7 @@ class Handler(BaseHTTPRequestHandler):
                 params.get("mode",["dex"])[0],
                 params.get("exchange",[cfg["exchange"]])[0],
                 params.get("chain",["solana"])[0],
-                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0]} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
+                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
