@@ -10,3 +10,9 @@ def test_limit_order_ui_and_routing():
 def test_safe_mode_and_trade_metadata():
  assert 'Orders default to LIVE mode' in SOURCE and 'status":"confirmed"' in SOURCE
  assert 'max position' in SOURCE and 'place_order(pair, side, amount)' in SOURCE and 'explicit order confirmation required' in SOURCE
+
+def test_server_side_strategy_side_and_failure_terminal_state():
+ assert 'expected_side = "buy" if start_strategy == "limit_buy" else "sell"' in SOURCE
+ assert 'strategy side mismatch' in SOURCE
+ assert 'status":"rejected"' in SOURCE and 'state["running"] = False' in SOURCE
+ assert 'paper mode requires explicit paper confirmation' in SOURCE

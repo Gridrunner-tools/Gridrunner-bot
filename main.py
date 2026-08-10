@@ -2510,6 +2510,10 @@ def run_limit_order():
                 state["running"] = False; state["strategy"] = None
                 log("Limit order filled: "+side+" "+pair+" @ $"+str(price))
                 return
+            state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"rejected","error":"place_order failed","time":int(time.time())}
+            state["running"] = False; state["strategy"] = None
+            log("Limit order rejected after execution failure: "+side+" "+pair, "WARN")
+            return
         time.sleep(5)
 STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order}
 
@@ -3733,8 +3737,15 @@ class Handler(BaseHTTPRequestHandler):
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
             if start_strategy in ("limit_buy", "limit_sell"):
+                requested_side = params.get("side", ["buy"])[0]
+                expected_side = "buy" if start_strategy == "limit_buy" else "sell"
+                if requested_side != expected_side:
+                    self.respond(400, "application/json", json.dumps({"error":"strategy side mismatch"}).encode()); return
                 if params.get("confirm", ["false"])[0].lower() != "true":
                     self.respond(400, "application/json", json.dumps({"error":"explicit order confirmation required"}).encode()); return
+                order_mode = params.get("mode", ["dex"])[0]
+                if state.get("paper_trading") and params.get("paper_confirm", ["false"])[0].lower() != "true":
+                    self.respond(400, "application/json", json.dumps({"error":"paper mode requires explicit paper confirmation"}).encode()); return
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
                 if not ok:
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
