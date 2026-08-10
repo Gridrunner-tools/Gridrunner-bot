@@ -913,7 +913,9 @@ def validate_solana_mint(mint):
         return False
     n = 0
     for c in mint: n = n * 58 + BASE58_ALPHABET.index(c)
-    return len(n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")) == 32
+    raw = n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")
+    raw = b"\x00" * (len(mint) - len(mint.lstrip("1"))) + raw
+    return len(raw) == 32
 SOLANA_RPC = os.environ.get("SOLANA_RPC", "")
 SOL_RPCS = [SOLANA_RPC] if SOLANA_RPC else [
     "https://api.mainnet-beta.solana.com",
@@ -2720,7 +2722,8 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
         <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
       </div>
-      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders are subject to risk limits and paper/live mode.</div>
+      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
+      <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1">
@@ -3170,7 +3173,8 @@ function startBot() {
   if (sel.strat=="limit_buy" || sel.strat=="limit_sell") {
     var amount=parseFloat(document.getElementById("limit-amount").value), price=parseFloat(document.getElementById("limit-price").value), typ=document.getElementById("limit-type").value, side=document.getElementById("limit-side").value;
     if (!(amount>0) || (typ=="limit" && !(price>0))) { showToast("Enter a positive amount and limit price", "error"); return; }
-    params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side;
+    if (!document.getElementById("limit-confirm").checked) { showToast("Confirm order details and trading mode", "error"); return; }
+    params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side+"&confirm=true";
   }
   apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
@@ -3729,6 +3733,8 @@ class Handler(BaseHTTPRequestHandler):
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
             if start_strategy in ("limit_buy", "limit_sell"):
+                if params.get("confirm", ["false"])[0].lower() != "true":
+                    self.respond(400, "application/json", json.dumps({"error":"explicit order confirmation required"}).encode()); return
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
                 if not ok:
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
