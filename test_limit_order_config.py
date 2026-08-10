@@ -21,3 +21,9 @@ def test_rejected_validation_is_terminal_and_custom_mint_is_routed():
  assert '"status": "rejected"' in SOURCE
  assert '"custom_mint": params.get("custom_mint"' in SOURCE
  assert '"quote_token": params.get("quote_token"' in SOURCE
+
+def test_deterministic_effective_trade_mode_policy():
+ assert 'def resolve_order_mode(params)' in SOURCE
+ assert 'trade_mode must be live or paper' in SOURCE
+ assert '"effective_mode": effective_mode' in SOURCE
+ assert '&trade_mode=live&confirm=true' in SOURCE
