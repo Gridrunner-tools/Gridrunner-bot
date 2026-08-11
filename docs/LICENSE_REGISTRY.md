@@ -39,50 +39,96 @@ source-control artifact.
 
 ## Lost-key recovery (operator-only)
 
-A lost key is recovered by an operator; it is not reissued automatically by a
-public endpoint. This workflow preserves the one-key-per-installation rule:
+A customer who has lost their `LICENSE_KEY` must go through a verified recovery
+process. The operator never discloses a key without confirming the requester's
+identity and ownership of the installation.
 
-1. **Open a private support case.** Record the customer's verified account or
-   purchase details and the exact installation identifier (for example, the
-   Render service ID or an internal install ID). Do not ask the customer to
-   post a key, database URL, wallet secret, or other credential in a public
-   issue, chat, or form.
-2. **Verify identity and ownership before lookup.** Use the approved private
-   support channel and independently verify the customer's identity and
-   ownership of that purchase/install using records available to the operator
-   (such as the matching purchase record plus a previously verified account
-   detail). An install identifier alone is not proof of ownership. If
-   verification fails or records conflict, do not disclose a key; escalate
-   through the private operator process.
+### 1. Authenticate the requester
+The customer must contact the operator through a **verified, authenticated
+channel** — for example, the same email address used at purchase, or a support
+ticket opened from that address. Accept no request that arrives through an
+unverified channel (public chat, social-media DM, GitHub issue, or forwarded
+message).
 
-3. **Look up the existing record privately.** From a trusted operator machine,
-   connect to the private Neon registry through `DATABASE_URL` and query the
-   existing license record using the verified customer/install identifier. Do
-   not query through a customer-facing route, create a public lookup endpoint,
-   export the registry, or paste the query/result into logs, GitHub, tickets,
-   or chat. Redact key values from command history and terminal capture.
-4. **Confirm uniqueness and status.** Confirm that the record belongs to the
-   verified installation and is active/eligible. Return the already-issued key
-   only; never generate a replacement by copying a key or reuse that key for a
-   different customer, Render service, environment, or installation. If the
-   installation changed, issue a new unique key through the normal issuance
-   process and mark/retire the old association according to operator records.
+At a minimum, confirm **two** of the following before proceeding:
+- The inbound email address matches `customer_email` on the license record.
+- The customer can supply the Stripe session ID or Solana transaction signature
+  associated with the purchase (validated against `stripe_session_id` or
+  `sol_tx_signature` in the registry).
+- The customer can describe the Render service name, approximate deployment
+  date, or other installation-specific detail that only the legitimate operator
+  would recognise.
 
-5. **Disclose once, privately.** Send the key through the approved private,
-   authenticated customer-delivery channel (not a public endpoint, logs,
-   GitHub, or chat). Ask the customer to enter it only in that installation's
-   secret environment and to remove any accidental local exposure. Do not
-   include the key in support screenshots or transcripts.
+If any verification step fails, **stop**. Do not proceed to lookup. Log the
+attempt internally (without the key) and notify the customer that verification
+could not be completed.
 
-6. **Record a redacted audit trail.** Record the verification performed, the
-   operator, install identifier, and outcome without recording the key,
-   `DATABASE_URL`, or other secrets. If exposure is suspected, treat the key
-   as compromised, revoke/retire it, issue a fresh unique key, and repeat
-   verification and private delivery.
+### 2. Look up the key through the private Neon registry
+Only after identity is confirmed, from a trusted operator machine with
+`DATABASE_URL` set:
 
-Never disclose a key when ownership cannot be verified. The registry and its
-operator credentials remain private; application runtime and public clients
-must not gain a key-recovery capability.
+```bash
+psql "$DATABASE_URL" -c "
+  SELECT license_key, license_type, customer_email, expires_at, is_active
+  FROM licenses
+  WHERE customer_email = 'verified@example.com' AND is_active = TRUE
+  ORDER BY created_at DESC
+  LIMIT 10;
+"
+```
+
+Do **not** run this query in a shared terminal, screen-share, or recorded
+session. If the customer has multiple active licenses (e.g. paper and live
+installations), use the installation-specific detail the customer provided
+(service name, deployment date) to identify the correct row.
+
+Record internally which key was disclosed, to whom, and when — keep this log
+outside the repository.
+
+### 3. Deliver the key through a secure private channel
+Deliver the recovered key **only** through a secure, private, out-of-band
+channel:
+
+| ✅ Allowed | ❌ Prohibited |
+|---|---|
+| Encrypted email (PGP) to the verified address | Plain-text email body |
+| Secure customer portal with authenticated session | GitHub issue, pull request, or commit |
+| One-time secret link (expiring, access-logged) | Public or team chat (Slack, Discord, Telegram) |
+| Voice call to a known, verified phone number | Support ticket body (ticket systems are often readable by multiple staff) |
+| | Render log output, environment-variable dump, or any public endpoint |
+
+After delivery, instruct the customer to enter the key only as a Render secret
+(or local environment variable) and then delete any copy from their email,
+clipboard history, or downloads.
+
+### 4. Post-recovery: consider rotation
+A recovered key has now existed in at least two places (the delivery channel
+and the customer's environment). If there is any concern that the original key
+was compromised rather than genuinely lost, **issue a replacement key** and
+deactivate the old one:
+
+```bash
+# Deactivate the old key
+psql "$DATABASE_URL" -c "
+  UPDATE licenses SET is_active = FALSE, updated_at = NOW()
+  WHERE license_key = 'LB-XXXX-XXXX-XXXX';
+"
+
+# Issue a fresh unique key — never copy or rename the old value
+python scripts/issue_license.py --email customer@example.com --type full --days <remaining>
+```
+
+### Hard rules
+- **Never expose a license key** in a public endpoint, log message, GitHub
+  repository (issue, PR, commit, or wiki), chat platform, or support ticket.
+- **Never look up or disclose a key** without completing the identity
+  verification steps above.
+- **Preserve per-install uniqueness.** A recovered key belongs to exactly one
+  installation. Never give the same key to a second customer or installation,
+  and never suggest that a customer reuse a key across Render services.
+- The private Neon registry is the **only** source of truth for license keys.
+  Do not maintain a secondary key list in a spreadsheet, shared document, or
+  configuration file — those copies inevitably leak.
 
 ## Render configuration
 
