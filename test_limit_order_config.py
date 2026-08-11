@@ -27,3 +27,8 @@ def test_deterministic_effective_trade_mode_policy():
  assert 'trade_mode must be live or paper' in SOURCE
  assert '"effective_mode": effective_mode' in SOURCE
  assert "trade_mode=live" in SOURCE and "confirm=true" in SOURCE
+
+def test_execution_binds_resolved_mode_not_ambient_config():
+ assert 'effective_mode = state.get("effective_mode", "live")' in SOURCE
+ assert 'state["paper_trading"] = (effective_mode == "paper")' in SOURCE
+ assert '"effective_mode":effective_mode' in SOURCE

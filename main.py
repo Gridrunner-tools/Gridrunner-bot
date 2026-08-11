@@ -2503,6 +2503,9 @@ def validate_limit_order(amount_usdc, side, order_type, limit_price, max_positio
 def run_limit_order():
     """Monitor one validated limit order; market orders execute once immediately."""
     side = state.get("limit_side", "buy"); amount_usdc = float(state.get("limit_amount_usdc", 0)); limit_price = float(state.get("limit_price", 0)); order_type = state.get("limit_order_type", "limit")
+    effective_mode = state.get("effective_mode", "live")
+    # Limit execution is bound to the API-resolved mode, not ambient config.
+    state["paper_trading"] = (effective_mode == "paper")
     pair = state["pair"]
     valid, reason = validate_limit_order(amount_usdc, side, order_type, limit_price, cfg.get("max_pos"))
     if not valid:
@@ -2516,11 +2519,11 @@ def run_limit_order():
             amount = round(amount_usdc / price, 6)
             if place_order(pair, side, amount):
                 record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
-                state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"confirmed","time":int(time.time())}
+                state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"confirmed","effective_mode":effective_mode,"time":int(time.time())}
                 state["running"] = False; state["strategy"] = None
                 log("Limit order filled: "+side+" "+pair+" @ $"+str(price))
                 return
-            state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"rejected","error":"place_order failed","time":int(time.time())}
+            state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"rejected","error":"place_order failed","effective_mode":effective_mode,"time":int(time.time())}
             state["running"] = False; state["strategy"] = None
             log("Limit order rejected after execution failure: "+side+" "+pair, "WARN")
             return
