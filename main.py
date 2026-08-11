@@ -906,6 +906,16 @@ SOL_TOKENS = {
 }
 
 # Shared Solana RPC endpoints — set SOLANA_RPC env var to override all
+BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+def validate_solana_mint(mint):
+    """Validate canonical base58 Solana public-key length without symbol inference."""
+    if not isinstance(mint, str) or not (32 <= len(mint) <= 44) or any(c not in BASE58_ALPHABET for c in mint):
+        return False
+    n = 0
+    for c in mint: n = n * 58 + BASE58_ALPHABET.index(c)
+    raw = n.to_bytes((n.bit_length() + 7) // 8 or 1, "big")
+    raw = b"\x00" * (len(mint) - len(mint.lstrip("1"))) + raw
+    return len(raw) == 32
 SOLANA_RPC = os.environ.get("SOLANA_RPC", "")
 SOL_RPCS = [SOLANA_RPC] if SOLANA_RPC else [
     "https://api.mainnet-beta.solana.com",
@@ -2463,9 +2473,64 @@ def run_webhook():
         while state["paused"]: time.sleep(1)
         time.sleep(5)  # Just keep alive; trades come in via webhook handler
 
-STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook}
+def resolve_order_mode(params):
+    """Resolve explicit order mode; never infer from ambient environment."""
+    raw = params.get("trade_mode", ["live"])[0].strip().lower()
+    if raw not in ("live", "paper"):
+        return None, "trade_mode must be live or paper"
+    if raw == "paper" and params.get("paper_confirm", ["false"])[0].lower() != "true":
+        return None, "paper mode requires explicit paper confirmation"
+    return raw, None
 
-def start_bot(strategy, pair, mode, exchange=None, chain=None):
+def validate_limit_order(amount_usdc, side, order_type, limit_price, max_position=None):
+    """Validate limit-order inputs without performing any network/trading action."""
+    try:
+        amount_usdc = float(amount_usdc); limit_price = float(limit_price)
+    except (TypeError, ValueError):
+        return False, "amount and price must be numeric"
+    if not math.isfinite(amount_usdc) or amount_usdc <= 0:
+        return False, "amount must be positive"
+    if side not in ("buy", "sell"):
+        return False, "invalid side"
+    if order_type not in ("market", "limit"):
+        return False, "invalid order type"
+    if order_type == "limit" and (not math.isfinite(limit_price) or limit_price <= 0):
+        return False, "limit price must be positive"
+    if max_position is not None and amount_usdc > float(max_position):
+        return False, "amount exceeds max position"
+    return True, "ok"
+
+def run_limit_order():
+    """Monitor one validated limit order; market orders execute once immediately."""
+    side = state.get("limit_side", "buy"); amount_usdc = float(state.get("limit_amount_usdc", 0)); limit_price = float(state.get("limit_price", 0)); order_type = state.get("limit_order_type", "limit")
+    effective_mode = state.get("effective_mode", "live")
+    # Limit execution is bound to the API-resolved mode, not ambient config.
+    state["paper_trading"] = (effective_mode == "paper")
+    pair = state["pair"]
+    valid, reason = validate_limit_order(amount_usdc, side, order_type, limit_price, cfg.get("max_pos"))
+    if not valid:
+        state["last_trade"] = {"action": side, "pair": pair, "amount": amount_usdc, "order_type": order_type, "limit_price": limit_price, "status": "rejected", "error": reason, "time": int(time.time())}
+        log("Limit order rejected: "+reason, "WARN"); state["running"] = False; state["strategy"] = None; return
+    log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type)
+    while state["running"] and state["strategy"] in ("limit_buy", "limit_sell"):
+        price = get_price(pair)
+        ready = order_type == "market" or (side == "buy" and price <= limit_price) or (side == "sell" and price >= limit_price)
+        if price > 0 and ready:
+            amount = round(amount_usdc / price, 6)
+            if place_order(pair, side, amount):
+                record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
+                state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"confirmed","effective_mode":effective_mode,"time":int(time.time())}
+                state["running"] = False; state["strategy"] = None
+                log("Limit order filled: "+side+" "+pair+" @ $"+str(price))
+                return
+            state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"rejected","error":"place_order failed","effective_mode":effective_mode,"time":int(time.time())}
+            state["running"] = False; state["strategy"] = None
+            log("Limit order rejected after execution failure: "+side+" "+pair, "WARN")
+            return
+        time.sleep(5)
+STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order}
+
+def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     if state["running"]:
         # Multi-pair: if grid is already running, add new pair without restarting.
         # Seed here rather than relying on run_grid so the dashboard gets history
@@ -2477,6 +2542,7 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None):
             return
         log("Already running — stop first","WARN"); return
     state["strategy"]=strategy
+    if order: state.update(order)
     state["pair"]=pair
     state["mode"]=mode
     # Chart history is initialized on the shared bot-start path, not inside a
@@ -2639,6 +2705,8 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <select class="dd" id="strat-select" onchange="selectStrat(this.value)">
       <option value="">— Select Strategy —</option>
       <option value="grid">Grid Trading</option>
+      <option value="limit_buy">Limit Buy</option>
+      <option value="limit_sell">Limit Sell</option>
     </select>
 
     <div class="section-label">Trading Pair</div>
@@ -2662,9 +2730,21 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       </select>
       <button class="btn" onclick="switchPair()" title="One-click pair switch" style="padding:9px 12px">&#128260;</button>
     </div>
+    <div class="card" id="limit-order-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
+      <div class="section-label">Limit Order Configuration</div>
+      <div class="config-grid">
+        <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
+        <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
+        <div class="config-field"><label>Order Type</label><select id="limit-type"><option value="limit">Limit</option><option value="market">Market</option></select></div>
+        <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
+        <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
+      </div>
+      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
+      <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
+    </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1">
-        <input type="text" id="custom-mint" placeholder="Paste Solana token mint address..." style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text)"/>
+        <input type="text" id="custom-mint" placeholder="Validated Solana mint (base58)..." style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text)"/>
       </div>
       <div style="width:70px">
         <input type="text" id="custom-symbol" placeholder="Symbol" maxlength="10" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;background:var(--card);color:var(--text);text-transform:uppercase"/>
@@ -3066,6 +3146,8 @@ function selectStrat(s) {
   if (!s) return;
   sel.strat = s;
   document.getElementById("arb-card").style.display = s=="arb"?"block":"none";
+  document.getElementById("limit-order-card").style.display = (s=="limit_buy" || s=="limit_sell") ? "block" : "none";
+  if (s=="limit_buy" || s=="limit_sell") document.getElementById("limit-side").value = s=="limit_buy" ? "buy" : "sell";
   document.getElementById("config-card").style.display = "block";
   updateBtn();
 }
@@ -3100,6 +3182,17 @@ document.getElementById("pair-select").addEventListener("change", updateBtn);
 
 function startBot() {
   var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
+  if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
+    var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
+    if (!sym || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { showToast("Enter a symbol and valid base58 Solana mint", "error"); return; }
+    sel.pair = sym+"/"+quote; params = "strategy="+sel.strat+"&pair="+encodeURIComponent(sel.pair)+"&mode=dex&chain=solana&custom_mint="+encodeURIComponent(mint)+"&custom_symbol="+encodeURIComponent(sym);
+  }
+  if (sel.strat=="limit_buy" || sel.strat=="limit_sell") {
+    var amount=parseFloat(document.getElementById("limit-amount").value), price=parseFloat(document.getElementById("limit-price").value), typ=document.getElementById("limit-type").value, side=document.getElementById("limit-side").value;
+    if (!(amount>0) || (typ=="limit" && !(price>0))) { showToast("Enter a positive amount and limit price", "error"); return; }
+    if (!document.getElementById("limit-confirm").checked) { showToast("Confirm order details and trading mode", "error"); return; }
+    params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side+"&trade_mode=live&confirm=true";
+  }
   apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
     document.getElementById("pause-btn").style.display = "inline-block";
@@ -3648,12 +3741,35 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, "application/json", json.dumps(info).encode())
         elif path=="/start":
             if not self._auth_or_401(): return
+            if params.get("custom_mint", [""])[0]:
+                custom_mint = params["custom_mint"][0]; custom_symbol = params.get("custom_symbol", [""])[0].upper()
+                if not validate_solana_mint(custom_mint) or not custom_symbol or not custom_symbol.isalnum():
+                    self.respond(400,"application/json",json.dumps({"error":"Invalid custom token mint or symbol"}).encode()); return
+                if custom_symbol in SOL_TOKENS and SOL_TOKENS[custom_symbol] != custom_mint:
+                    self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped"}).encode()); return
+                SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
+            start_strategy = params.get("strategy",["dca"])[0]
+            if start_strategy in ("limit_buy", "limit_sell"):
+                requested_side = params.get("side", ["buy"])[0]
+                expected_side = "buy" if start_strategy == "limit_buy" else "sell"
+                if requested_side != expected_side:
+                    self.respond(400, "application/json", json.dumps({"error":"strategy side mismatch"}).encode()); return
+                if params.get("confirm", ["false"])[0].lower() != "true":
+                    self.respond(400, "application/json", json.dumps({"error":"explicit order confirmation required"}).encode()); return
+                effective_mode, mode_error = resolve_order_mode(params)
+                if mode_error:
+                    self.respond(400, "application/json", json.dumps({"error":mode_error}).encode()); return
+                state["paper_trading"] = (effective_mode == "paper")
+                ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
+                if not ok:
+                    self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
             start_bot(
-                params.get("strategy",["dca"])[0],
+                start_strategy,
                 params.get("pair",[cfg["pair"]])[0],
                 params.get("mode",["dex"])[0],
                 params.get("exchange",[cfg["exchange"]])[0],
                 params.get("chain",["solana"])[0],
+                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
@@ -3816,6 +3932,10 @@ class Handler(BaseHTTPRequestHandler):
             pair = token_data.get("pair", "")
             if not symbol or not mint:
                 self.respond(400,"application/json",json.dumps({"error":"Symbol and mint required"}).encode()); return
+            if not validate_solana_mint(mint):
+                self.respond(400,"application/json",json.dumps({"error":"Invalid Solana mint: expected base58 32-byte public key"}).encode()); return
+            if symbol in SOL_TOKENS and SOL_TOKENS[symbol] != mint:
+                self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped; use a unique symbol"}).encode()); return
             SOL_TOKENS[symbol] = mint
             TOKEN_DECIMALS[symbol] = 6  # default 6 decimals
             log("Added custom token: "+symbol+" ("+mint+")")
