@@ -23,12 +23,14 @@ def test_config_handler_updates_runtime_keys():
 if __name__ == "__main__":
     test_render_controls_are_exposed_and_submitted()
     test_config_handler_updates_runtime_keys()
+    test_security_regressions_present()
+    test_config_bounds_reject_non_finite_values()
     print("All config-control regression tests passed.")
 
 def test_security_regressions_present():
     assert "import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string, math" in SOURCE
     # Credentials are read at point of use, not retained in module-level cfg.
-    cfg_block = SOURCE[SOURCE.index("cfg = {"):SOURCE.index("}\nimport threading", SOURCE.index("cfg = {"))]
+    cfg_block = SOURCE[SOURCE.index("cfg = {"):SOURCE.index("import threading", SOURCE.index("cfg = {"))]
     for name in ("api_key", "api_secret", "private_key", "sol_key", "license_key", "tg_bot_token", "tg_chat_id"):
         assert f'"{name}"' not in cfg_block
     assert 'requests.post("https://api.telegram.org/bot" + token + "/sendMessage"' in SOURCE
