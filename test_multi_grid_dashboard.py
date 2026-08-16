@@ -23,7 +23,7 @@ def test_each_pair_closure_owns_history_and_chart_dom():
     # refresh-loop variables that can point at the next pair (BTC -> SPCX).
     assert '(function(ownerCard, ownerPair, ownerHistory)' in SOURCE
     assert '})(card, pair, ph.slice());' in SOURCE
-    assert 'setMultiPairChartData(ownerCard, ownerHistory, chartEl)' in SOURCE
+    assert 'setMultiPairChartData(ownerCard, ownerCard._history || ownerHistory, chartEl)' in SOURCE
     assert 'document.getElementById(ownerCard.id + "-chart")' in SOURCE
 
 
