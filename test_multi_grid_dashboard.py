@@ -23,7 +23,7 @@ def test_each_pair_closure_owns_history_and_chart_dom():
     # refresh-loop variables that can point at the next pair (BTC -> SPCX).
     assert '(function(ownerCard, ownerPair, ownerHistory)' in SOURCE
     assert '})(card, pair, ph.slice());' in SOURCE
-    assert 'setMultiPairChartData(ownerCard, ownerHistory, chartEl)' in SOURCE
+    assert 'setMultiPairChartData(ownerCard, ownerCard._history || ownerHistory, chartEl)' in SOURCE
     assert 'document.getElementById(ownerCard.id + "-chart")' in SOURCE
 
 
@@ -56,3 +56,7 @@ def test_three_px_candles_allow_full_history_scroll():
     assert 'barSpacing: 3' in SOURCE
     assert 'minBarSpacing: 3' in SOURCE
     assert 'setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length})' in SOURCE
+
+def test_deferred_replay_uses_latest_owner_history():
+    assert 'card._history = ph.slice();' in SOURCE
+    assert 'ownerCard._history || ownerHistory' in SOURCE
