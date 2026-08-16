@@ -29,6 +29,7 @@ run('test_limit_order_config')
 run('test_config_controls')
 run('test_strategy')
 run('test_multi_grid_dashboard')
+run('test_pair_chart_history')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
 print("\nALL SUITES PASS")
