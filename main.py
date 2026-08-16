@@ -4092,6 +4092,17 @@ class Handler(BaseHTTPRequestHandler):
                 data = {}
         else: data = {}
         path = urlparse(self.path).path
+        if path == "/stripe/webhook":
+            import license_issuance
+            signature = self.headers.get("Stripe-Signature", "")
+            try:
+                key = license_issuance.handle_stripe_webhook(body, signature)
+                self.respond(200, "application/json", json.dumps({"ok": True, "issued": bool(key)}).encode())
+            except ValueError:
+                self.respond(400, "application/json", b'{"error":"invalid webhook"}')
+            except Exception:
+                self.respond(500, "application/json", b'{"error":"webhook processing failed"}')
+            return
         if path == "/kill":
             if not self._auth_or_401(): return
             if data.get("confirm") is not True:
