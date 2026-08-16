@@ -25,3 +25,7 @@ CREATE INDEX IF NOT EXISTS licenses_active_key_idx
     WHERE is_active = TRUE;
 
 ALTER TABLE licenses ADD COLUMN IF NOT EXISTS product TEXT NOT NULL DEFAULT 'gridrunner';
+DO $$ BEGIN
+  ALTER TABLE licenses DROP CONSTRAINT IF EXISTS licenses_license_key_check;
+EXCEPTION WHEN undefined_object THEN NULL; END $$;
+ALTER TABLE licenses ADD CONSTRAINT licenses_license_key_check CHECK (license_key ~ '^(LB-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}|LO-[A-F0-9]{12})$');
