@@ -2553,7 +2553,28 @@ def run_limit_order():
         if price > 0 and ready:
             amount = round(amount_usdc / price, 6)
             if place_order(pair, side, amount):
-                record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
+                positions = state.setdefault("limit_positions", {})
+                if side == "buy":
+                    # Keep a per-pair position so the matching limit-sell can
+                    # realize PnL (mirrors GRID-SELL's buy-price tracking).
+                    positions[pair] = {"price": price, "amount": amount, "time": int(time.time())}
+                    record_trade("LIMIT-BUY", price, amount, pair=pair)
+                elif side == "sell":
+                    pos = positions.pop(pair, None)
+                    if pos:
+                        pnl = round((price - pos["price"]) * amount, 2)
+                        state["pnl"] += pnl
+                        state["daily_pnl"] = state.get("daily_pnl", 0) + pnl
+                        record_trade("LIMIT-SELL", price, amount, pnl, pair=pair)
+                        log("["+pair+"] LIMIT-SELL "+str(round(amount,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(pos["price"],2))+" PnL $"+str(round(pnl,2))+")")
+                    else:
+                        # No matching buy position (e.g. server restarted between
+                        # the buy and sell): keep today's behavior (pnl None) and
+                        # warn — never invent a PnL.
+                        record_trade("LIMIT-SELL", price, amount, pair=pair)
+                        log("no matching limit-buy position to compute PnL for "+pair, "WARN")
+                else:
+                    record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
                 state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"confirmed","effective_mode":effective_mode,"time":int(time.time())}
                 state["running"] = False; state["strategy"] = None
                 log("Limit order filled: "+side+" "+pair+" @ $"+str(price))
