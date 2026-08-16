@@ -56,3 +56,7 @@ def test_three_px_candles_allow_full_history_scroll():
     assert 'barSpacing: 3' in SOURCE
     assert 'minBarSpacing: 3' in SOURCE
     assert 'setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length})' in SOURCE
+
+def test_deferred_replay_uses_latest_owner_history():
+    assert 'card._history = ph.slice();' in SOURCE
+    assert 'ownerCard._history || ownerHistory' in SOURCE

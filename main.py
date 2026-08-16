@@ -3391,6 +3391,7 @@ function refresh() {
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
+          card._history = ph.slice();
           // Create chart after DOM layout (ensures proper width). Use an IIFE
           // to isolate card, pair, and history from subsequent refresh iterations.
           (function(ownerCard, ownerPair, ownerHistory) {
@@ -3413,11 +3414,12 @@ function refresh() {
             });
             // The initial refresh may have run before this deferred callback.
             // Replay the captured history now that the series is initialized.
-            setMultiPairChartData(ownerCard, ownerHistory, chartEl);
+            setMultiPairChartData(ownerCard, ownerCard._history || ownerHistory, chartEl);
             } catch(e) { console.log("Chart error for " + ownerPair, e); }
           }, 50);
           })(card, pair, ph.slice());
         }
+        card._history = ph.slice();
         // Update chart data using the chart instance owned by this card. The
         // deferred chart creation callback's `ch` is out of scope here; using it
         // raised ReferenceError and stopped the pair loop, leaving ETH blank.
