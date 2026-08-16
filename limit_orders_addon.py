@@ -1,10 +1,13 @@
-"""Limit Orders order registry, gated on the main GridRunner license.
+"""Limit Orders order registry, gated on the install's OWN GridRunner license.
 
 Limit Orders ships bundled with the GridRunner license (owner-approved): there
 is no separate key or activation. The registry holds an independent paper order
-store for limit orders; order creation is permitted only while a valid
-GridRunner license exists in the private registry. Registry unavailability
-fails closed (PermissionError) so a network blip can never open the gate.
+store for limit orders; order creation is permitted only while the license key
+configured for THIS install (LICENSE_KEY env, the same key the main gate
+validates) resolves to an active GridRunner license in the private registry.
+Registry unavailability fails closed (LicenseRegistryUnavailable) so a network
+blip can never open the gate, and one customer's license never entitles
+another install.
 """
 import json
 import os
@@ -12,7 +15,7 @@ import secrets
 import time
 from pathlib import Path
 
-from license_registry import _database_url, _driver, LicenseRegistryUnavailable
+from license_registry import LicenseRegistryUnavailable, lookup_license
 
 
 class LimitOrdersAddon:
@@ -32,17 +35,16 @@ class LimitOrdersAddon:
         os.replace(tmp, self.state_file)
 
     def _valid(self):
-        """True only when an active GridRunner license exists in the registry."""
-        try:
-            with _driver().connect(_database_url(), connect_timeout=10) as conn:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "SELECT 1 FROM licenses WHERE product='gridrunner' AND is_active=TRUE "
-                        "AND (expires_at IS NULL OR expires_at > NOW()) LIMIT 1"
-                    )
-                    return cur.fetchone() is not None
-        except Exception as exc:
-            raise LicenseRegistryUnavailable("License registry unavailable") from exc
+        """True only when THIS install's LICENSE_KEY is an active GridRunner license.
+
+        Mirrors the main product gate (main.validate_license -> lookup_license)
+        with product='gridrunner'. An empty/missing LICENSE_KEY is never valid;
+        registry connectivity problems raise (fail closed).
+        """
+        license_key = os.environ.get("LICENSE_KEY", "").strip()
+        if not license_key:
+            return False
+        return lookup_license(license_key, product="gridrunner") is not None
 
     def status(self):
         return {"product": "limit_orders", "valid": self._valid()}
