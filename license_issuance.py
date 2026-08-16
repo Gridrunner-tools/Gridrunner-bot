@@ -24,3 +24,10 @@ def send_license_email(to, key, product):
     payload=json.dumps({'from':sender,'to':[to],'subject':f'{product} license key','text':f'Your {product} license key: {key}'}).encode()
     req=urllib.request.Request(os.environ.get('EMAIL_API_URL','https://api.resend.com/emails'),payload,{'Authorization':f'Bearer {api}','Content-Type':'application/json'})
     with urllib.request.urlopen(req,timeout=10): pass
+
+def handle_stripe_webhook(payload, signature):
+    import hmac, hashlib
+    secret=os.environ.get('STRIPE_WEBHOOK_SECRET','')
+    if not secret or not hmac.compare_digest(hmac.new(secret.encode(), payload, hashlib.sha256).hexdigest(), signature or ''): raise ValueError('invalid webhook signature')
+    event=json.loads(payload); obj=event.get('data',{}).get('object',{}); session=event.get('id') or obj.get('id'); email=(obj.get('customer_details') or {}).get('email'); product=obj.get('metadata',{}).get('product','gridrunner')
+    return issue_product_license(email, product, session)

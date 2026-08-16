@@ -2662,6 +2662,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 </style>
 </head>
 <body>
+<div class="card"><div class="ct">Limit Orders Upgrade</div><button class="btn" onclick="openLimitOrdersCheckout()">Upgrade Limit Orders</button></div>
 <div class="card" id="limit-addon-card"><div class="ct">Limit Orders Add-on</div><div style="font-size:12px;color:var(--text2);margin-bottom:10px">Independent entitlement and order registry. Existing GridRunner license and strategy state are unchanged.</div><div class="action-bar"><input id="limit-addon-key" placeholder="Limit Orders license key" autocomplete="off"/><button class="btn" onclick="activateLimitAddon()">Activate</button><span id="limit-addon-status" class="badge badge-s">Locked</span></div></div>
 <div id="toast-container" class="toast-container"></div>
 <div class="wrap">
@@ -3675,6 +3676,8 @@ initChart();
     el.addEventListener("input", markConfigDirty);
     el.addEventListener("change", markConfigDirty);
   });
+
+function openLimitOrdersCheckout(){apiFetch("/checkout/limit_orders").then(function(r){return r.json()}).then(function(d){if(d.url) window.location.href=d.url; else showToast("Checkout is not configured yet","error")})}
 </script>
 
 </body>
@@ -3743,11 +3746,15 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200,"application/json",json.dumps(state).encode())
         elif path=="/limit_orders/status":
             if not self._auth_or_401(): return
-            self.respond(200,"application/json",json.dumps(limit_orders_addon.status() if limit_orders_addon else {"valid":False}).encode())
+            key = params.get("key", [""])[0]
+            self.respond(200,"application/json",json.dumps(limit_orders_addon.status(key) if limit_orders_addon else {"valid":False}).encode())
         elif path=="/limit_orders/activate":
             if not self._auth_or_401(): return
             result = limit_orders_addon.activate(params.get("key",[""])[0]) if limit_orders_addon else {"valid":False,"error":"add-on unavailable"}
             self.respond(200,"application/json",json.dumps(result).encode())
+        elif path=="/checkout/limit_orders":
+            url = os.environ.get("LIMIT_ORDERS_CHECKOUT_URL", "")
+            self.respond(200,"application/json",json.dumps({"url":url,"configured":bool(url)}).encode())
         elif path=="/license_status":
             info = {
                 "valid": state.get("license_valid", True),
