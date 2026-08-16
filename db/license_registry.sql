@@ -14,11 +14,18 @@ CREATE TABLE IF NOT EXISTS licenses (
     phone TEXT,
     stripe_session_id TEXT UNIQUE,
     sol_tx_signature TEXT UNIQUE,
+    product TEXT NOT NULL DEFAULT 'gridrunner' CHECK (product IN ('gridrunner','limit_orders')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    CHECK (license_key ~ '^LB-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
+    CHECK (license_key ~ '^(LB-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}|LO-[A-F0-9]{12})$')
 );
 
 CREATE INDEX IF NOT EXISTS licenses_active_key_idx
     ON licenses (license_key)
     WHERE is_active = TRUE;
+
+ALTER TABLE licenses ADD COLUMN IF NOT EXISTS product TEXT NOT NULL DEFAULT 'gridrunner';
+DO $$ BEGIN
+  ALTER TABLE licenses DROP CONSTRAINT IF EXISTS licenses_license_key_check;
+EXCEPTION WHEN undefined_object THEN NULL; END $$;
+ALTER TABLE licenses ADD CONSTRAINT licenses_license_key_check CHECK (license_key ~ '^(LB-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}|LO-[A-F0-9]{12})$');

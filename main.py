@@ -2585,9 +2585,7 @@ DASHBOARD = '''<!DOCTYPE html>
 <meta name="apple-mobile-web-app-title" content="GridRunner"/>
 <link rel="apple-touch-icon" href="/logo.jpeg"/>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script>
-function activateLimitAddon() { var key=document.getElementById("limit-addon-key").value.trim(); if(!key){showToast("Enter a Limit Orders license key","error");return;} apiFetch("/limit_orders/activate?key="+encodeURIComponent(key)).then(function(r){return r.json()}).then(function(d){var el=document.getElementById("limit-addon-status"); el.textContent=d.valid?"Active":"Locked"; el.className="badge "+(d.valid?"badge-p":"badge-s"); showToast(d.valid?"Limit Orders add-on activated":(d.error||"Activation failed"),d.valid?"info":"error")})}
-</script>
+
 <style>
 :root{--bg:#080808;--card:#111;--border:#1a1a1a;--text:#eee;--text2:#888;--dim:#444;--accent:#00ff9d;--red:#ff6b6b;--blue:#4dabf7;--purple:#cc99ff;--yellow:#ffd43b}
 .light{--bg:#f0f2f5;--card:#fff;--border:#d0d5dd;--text:#1a1a1a;--text2:#555;--dim:#999;--accent:#00b875;--red:#e03131;--blue:#1971c2;--purple:#7c3aed;--yellow:#e67700}
@@ -2662,7 +2660,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 </style>
 </head>
 <body>
-<div class="card" id="limit-addon-card"><div class="ct">Limit Orders Add-on</div><div style="font-size:12px;color:var(--text2);margin-bottom:10px">Independent entitlement and order registry. Existing GridRunner license and strategy state are unchanged.</div><div class="action-bar"><input id="limit-addon-key" placeholder="Limit Orders license key" autocomplete="off"/><button class="btn" onclick="activateLimitAddon()">Activate</button><span id="limit-addon-status" class="badge badge-s">Locked</span></div></div>
+
 <div id="toast-container" class="toast-container"></div>
 <div class="wrap">
   <div class="head-row">
@@ -3675,6 +3673,8 @@ initChart();
     el.addEventListener("input", markConfigDirty);
     el.addEventListener("change", markConfigDirty);
   });
+
+
 </script>
 
 </body>
@@ -3744,10 +3744,6 @@ class Handler(BaseHTTPRequestHandler):
         elif path=="/limit_orders/status":
             if not self._auth_or_401(): return
             self.respond(200,"application/json",json.dumps(limit_orders_addon.status() if limit_orders_addon else {"valid":False}).encode())
-        elif path=="/limit_orders/activate":
-            if not self._auth_or_401(): return
-            result = limit_orders_addon.activate(params.get("key",[""])[0]) if limit_orders_addon else {"valid":False,"error":"add-on unavailable"}
-            self.respond(200,"application/json",json.dumps(result).encode())
         elif path=="/license_status":
             info = {
                 "valid": state.get("license_valid", True),
@@ -4085,6 +4081,17 @@ class Handler(BaseHTTPRequestHandler):
                 data = {}
         else: data = {}
         path = urlparse(self.path).path
+        if path == "/stripe/webhook":
+            import license_issuance
+            signature = self.headers.get("Stripe-Signature", "")
+            try:
+                key = license_issuance.handle_stripe_webhook(body, signature)
+                self.respond(200, "application/json", json.dumps({"ok": True, "issued": bool(key)}).encode())
+            except ValueError:
+                self.respond(400, "application/json", b'{"error":"invalid webhook"}')
+            except Exception:
+                self.respond(500, "application/json", b'{"error":"webhook processing failed"}')
+            return
         if path == "/kill":
             if not self._auth_or_401(): return
             if data.get("confirm") is not True:
