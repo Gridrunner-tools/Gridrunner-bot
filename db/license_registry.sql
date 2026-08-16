@@ -14,6 +14,7 @@ CREATE TABLE IF NOT EXISTS licenses (
     phone TEXT,
     stripe_session_id TEXT UNIQUE,
     sol_tx_signature TEXT UNIQUE,
+    product TEXT NOT NULL DEFAULT 'gridrunner' CHECK (product IN ('gridrunner','limit_orders')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     CHECK (license_key ~ '^LB-[A-Z0-9]{4}-[A-Z0-9]{4}-[A-Z0-9]{4}$')
