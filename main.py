@@ -1861,6 +1861,41 @@ def seed_history(pair):
             if pair == state.get("pair"): state["price_history"] = history[:]
             log(f"Seeded {len(history)} candles from Kraken for {pair}")
     except Exception as e: log(f"Seed history failed for {pair}: {e}", "WARN")
+def chart_history_for(pair):
+    """Return candle history for ANY requested pair, seeding it when missing.
+
+    Arbitrary dropdown pairs have no history until a strategy runs on them, so
+    the dashboard asks this endpoint when the user picks a pair. Preference
+    order: existing per-pair buffer (running/seeded pairs) -> Kraken OHLC seed
+    (reuses seed_history, mapped for BTC/ETH/SOL, generic fallback otherwise)
+    -> two points synthesized from the current live price via get_price(pair).
+    The result is stored into state["price_history_pairs"][pair] so the 3s
+    /state refresh then serves it directly. Returns [] when nothing is
+    available so the client can show a placeholder instead of stale candles.
+    """
+    pair = (pair or "").strip()
+    if not pair or "/" not in pair or len(pair) > 64:
+        return []
+    history = state["price_history_pairs"].get(pair, [])
+    if len(history) >= 2:
+        return history[-4320:]
+    seed_history(pair)
+    history = state["price_history_pairs"].get(pair, [])
+    if len(history) >= 2:
+        return history[-4320:]
+    # Live fallback for pairs Kraken does not cover (custom Solana tokens).
+    # A single sample synthesized into two points keeps the request fast and
+    # shows the selected pair's own current price, never another pair's data.
+    try:
+        price = get_price(pair)
+    except Exception:
+        price = 0
+    if price and price > 0:
+        now = int(time.time())
+        samples = [{"time": now - 1, "value": float(price)}, {"time": now, "value": float(price)}]
+        state["price_history_pairs"][pair] = samples
+        return samples
+    return []
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
     buy_prices = []
@@ -2684,7 +2719,9 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 
   <div id="charts-container" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));justify-content:end;align-items:start;gap:16px;width:100%;margin-bottom:16px;box-sizing:border-box"></div>
   <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
-    <div id="chart-container" style="flex:1;min-width:0"></div>
+    <div id="chart-container" style="flex:1;min-width:0">
+      <div id="chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
+    </div>
     <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct" style="display:flex;align-items:center;gap:8px">
         Grid Details
@@ -2947,7 +2984,14 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
     gridLines.forEach(function(l) { chart.removeSeries(l); });
   } catch(e) { console.log("Grid remove error:", e); }
   gridLines = [];
-  if (!data || data.length < 2) return;
+  if (!data || data.length < 2) {
+    // Never silently keep showing the previous pair's candles: clear the
+    // series so the placeholder is visible instead of stale wrong-pair data.
+    try { if (candleSeries) candleSeries.setData([]); } catch(e) {}
+    showChartPlaceholder(pair || "", true);
+    return;
+  }
+  showChartPlaceholder(pair || "", false);
 
   // Update candles
   var candles = aggregateCandles(data, 60);
@@ -3009,6 +3053,37 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
 }
 
 
+function showChartPlaceholder(pair, show) {
+  var el = document.getElementById("chart-placeholder");
+  if (!el) return;
+  if (show) {
+    el.textContent = "No price data for " + pair + " yet — fetching…";
+    el.style.display = "flex";
+  } else {
+    el.style.display = "none";
+  }
+}
+function fetchPairChartHistory(pair, levels, buyZone) {
+  // Fetches candle history for a pair the server has not seeded yet (arbitrary
+  // dropdown pair) and renders it immediately. The server stores the history
+  // into state.price_history_pairs, so the 3s /state refresh then serves it
+  // directly. Cooldown prevents hammering the endpoint (which seeds server-
+  // side) when a pair keeps returning no data.
+  if (!window._pairChartFetches) window._pairChartFetches = {};
+  var nowTs = Date.now();
+  var last = window._pairChartFetches[pair] || 0;
+  if (nowTs - last < 15000) return;
+  window._pairChartFetches[pair] = nowTs;
+  apiFetch("/chart_history?pair=" + encodeURIComponent(pair)).then(function(r) { return r.json(); }).then(function(d) {
+    if (d && d.history && d.history.length >= 2) {
+      updateChart(d.history, levels, buyZone, pair);
+    } else {
+      updateChart([], levels, buyZone, pair);
+    }
+  }).catch(function() {
+    updateChart([], levels, buyZone, pair);
+  });
+}
 function showToast(msg, type) {
   var c = document.getElementById("toast-container");
   var t = document.createElement("div");
@@ -3475,14 +3550,22 @@ function refresh() {
       });
     }
     if (!multiPair) {
-      // Show grid for currently selected pair
+      // Show grid for currently selected pair. Arbitrary dropdown pairs have
+      // no history in /state until seeded, so fetch it on demand and render
+      // the selected pair's own candles — never stale candles from another.
       var viewPair = sel.pair || d.pair || "SOL/USDC";
       var pairHistory = d.price_history_pairs && d.price_history_pairs[viewPair];
-      var chartHistory = (pairHistory && pairHistory.length) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
+      var chartHistory = (pairHistory && pairHistory.length >= 2) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
       var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart(chartHistory, levels, buyZone, viewPair);
+      if (chartHistory && chartHistory.length >= 2) {
+        updateChart(chartHistory, levels, buyZone, viewPair);
+      } else {
+        // No history for the selected pair yet: clear stale candles and fetch.
+        updateChart([], levels, buyZone, viewPair);
+        fetchPairChartHistory(viewPair, levels, buyZone);
+      }
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
@@ -3743,6 +3826,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
                 return
             self.respond(200,"application/json",json.dumps(state).encode())
+        elif path=="/chart_history":
+            if not self._auth_or_401(): return
+            pair = params.get("pair", [""])[0]
+            history = chart_history_for(pair)
+            body = {"ok": True, "pair": pair, "history": history}
+            if not history:
+                body["error"] = "No price data for " + pair + " yet"
+            self.respond(200,"application/json",json.dumps(body).encode())
         elif path=="/limit_orders/status":
             if not self._auth_or_401(): return
             self.respond(200,"application/json",json.dumps(limit_orders_addon.status() if limit_orders_addon else {"valid":False}).encode())
