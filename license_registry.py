@@ -34,27 +34,39 @@ def _driver():
     return psycopg
 
 
-def lookup_license(license_key: str, database_url: str | None = None) -> dict[str, Any] | None:
+def lookup_license(license_key: str, database_url: str | None = None, product: str | None = None) -> dict[str, Any] | None:
     """Return the active license record for *license_key*, or ``None``.
 
-    Registry connectivity/configuration problems raise
-    :class:`LicenseRegistryUnavailable`; callers must fail closed unless a
-    previously verified grace cache is still valid.
+    *product* optionally scopes the lookup to a product value (e.g.
+    'gridrunner'); None means any product. Registry connectivity/configuration
+    problems raise :class:`LicenseRegistryUnavailable`; callers must fail
+    closed unless a previously verified grace cache is still valid.
     """
     url = _database_url(database_url)
     psycopg = _driver()
     try:
         with psycopg.connect(url, connect_timeout=10) as conn:
             with conn.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT license_type, expires_at
-                    FROM licenses
-                    WHERE license_key = %s AND is_active = TRUE
-                    LIMIT 1
-                    """,
-                    (license_key,),
-                )
+                if product is None:
+                    cursor.execute(
+                        """
+                        SELECT license_type, expires_at
+                        FROM licenses
+                        WHERE license_key = %s AND is_active = TRUE
+                        LIMIT 1
+                        """,
+                        (license_key,),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT license_type, expires_at
+                        FROM licenses
+                        WHERE license_key = %s AND product = %s AND is_active = TRUE
+                        LIMIT 1
+                        """,
+                        (license_key, product),
+                    )
                 row = cursor.fetchone()
     except Exception as exc:
         # Do not include exception details: database drivers often echo the URL.
