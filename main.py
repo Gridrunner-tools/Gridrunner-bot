@@ -2546,7 +2546,7 @@ def run_limit_order():
     if not valid:
         state["last_trade"] = {"action": side, "pair": pair, "amount": amount_usdc, "order_type": order_type, "limit_price": limit_price, "status": "rejected", "error": reason, "time": int(time.time())}
         log("Limit order rejected: "+reason, "WARN"); state["running"] = False; state["strategy"] = None; return
-    log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type)
+    log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type+" limit=$"+str(limit_price))
     while state["running"] and state["strategy"] in ("limit_buy", "limit_sell"):
         price = get_price(pair)
         ready = order_type == "market" or (side == "buy" and price <= limit_price) or (side == "sell" and price >= limit_price)
@@ -2784,6 +2784,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
       </div>
       <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
+      <div id="limit-order-status" style="font-size:12px;margin-top:8px;line-height:1.6"></div>
       <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
@@ -3275,10 +3276,27 @@ function startBot() {
     if (!document.getElementById("limit-confirm").checked) { showToast("Confirm order details and trading mode", "error"); return; }
     params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side+"&trade_mode=live&confirm=true";
   }
-  apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
+  apiFetch("/start?" + params).then(function(r) {
+    return r.json().then(function(d) { return {ok: r.ok, body: d}; });
+  }).then(function(res) {
+    var d = res.body || {};
+    // Never claim success when the server returned a non-OK or an error body
+    // (e.g. 400 {"error":"amount exceeds max position"}).
+    if (!res.ok || d.error) {
+      showToast(d.error || "Failed to start", "error");
+      return;
+    }
+    if (!d.ok) {
+      // 200 without ok:true means the strategy did not actually start; the
+      // 3s refresh surfaces the log line in the detail-card warning.
+      showToast("Bot did not start — check status", "error");
+      return;
+    }
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
     document.getElementById("pause-btn").style.display = "inline-block";
     document.getElementById("pause-btn").textContent = "⏸ Pause";
+  }).catch(function() {
+    showToast("Failed to start: server unreachable", "error");
   });
 }
 
@@ -3414,6 +3432,65 @@ function togglePaper() {
   });
 }
 
+function updateLimitOrderStatus(d) {
+  var card = document.getElementById("limit-order-card");
+  var statusEl = document.getElementById("limit-order-status");
+  if (!card || !statusEl) return;
+  var isLimit = sel.strat === "limit_buy" || sel.strat === "limit_sell";
+  if (!isLimit) { statusEl.innerHTML = ""; return; }
+  var viewPair = sel.pair || d.pair || "";
+  var marketPrice = (d.price && d.price > 0) ? d.price : 0;
+  if (!marketPrice && d.price_history_pairs && d.price_history_pairs[viewPair] && d.price_history_pairs[viewPair].length) {
+    var ph = d.price_history_pairs[viewPair];
+    marketPrice = ph[ph.length - 1].value;
+  }
+  var lt = d.last_trade || {};
+  var side = d.limit_side || "buy";
+  var amount = d.limit_amount_usdc || 0;
+  var lprice = d.limit_price || 0;
+  var otype = d.limit_order_type || "limit";
+  var pair = d.pair || viewPair;
+  var mode = d.paper_trading ? "PAPER" : "LIVE";
+  var html = "";
+  // ARMED — the limit order is live and watching the price
+  if (d.running && (d.strategy === "limit_buy" || d.strategy === "limit_sell")) {
+    var cmp = side === "buy" ? "\u2264" : "\u2265";
+    html += '<div style="color:#ffd43b">\u26A1 ARMED \u2014 ' + side.toUpperCase() + ' $' + amount + ' of ' + pair + ' at limit $' + lprice + ' (' + mode + ') \u00B7 ' + otype + ' \u00B7 waiting for price ' + cmp + ' $' + lprice + '</div>';
+  }
+  // Terminal result from the last attempted limit order
+  if (lt.status === "confirmed") {
+    html += '<div style="color:#00ff9d">\u2713 FILLED @ $' + (lt.price != null ? lt.price : "\u2014") + '</div>';
+  } else if (lt.status === "rejected") {
+    html += '<div style="color:#ff6b6b">\u2717 REJECTED: ' + (lt.error || "order failed") + '</div>';
+  }
+  if (marketPrice > 0) {
+    html += '<div style="color:var(--dim);margin-top:2px">Current ' + pair + ': $' + marketPrice + '</div>';
+  }
+  // Already-running warning from the server log tail (see checkAlreadyRunning)
+  if (d.log && d.log.length) {
+    for (var i = 0; i < Math.min(d.log.length, 10); i++) {
+      if (d.log[i].indexOf("Already running") !== -1) {
+        html += '<div style="color:#ff6b6b">\u26A0 Already running \u2014 stop first</div>';
+        break;
+      }
+    }
+  }
+  statusEl.innerHTML = html;
+}
+function checkAlreadyRunning(d) {
+  if (!d || !d.log || !d.log.length) return;
+  var found = false;
+  for (var i = 0; i < Math.min(d.log.length, 10); i++) {
+    if (d.log[i].indexOf("Already running") !== -1) { found = true; break; }
+  }
+  // Warn once per occurrence so the 3s refresh does not spam the toast.
+  if (found && !window._alreadyRunningWarned) {
+    window._alreadyRunningWarned = true;
+    showToast("Already running \u2014 stop first", "error");
+  } else if (!found) {
+    window._alreadyRunningWarned = false;
+  }
+}
 function refresh() {
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     try {
@@ -3428,6 +3505,9 @@ function refresh() {
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
+    // Live limit-order status card + already-running warning (dashboard only)
+    updateLimitOrderStatus(d);
+    checkAlreadyRunning(d);
     // Multi-pair mode: show per-pair charts when 2+ active pairs
     var multiPair = activePairs.length >= 2;
     var singleRow = document.getElementById("single-chart-row");
