@@ -591,6 +591,9 @@ def cex_get_balance():
     return 0.0
 
 def cex_place_order(pair, side, amount):
+    if state.get("paper_trading", False):
+        log("[CEX] PAPER MODE — skipping " + side + " " + pair + " " + str(amount))
+        return True
     exchange = state["exchange"]
     try:
         sym = pair.replace("/","")
@@ -1709,6 +1712,11 @@ def place_order(pair, side, amount):
         return False
     _last_order_key = order_key
     _last_order_time = now
+    
+    # Visible ORDER_ATTEMPT logging
+    log(f"[ORDER_ATTEMPT] {side.upper()} {pair} amount={amount}", "WARN")
+    
+    success = False
     if state["mode"] == "dex":
         chain = state["chain"]
         price = get_price(pair)
@@ -1729,19 +1737,25 @@ def place_order(pair, side, amount):
                 result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex)
             # jupiter_swap returns (success_bool, amount) tuple — unpack it
             if isinstance(result, tuple):
-                return result[0]
-            return bool(result)
+                success = result[0]
+            else:
+                success = bool(result)
         else:
             # EVM chains: use 1inch/Uniswap
             tokens = TOKENS.get(chain, {})
             from_t = tokens.get("USDT","")
             to_t   = tokens.get("W"+token, tokens.get(token,""))
             if side in ("buy","buy_market"):
-                return dex_swap(chain, from_t, to_t, amount * price, price)
+                success = dex_swap(chain, from_t, to_t, amount * price, price)
             else:
-                return dex_swap(chain, to_t, from_t, amount * price, price)
+                success = dex_swap(chain, to_t, from_t, amount * price, price)
     else:
-        return cex_place_order(pair, side, amount)
+        success = bool(cex_place_order(pair, side, amount))
+        
+    if not success:
+        log(f"ORDER FAILED: swap execution returned failure for {side.upper()} {pair} {amount}", "WARN")
+        
+    return success
 
 def log_trade_to_file(entry):
     """Write a trade event to persistent log file."""
@@ -1935,6 +1949,8 @@ def _init_grid_pair(pair):
         "trailing_pct": 0.5, "trailing_high": 0.0, "trailing_sell_active": False,
         "trailing_low": 0.0, "trailing_buy_active": False, "dip_occurred": False,
         "price": price, "previous_price": None, "levels": levels, "spread": spread,
+        "last_price": None, "drop_through_active": False,
+        "drop_through_low": price, "drop_through_levels": [],
     }
 
 def _grid_crossed_buy_indices(grids, mid_idx, filled, previous_price, price):
@@ -2198,6 +2214,106 @@ def run_grid():
                             log("["+pair+"] Trailing sell reset — price back in buy zone")
                             trailing_sell_active = False
                             trailing_high = 0.0
+            # ── Gap-fill, Buy-On-The-Way-Up, and Drop-Through Recovery Fill ──
+            last_price = gs.get("last_price")
+            drop_through_active = gs.get("drop_through_active", False)
+            drop_through_low = gs.get("drop_through_low", price)
+            drop_through_levels = gs.get("drop_through_levels", [])
+
+            if last_price is not None:
+                # 1. Check if price is dropping
+                if price < last_price:
+                    # Count how many unfilled buy levels were crossed/dropped through
+                    crossed_levels = []
+                    for gap_i in range(mid_idx):
+                        if gap_i in filled:
+                            continue
+                        # Level crossed on the way down: price <= grids[gap_i] < last_price
+                        if price <= grids[gap_i] < last_price:
+                            crossed_levels.append(gap_i)
+                    
+                    if len(crossed_levels) > 1:
+                        # Drop-through detected!
+                        if not drop_through_active:
+                            drop_through_active = True
+                            drop_through_low = price
+                            drop_through_levels = crossed_levels
+                            log(f"[{pair}] Drop-through detected: price fell from ${last_price:.2f} to ${price:.2f}, crossing unfilled buy levels {crossed_levels}. Waiting for bottom to buy.", "WARN")
+                        else:
+                            # Already in drop-through, price fell further
+                            drop_through_low = price
+                            # Merge new crossed levels
+                            for lvl in crossed_levels:
+                                if lvl not in drop_through_levels:
+                                    drop_through_levels.append(lvl)
+                            log(f"[{pair}] Drop-through continues: price fell to ${price:.2f}, lowest is now ${drop_through_low:.2f}.", "INFO")
+                    elif drop_through_active:
+                        # Already in drop-through, price fell further but crossed <= 1 level in this specific tick
+                        if price < drop_through_low:
+                            drop_through_low = price
+                        for lvl in crossed_levels:
+                            if lvl not in drop_through_levels:
+                                drop_through_levels.append(lvl)
+                
+                # 2. Check for confirmed upward tick after the low to recover and buy
+                elif price > last_price and drop_through_active:
+                    log(f"[{pair}] Confirmed upward tick: price rose from last price ${last_price:.2f} (low was ${drop_through_low:.2f}) to ${price:.2f}. Triggering 'all buy at the bottom' recovery!", "WARN")
+                    
+                    # Fill ALL tracked drop_through_levels at/near the bottom (current price)
+                    drop_through_levels.sort()
+                    for gap_i in list(drop_through_levels):
+                        if gap_i in filled:
+                            continue
+                        # Check balance safety rail
+                        current_bal = get_balance()
+                        if current_bal < size:
+                            log(f"[{pair}] Safety rail: Insufficient balance to place order for level {gap_i} during recovery (balance: ${current_bal:.2f}, level size: ${size:.2f}). Skipping.", "WARN")
+                            continue
+                        
+                        gap_amt = round(size / price, 6)
+                        if place_order(pair, "buy", gap_amt):
+                            filled[gap_i] = {"price": price, "amount": gap_amt}
+                            state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
+                            record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
+                            log(f"[{pair}] GAP-FILL-RECOVERY BUY level {gap_i} @ ${price:.2f}", "WARN")
+                    
+                    # Reset drop-through state
+                    drop_through_active = False
+                    drop_through_levels = []
+                    drop_through_low = price
+
+            # General gap-fill (C1 downward + upward buy-on-the-way-up) when NOT in a consecutive drop
+            if not drop_through_active:
+                for gap_i in range(mid_idx):
+                    if gap_i in filled:
+                        continue
+                    
+                    # Downward gap-fill: price fell below level
+                    is_downward_gap = (last_price is not None) and (price <= grids[gap_i] < last_price)
+                    
+                    # Upward gap-fill: price rose above/through level
+                    is_upward_gap = (last_price is not None) and (last_price < grids[gap_i] <= price)
+                    
+                    if is_downward_gap or is_upward_gap:
+                        # Check balance safety rail
+                        current_bal = get_balance()
+                        if current_bal < size:
+                            log(f"[{pair}] Safety rail: Insufficient balance to place order for level {gap_i} (balance: ${current_bal:.2f}, level size: ${size:.2f}). Skipping.", "WARN")
+                            continue
+                        
+                        gap_amt = round(size / price, 6)
+                        if place_order(pair, "buy", gap_amt):
+                            filled[gap_i] = {"price": price, "amount": gap_amt}
+                            state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
+                            record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
+                            log(f"[{pair}] {'UPWARD' if is_upward_gap else 'DOWNWARD'} GAP-FILL BUY level {gap_i} @ ${price:.2f}", "WARN")
+
+            # Save state variables in gs dict
+            gs["last_price"] = price
+            gs["drop_through_active"] = drop_through_active
+            gs["drop_through_low"] = drop_through_low
+            gs["drop_through_levels"] = drop_through_levels
+
             # ── Daily loss limit check ──
             now = int(time.time())
             today_midnight = now - (now % 86400)

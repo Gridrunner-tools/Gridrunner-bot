@@ -28,6 +28,7 @@ run('test_license_issuance', needs_monkey=True)
 run('test_limit_order_config')
 run('test_config_controls')
 run('test_strategy')
+run('test_buy_on_way_up')
 run('test_multi_grid_dashboard')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
