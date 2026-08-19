@@ -143,6 +143,31 @@ def test_gap_fill_logic():
     print("PASS test_gap_fill_logic")
 
 
+def test_place_order_duplicate_guard_with_grid_idx():
+    from main import place_order, state, cfg
+    # Setup state
+    state["mode"] = "cex"
+    state["exchange"] = "binance"
+    state["paper_trading"] = True
+    
+    # Reset duplicates
+    import main
+    main._last_order_key = None
+    main._last_order_time = 0
+    
+    # 1. Place order for level 0
+    assert place_order("SOL/USDC", "buy", 0.1, grid_idx=0) is True
+    
+    # 2. Place order for level 1 (with same amount, in same tick)
+    assert place_order("SOL/USDC", "buy", 0.1, grid_idx=1) is True # Should pass because grid_idx is different!
+    
+    # 3. Place order for level 1 again (with same amount, in same tick) -> should be blocked as duplicate!
+    assert place_order("SOL/USDC", "buy", 0.1, grid_idx=1) is False # Duplicate blocked!
+    
+    print("PASS test_place_order_duplicate_guard_with_grid_idx")
+
+
 if __name__ == '__main__':
     test_drop_through_recovery_logic()
     test_gap_fill_logic()
+    test_place_order_duplicate_guard_with_grid_idx()

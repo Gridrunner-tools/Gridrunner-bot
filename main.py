@@ -1703,9 +1703,11 @@ def get_balance():
 _last_order_key = None
 _last_order_time = 0
 
-def place_order(pair, side, amount):
+def place_order(pair, side, amount, grid_idx=None):
     global _last_order_key, _last_order_time
     order_key = f"{pair}:{side}:{amount}"
+    if grid_idx is not None:
+        order_key = f"{pair}:{side}:{amount}:grid{grid_idx}"
     now = time.time()
     if order_key == _last_order_key and now - _last_order_time < 5:
         log(f"DUPLICATE ORDER BLOCKED: {order_key}", "WARN")
@@ -1887,7 +1889,7 @@ def run_dca():
             size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
             if size > 1:
                 amt = round(size/price, 6)
-                if place_order(pair,"buy",amt):
+                if place_order(pair,"buy",amt, grid_idx=i):
                     buy_prices.append(price)
                     state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                     record_trade("DCA-BUY",price,amt, pair=pair)
@@ -1916,7 +1918,7 @@ def run_dca():
                 size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
                 if size > 1:
                     amt = round(size/price,6)
-                    if place_order(pair,"buy",amt):
+                    if place_order(pair,"buy",amt, grid_idx=i):
                         buy_prices.append(price)
                         state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                         record_trade("DCA-BUY",price,amt, pair=pair)
@@ -2102,7 +2104,7 @@ def run_grid():
                             should_buy = moving_up
                             if should_buy:
                                 amt = round(size*dip_mult/price,6)
-                                if place_order(pair,"buy",amt):
+                                if place_order(pair,"buy",amt, grid_idx=i):
                                     filled[i]={"price":price,"amount":amt}
                                     state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                     record_trade("GRID-BUY",price,amt, pair=pair)
@@ -2271,7 +2273,7 @@ def run_grid():
                             continue
                         
                         gap_amt = round(size / price, 6)
-                        if place_order(pair, "buy", gap_amt):
+                        if place_order(pair, "buy", gap_amt, grid_idx=gap_i):
                             filled[gap_i] = {"price": price, "amount": gap_amt}
                             state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                             record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
@@ -2302,7 +2304,7 @@ def run_grid():
                             continue
                         
                         gap_amt = round(size / price, 6)
-                        if place_order(pair, "buy", gap_amt):
+                        if place_order(pair, "buy", gap_amt, grid_idx=gap_i):
                             filled[gap_i] = {"price": price, "amount": gap_amt}
                             state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                             record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
@@ -2369,7 +2371,7 @@ def run_scalp():
         size=min(bal*cfg["risk_pct"]/100,cfg["max_pos"])
         if position is None and price<sma*0.999 and size>1:
             amt=round(size/price,6)
-            if place_order(pair,"buy",amt):
+            if place_order(pair,"buy",amt, grid_idx=i):
                 position={"price":price,"amount":amt}
                 state["positions"]=[{"price":price,"amount":amt,"strategy":"Scalp"}]
                 record_trade("SCALP-BUY",price,amt, pair=pair)
