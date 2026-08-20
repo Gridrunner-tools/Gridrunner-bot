@@ -2193,7 +2193,7 @@ def run_grid():
                                 log("["+pair+"] Trailing high updated to $"+str(price))
                         # Sell when price drops trailing_pct% below peak
                         if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
-                            for buy_idx in sorted(filled.keys()):
+                            for buy_idx in sorted(_grid_sell_indices(filled, i, levels)):
                                 amt = filled[buy_idx]["amount"]
                                 buy_price = filled[buy_idx]["price"]
                                 partial_pct = cfg.get("partial_sell_pct", 50)
@@ -2232,20 +2232,22 @@ def run_grid():
                                     log("["+pair+"] TRADE SUMMARY: "+str(round(sell_amt,6))+" bought @ $"+str(round(buy_price,2))+" sold @ $"+str(round(price,2))+" | PnL $"+str(round(pnl,2)))
                                     send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                     if is_partial_sell and partial_key in state.get("partial_positions",{}):
-                                        # Partial remainder kept in `filled` for the next trigger —
-                                        # do not delete the position, do not reset the trailing setup.
+                                        # Don't delete the position yet — still holding remainder
+                                        trailing_sell_active = False
+                                        trailing_high = 0.0
+                                        state["grid_trailing_active"] = False
+                                        state["grid_trailing_high"] = 0.0
                                         state["grid_filled"] = {k: v for k, v in filled.items()}
+                                        break
                                     else:
                                         del filled[buy_idx]
                                         state["positions"]=[p for p in state["positions"] if p.get("grid")!=buy_idx]
+                                        trailing_sell_active = False
+                                        trailing_high = 0.0
+                                        state["grid_trailing_active"] = False
+                                        state["grid_trailing_high"] = 0.0
                                         state["grid_filled"] = {k: v for k, v in filled.items()}
-                            # After draining every ready tranche, disarm trailing ONLY once nothing
-                            # (including partial remainders) is left to sell.
-                            if not filled:
-                                trailing_sell_active = False
-                                trailing_high = 0.0
-                                state["grid_trailing_active"] = False
-                                state["grid_trailing_high"] = 0.0
+                                        break
                     else:
                         # Price back in buy zone — reset sell trailing
                         if trailing_sell_active:
