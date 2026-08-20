@@ -2051,6 +2051,35 @@ def run_grid():
                 state["grid_pairs"][p] = gs
                 seed_history(p)
                 log("Grid initialized for "+p+": "+str(gs["grids"]), "INFO")
+
+                # --- NEW BASE BUY ON START (Option B) ---
+                if not gs.get("seeded"):
+                    bal = get_balance()
+                    effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
+                    min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
+                    levels = gs["levels"]
+                    size = max(min_order, min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels)
+
+                    price = gs["price"]
+                    if price > 0 and size > 1:
+                        grids = gs["grids"]
+                        cell = None
+                        for i, g in enumerate(grids[:-1]):
+                            ng = grids[i+1]
+                            if g <= price < ng:
+                                cell = i
+                                break
+                        if cell is None:
+                            cell = gs["mid_idx"]
+
+                        base_amt = round(size / price, 6)
+                        if place_order(p, "buy", base_amt, grid_idx=cell):
+                            gs["filled"][cell] = {"price": price, "amount": base_amt}
+                            state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
+                            record_trade("GRID-BUY", price, base_amt, pair=p)
+                            log(f"[{p}] BASE BUY {base_amt} @ ${price} (grid start)")
+                            _grid_sync_state(p, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
+                    gs["seeded"] = True
     if not state["active_pairs"]:
         log("No active pairs to grid", "WARN"); return
     log("Grid started on "+str(state["active_pairs"])+" ("+state["mode"].upper()+")")
