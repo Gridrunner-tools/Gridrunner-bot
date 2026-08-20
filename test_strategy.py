@@ -34,7 +34,7 @@ def shift_buy_side(grids, price, spread, levels, mid_idx):
     """Simulate down-move one-sided shift."""
     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels), 4) for i in range(levels+1)]
     result = grids[:]
-    for i in range(mid_idx + 1):
+    for i in range(mid_idx + 2):
         result[i] = new_grids[i]
     return result
 
@@ -42,13 +42,13 @@ def shift_sell_side(grids, price, spread, levels, mid_idx, filled=None):
     """Simulate up-move one-sided shift with no-loss guard."""
     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels), 4) for i in range(levels+1)]
     result = grids[:]
-    for i in range(mid_idx, levels + 1):
+    for i in range(mid_idx + 1, levels + 1):
         result[i] = new_grids[i]
     # Enforce no sell level below any open position's entry price
     if filled:
         for idx, pos in filled.items():
             entry_price = pos["price"]
-            for gi in range(mid_idx, levels + 1):
+            for gi in range(mid_idx + 1, levels + 1):
                 if result[gi] < entry_price:
                     result[gi] = entry_price
     return result
@@ -139,8 +139,8 @@ def test_down_move_shifts_buy_only():
     # Buy side (indices 0..mid-1) should have shifted down
     assert new_grids[0] < grids[0], "Buy floor should have shifted lower"
 
-    # Sell side (indices mid+1..levels) must remain unchanged
-    for i in range(mid + 1, levels + 1):
+    # Sell side (indices mid+2..levels) must remain unchanged
+    for i in range(mid + 2, levels + 1):
         assert new_grids[i] == grids[i], \
             f"Sell level grids[{i}] changed from {grids[i]} to {new_grids[i]}"
 
@@ -157,7 +157,7 @@ def test_up_move_shifts_sell_only():
     mid = grid_mid_idx(grids)
 
     # Save original buy-side levels
-    original_buy_side = grids[:mid]
+    original_buy_side = grids[:mid+1]
 
     # Price spikes well above grid[-1]
     new_price = grids[-1] * 1.03
@@ -166,8 +166,8 @@ def test_up_move_shifts_sell_only():
     # Sell side (indices mid+1..levels) should have shifted up
     assert new_grids[-1] > grids[-1], "Sell ceiling should have shifted higher"
 
-    # Buy side (indices 0..mid-1) must remain unchanged
-    for i in range(mid):
+    # Buy side (indices 0..mid) must remain unchanged
+    for i in range(mid + 1):
         assert new_grids[i] == grids[i], \
             f"Buy level grids[{i}] changed from {grids[i]} to {new_grids[i]}"
 
@@ -192,7 +192,7 @@ def test_no_sell_below_buy_entry():
 
     # Every sell level must be >= the entry price of the open position
     entry_price = filled[0]["price"]
-    for i in range(mid, levels + 1):
+    for i in range(mid + 1, levels + 1):
         assert new_grids[i] >= entry_price, \
             f"Sell level grids[{i}]={new_grids[i]} is below entry price {entry_price}"
 
@@ -223,24 +223,22 @@ def test_trailing_not_execute_when_not_armed():
 # Test 7: A sell cell liquidates only its mirrored buy tranche.
 # ──────────────────────────────────────────────────────────────────────────────
 def test_sell_cell_targets_only_paired_tranche():
-    # Exercise production geometry: levels=5 has sell cells 3 and 4.
+    # Exercise production geometry: levels=5 has sell cell 4.
     import sys, types
     sys.modules.setdefault("requests", types.SimpleNamespace())
     from main import _grid_sell_indices
     levels = 5
-    filled = {idx: {"amount": float(idx + 1)} for idx in range(3)}
+    filled = {idx: {"amount": float(idx + 1)} for idx in range(4)}
     # Each sell-cell event selects exactly one tranche (never a cascade).
-    first = _grid_sell_indices(filled, 3, levels)
-    assert len(first) == 1 and first == [2]
+    first = _grid_sell_indices(filled, 4, levels)
+    assert len(first) == 1 and first == [3]
     del filled[first[0]]
-    second = _grid_sell_indices(filled, 3, levels)
-    assert len(second) == 1 and second == [1]
+    second = _grid_sell_indices(filled, 4, levels)
+    assert len(second) == 1 and second == [2]
     del filled[second[0]]
-    # The upper actual sell cell reaches the remaining lowest buy tranche.
-    assert _grid_sell_indices(filled, 4, levels) == [0]
-    # Every buy tranche is reachable through actual sell cells, with no cell 5.
+    # Every buy tranche is reachable through actual sell cell 4.
     assert all(any(buy_idx in _grid_sell_indices({buy_idx: {}}, cell, levels)
-                   for cell in (3, 4)) for buy_idx in range(3))
+                   for cell in (4,)) for buy_idx in range(4))
     print("PASS  test_sell_cell_targets_only_paired_tranche")
 
 # ──────────────────────────────────────────────────────────────────────────────
