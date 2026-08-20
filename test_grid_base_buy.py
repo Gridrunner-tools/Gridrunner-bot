@@ -113,9 +113,9 @@ def test_base_buy_on_start_registers_once_and_does_not_refire():
     assert len(placed_orders) == initial_order_count, "Base buy must never re-fire once seeded flag is True"
 
     # 3. Verify that the existing _grid_sell_indices logic is byte-identical and works perfectly with the seeded position
-    # Specifically, when price moves to the mid_idx (sell-zone boundary), the seeded position at cell '2' is liquidatable
-    sell_indices = _grid_sell_indices(gs["filled"], grid_idx=gs["mid_idx"], levels=levels)
-    assert cell in sell_indices, f"Seeded cell {cell} should be targeted for sell at mid_idx {gs['mid_idx']}"
+    # Specifically, when price moves to the first sell index (sell-zone boundary), the seeded position at cell '2' is liquidatable
+    sell_indices = _grid_sell_indices(gs["filled"], grid_idx=gs["mid_idx"] + 1, levels=levels)
+    assert cell in sell_indices, f"Seeded cell {cell} should be targeted for sell at mid_idx+1 {gs['mid_idx'] + 1}"
 
     # Restore originals
     main.get_balance = orig_get_balance

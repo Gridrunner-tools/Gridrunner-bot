@@ -1998,14 +1998,14 @@ def _grid_crossed_buy_indices(grids, mid_idx, filled, previous_price, price):
     if price <= 0 or (previous_price is not None and price < previous_price):
         return set()
     floor = previous_price if previous_price is not None else price
-    return {idx for idx, level in enumerate(grids[:mid_idx])
+    return {idx for idx, level in enumerate(grids[:mid_idx+1])
             if idx not in filled and floor <= level <= price}
 
 def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high):
     """Sync per-pair grid state to state dict for dashboard display."""
     gp = state["grid_pairs"].get(pair, {})
     gp.update({
-        "grid_levels": grids[:], "grid_buy_zone": grids[mid_idx], "grid_mid_idx": mid_idx,
+        "grid_levels": grids[:], "grid_buy_zone": grids[mid_idx+1], "grid_mid_idx": mid_idx,
         "grid_filled": {k: v for k, v in filled.items()},
         "grid_trailing_active": trailing_sell_active, "grid_trailing_high": trailing_high,
         "grids": grids[:], "filled": filled, "mid_idx": mid_idx,
@@ -2015,7 +2015,7 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
     # Also set top-level state for backward compat (shows active pair's data)
     if state.get("pair") == pair:
         state["grid_levels"] = grids[:]
-        state["grid_buy_zone"] = grids[mid_idx]
+        state["grid_buy_zone"] = grids[mid_idx+1]
         state["grid_mid_idx"] = mid_idx
         state["grid_filled"] = filled
         state["grid_trailing_active"] = trailing_sell_active
@@ -2024,21 +2024,47 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
 def _grid_sell_indices(filled, grid_idx, levels):
     """Select one open tranche for an actual sell cell.
 
-    ``levels`` is the number of intervals, so sell cells are the intervals
-    from ``mid_idx`` through ``levels - 1`` (not the endpoint ``levels``).
-    There are sometimes more buy tranches than sell cells (for example,
-    levels=5 has buy cells 0..2 and sell cells 3..4).  A sell event must still
-    select exactly one tranche; choosing the nearest tranche for the lower
-    sell cell and the farthest for the upper cell gives every buy tranche a
-    reachable exit over successive sell events without cascading liquidation.
+    With the boundary shifted up by one, the first sell cell is mid_idx + 1.
     """
     mid_idx = levels // 2 + (levels % 2)
-    if grid_idx < mid_idx or grid_idx >= levels or not filled:
+    first_sell_idx = mid_idx + 1
+    if grid_idx < first_sell_idx or grid_idx >= levels or not filled:
         return []
     ordered = sorted(filled)
-    if grid_idx == mid_idx:
+    if grid_idx == first_sell_idx:
         return [ordered[-1]]
     return [ordered[0]]
+def _execute_base_buy_if_needed(pair, gs, price):
+    """Execute base buy on start / re-center if not already seeded."""
+    if not gs.get("seeded"):
+        if price <= 0:
+            return
+        bal = get_balance()
+        effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
+        min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
+        levels = gs["levels"]
+        size = max(min_order, min(effective_bal * cfg["risk_pct"] / 100, cfg["max_pos"]) / levels)
+
+        if size > 1:
+            grids = gs["grids"]
+            cell = None
+            for i, g in enumerate(grids[:-1]):
+                ng = grids[i+1]
+                if g <= price < ng:
+                    cell = i
+                    break
+            if cell is None:
+                cell = gs["mid_idx"]
+
+            base_amt = round(size / price, 6)
+            if place_order(pair, "buy", base_amt, grid_idx=cell):
+                gs["filled"][cell] = {"price": price, "amount": base_amt}
+                state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
+                record_trade("GRID-BUY", price, base_amt, pair=pair)
+                log(f"[{pair}] BASE BUY {base_amt} @ ${price} (grid start)")
+                _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
+        gs["seeded"] = True
+
 def run_grid():
     pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
@@ -2053,33 +2079,7 @@ def run_grid():
                 log("Grid initialized for "+p+": "+str(gs["grids"]), "INFO")
 
                 # --- NEW BASE BUY ON START (Option B) ---
-                if not gs.get("seeded"):
-                    bal = get_balance()
-                    effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
-                    min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
-                    levels = gs["levels"]
-                    size = max(min_order, min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels)
-
-                    price = gs["price"]
-                    if price > 0 and size > 1:
-                        grids = gs["grids"]
-                        cell = None
-                        for i, g in enumerate(grids[:-1]):
-                            ng = grids[i+1]
-                            if g <= price < ng:
-                                cell = i
-                                break
-                        if cell is None:
-                            cell = gs["mid_idx"]
-
-                        base_amt = round(size / price, 6)
-                        if place_order(p, "buy", base_amt, grid_idx=cell):
-                            gs["filled"][cell] = {"price": price, "amount": base_amt}
-                            state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
-                            record_trade("GRID-BUY", price, base_amt, pair=p)
-                            log(f"[{p}] BASE BUY {base_amt} @ ${price} (grid start)")
-                            _grid_sync_state(p, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
-                    gs["seeded"] = True
+                _execute_base_buy_if_needed(p, gs, gs["price"])
     if not state["active_pairs"]:
         log("No active pairs to grid", "WARN"); return
     log("Grid started on "+str(state["active_pairs"])+" ("+state["mode"].upper()+")")
@@ -2120,25 +2120,33 @@ def run_grid():
                 if price <= 0: break
 
             # ── Grid re-centering ──
-            if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
+            if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or not filled:
                 has_positions = bool(filled)
-                if not filled and price > grids[mid_idx]:
+                if not filled:
                     log("["+pair+"] Grid re-centering: no positions at $"+str(price))
                 else:
                     log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
                 if has_positions and price < grids[0]:
                     new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
-                    for i in range(mid_idx + 1):
+                    for i in range(mid_idx + 2):
                         grids[i] = new_grids[i]
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                    log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
+                    log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+2])+" sell zone kept: "+str(grids[mid_idx+1:]))
                 else:
                     grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
                     mid_idx = len(grids) // 2
+                    gs["grids"] = grids
+                    gs["mid_idx"] = mid_idx
                     trailing_sell_active = False; trailing_high = 0.0
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     state["partial_positions"] = {}
-                    log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+                    gs["seeded"] = False  # Reset base buy seed guard on recenter/start
+                    log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                    _execute_base_buy_if_needed(pair, gs, price)
+                    # Refresh local loop variables
+                    grids = gs["grids"]
+                    mid_idx = gs["mid_idx"]
+                    filled = gs["filled"]
             # Compute crossings against the final grid, after any recentering.
             # Downward movement defers buys until a later upward tick.
             moving_up = previous_price is None or price >= previous_price
@@ -2152,7 +2160,7 @@ def run_grid():
             for i,g in enumerate(grids[:-1]):
                 ng = grids[i+1]
                 if (g <= price < ng) or (i in crossed_buy_indices):
-                    is_buy_zone = i < mid_idx
+                    is_buy_zone = i <= mid_idx
                     # ── BUY ZONE: trailing buy (buy on bounce) ──
                     if is_buy_zone:
                         # Track the low
@@ -2229,6 +2237,14 @@ def run_grid():
                             for buy_idx in sorted(_grid_sell_indices(filled, _sell_cell, levels)):
                                 amt = filled[buy_idx]["amount"]
                                 buy_price = filled[buy_idx]["price"]
+                                if price <= buy_price:
+                                    log(f"[{pair}] Take-profit/trailing-sell pullback to ${price:.2f} <= entry cost ${buy_price:.2f} for level {buy_idx}. HOLDING.", "WARN")
+                                    # Reset trailing sell to prevent loop/log spam, hold position
+                                    trailing_sell_active = False
+                                    trailing_high = 0.0
+                                    state["grid_trailing_active"] = False
+                                    state["grid_trailing_high"] = 0.0
+                                    break
                                 partial_pct = cfg.get("partial_sell_pct", 50)
                                 # Check if this position still has a partial remainder
                                 partial_key = str(buy_idx)
@@ -2292,7 +2308,7 @@ def run_grid():
                 if price < last_price:
                     # Count how many unfilled buy levels were crossed/dropped through
                     crossed_levels = []
-                    for gap_i in range(mid_idx):
+                    for gap_i in range(mid_idx + 1):
                         if gap_i in filled:
                             continue
                         # Level crossed on the way down: price <= grids[gap_i] < last_price
@@ -2351,7 +2367,7 @@ def run_grid():
 
             # General gap-fill (C1 downward + upward buy-on-the-way-up) when NOT in a consecutive drop
             if not drop_through_active:
-                for gap_i in range(mid_idx):
+                for gap_i in range(mid_idx + 1):
                     if gap_i in filled:
                         continue
                     
@@ -3782,13 +3798,13 @@ function refresh() {
           var curP = lastPrice || 0;
           var trailActive = gp.trailing_sell_active || false;
           var html = '<div style="font-size:11px;margin-top:8px">';
-          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + '</span>';
+          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx+1].toFixed(2) + ' | Sell >$' + gl[midIdx+1].toFixed(2) + '</span>';
           if (trailActive) html += ' <span style="color:#ff6b6b">⚠ Trailing</span>';
           html += '<div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:2px;font-size:10px">';
           for (var i = 0; i < gl.length; i++) {
             var isFilled = gp.filled && gp.filled[i] != null;
-            var isMid = i === midIdx;
-            var isBuy = i < midIdx;
+            var isMid = i === (midIdx + 1);
+            var isBuy = i < (midIdx + 1);
             var color = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
             var marker = isFilled ? "●" : isMid ? "◇" : isBuy ? "△" : "▽";
             html += '<span style="color:' + color + '">' + marker + '$' + gl[i].toFixed(2) + '</span>';
@@ -3807,7 +3823,7 @@ function refresh() {
       var chartHistory = (pairHistory && pairHistory.length >= 2) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
-      var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
+      var buyZone = gp ? gp.grids[gp.mid_idx + 1] : d.grid_buy_zone;
       if (chartHistory && chartHistory.length >= 2) {
         updateChart(chartHistory, levels, buyZone, viewPair);
       } else {
@@ -3818,7 +3834,7 @@ function refresh() {
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
-        d.grid_buy_zone = gp.grids[gp.mid_idx];
+        d.grid_buy_zone = gp.grids[gp.mid_idx + 1];
         d.grid_filled = gp.filled;
         d.grid_mid_idx = gp.mid_idx;
         d.grid_trailing_active = gp.trailing_sell_active;
@@ -3893,7 +3909,7 @@ function refresh() {
       gdCard.style.display = "block";
       var gl = d.grid_levels;
       var midIdx = d.grid_mid_idx != null ? d.grid_mid_idx : Math.floor(gl.length / 2);
-      var midPrice = gl[midIdx];
+      var midPrice = gl[midIdx + 1];
       var curPrice = d.price || 0;
       var filled = d.grid_filled || {};
       var trailActive = d.grid_trailing_active || false;
@@ -3912,8 +3928,8 @@ function refresh() {
       html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;font-size:11px;color:var(--dim);padding:4px 8px;text-transform:uppercase;letter-spacing:0.5px">';
       html += '<span>Zone</span><span>Price</span><span>Status</span><span style="text-align:right">Dist</span></div>';
       for (var i = gl.length - 1; i >= 0; i--) {
-        var isMid = i === midIdx;
-        var isBuy = i < midIdx;
+        var isMid = i === (midIdx + 1);
+        var isBuy = i < (midIdx + 1);
         var isFilled = filled[i] != null;
         var isCur = (i < gl.length - 1 && curPrice >= gl[i] && curPrice < gl[i+1]) || (i === gl.length - 1 && curPrice >= gl[i]);
         var zone = isMid ? "MID" : isBuy ? "BUY" : "SELL";
@@ -3925,8 +3941,8 @@ function refresh() {
         var dist = curPrice > 0 ? (gl[i] - curPrice) : 0;
         var distStr = dist > 0 ? "+$" + dist.toFixed(0) : dist < 0 ? "-$" + Math.abs(dist).toFixed(0) : "\u2014";
         var status = isFilled ? "\u2705 $" + filled[i].price.toFixed(0) : isCur ? "\u2190 Current" : isMid ? "Buy Zone \u2191" : "Waiting";
-        if (isFilled && trailActive && i < midIdx) status = "\u2705 Trailing...";
-        if (isFilled && !trailActive && i < midIdx) status = "\u2705 Filled";
+        if (isFilled && trailActive && i < midIdx + 1) status = "\u2705 Trailing...";
+        if (isFilled && !trailActive && i < midIdx + 1) status = "\u2705 Filled";
         html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;align-items:center;padding:5px 8px;border-radius:4px;margin-bottom:2px;font-size:12px;background:' + bgColor + ';border-left:2px solid ' + borderColor + '">';
         html += '<span style="font-weight:600;color:' + zoneColor + ';font-size:10px;text-transform:uppercase">' + zone + '</span>';
         html += '<span style="font-family:monospace;font-weight:600">$' + gl[i].toFixed(2) + '</span>';
@@ -4171,7 +4187,7 @@ class Handler(BaseHTTPRequestHandler):
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
                     if g <= pr < ng:
-                        is_buy = i < mid_idx
+                        is_buy = i <= mid_idx
                         if is_buy and i not in filled:
                             filled[i] = {"price":pr,"amount":1}
                         elif not is_buy:
@@ -4220,7 +4236,7 @@ class Handler(BaseHTTPRequestHandler):
                 amt = round(sz/wprice,6)
                 if place_order(wpair,"buy",amt):
                     for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                        if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
                             record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
@@ -4323,7 +4339,7 @@ class Handler(BaseHTTPRequestHandler):
                 amt = round(sz/wprice,6)
                 if place_order(wpair,"buy",amt):
                     for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                        if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
                             record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
@@ -4382,7 +4398,7 @@ class Handler(BaseHTTPRequestHandler):
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
                     if g <= pr < ng:
-                        is_buy = i < mid_idx
+                        is_buy = i <= mid_idx
                         if is_buy and i not in filled:
                             filled[i] = {"price":pr,"amount":1}
                         elif not is_buy:
@@ -4538,7 +4554,7 @@ class Handler(BaseHTTPRequestHandler):
                 amt = round(sz/wprice,6)
                 if place_order(wpair,"buy",amt):
                     for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                        if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
                             record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
@@ -4597,7 +4613,7 @@ class Handler(BaseHTTPRequestHandler):
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
                     if g <= pr < ng:
-                        is_buy = i < mid_idx
+                        is_buy = i <= mid_idx
                         if is_buy and i not in filled:
                             filled[i] = {"price":pr,"amount":1}
                         elif not is_buy:
