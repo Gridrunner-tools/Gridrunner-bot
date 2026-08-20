@@ -225,8 +225,90 @@ def test_autonomous_recenter_and_reengage_on_empty_positions():
 
     print("PASS: test_autonomous_recenter_and_reengage_on_empty_positions")
 
+def test_profitable_pullback_into_buy_zone_still_exits():
+    import main
+    from main import state, cfg, run_grid
+
+    # Setup clean state
+    state["running"] = True
+    state["strategy"] = "grid"
+    state["mode"] = "cex"
+    state["active_pairs"] = ["SOL/USDC"]
+    state["positions"] = []
+    state["pnl"] = 0.0
+    state["daily_pnl"] = 0.0
+    state["peak_balance"] = 100.0
+
+    cfg["risk_pct"] = 10.0
+    cfg["max_pos"] = 500.0
+    cfg["auto_compound"] = True
+    cfg["min_order_usdc"] = 5.0
+    cfg["grid_stop_loss_pct"] = 8.0
+    cfg["partial_sell_pct"] = 100
+
+    placed_orders = []
+    def mock_place_order(pair, side, amount, grid_idx=None):
+        placed_orders.append((side, amount, grid_idx))
+        return True
+
+    orig_place_order = main.place_order
+    orig_get_price = main.get_price
+    orig_get_balance = main.get_balance
+    orig_sleep = main.time.sleep
+
+    main.place_order = mock_place_order
+    main.get_balance = lambda: 100.0
+    main.time.sleep = lambda secs: None
+
+    # Initialize grid at $100
+    p = "SOL/USDC"
+    main.get_price = lambda pair: 100.0
+    from main import _init_grid_pair
+    gs = _init_grid_pair(p)
+    assert gs is not None, "Failed to initialize grid pair"
+    state["grid_pairs"][p] = gs
+    gs["seeded"] = True # pretend already seeded
+
+    # Setup trailing sell active at a high price
+    # We bought at $102, price rose to $105 (trailing_high = 105)
+    # Then price pulled back to $103.5.
+    # $103.5 is in cell 3 (the buy zone, since <= mid_idx=3).
+    # But it is above buy price of $102.0.
+    # It satisfies trailing pullback (103.5 <= 105 * 0.995 = 104.475).
+    # With our fix, this pullback into the buy zone (cell 3) targets cell 4 (mid_idx+1)
+    # and successfully sells the level 4 position.
+    gs["filled"] = {4: {"price": 102.0, "amount": 0.1}}
+    gs["trailing_sell_active"] = True
+    gs["trailing_high"] = 105.0
+
+    # Tick price down to 103.5
+    price_calls = [103.5]
+    def mock_get_price_seq(pair):
+        if price_calls:
+            return price_calls.pop(0)
+        state["running"] = False
+        state["strategy"] = None
+        return 0.0
+    main.get_price = mock_get_price_seq
+
+    run_grid()
+
+    # The position at index 4 should have been sold!
+    assert 4 not in gs["filled"], "Position must be sold because pullback price is profitable"
+    assert len(placed_orders) >= 1, "Should have placed at least one order"
+    assert placed_orders[-1] == ("sell", 0.1, None), f"Should have executed sell order for level 4, got {placed_orders}"
+
+    # Restore originals
+    main.place_order = orig_place_order
+    main.get_price = orig_get_price
+    main.get_balance = orig_get_balance
+    main.time.sleep = orig_sleep
+
+    print("PASS: test_profitable_pullback_into_buy_zone_still_exits")
+
 if __name__ == "__main__":
     test_zone_boundary_one_cell_up_is_still_buy()
     test_take_profit_never_sells_below_purchase_price()
     test_autonomous_recenter_and_reengage_on_empty_positions()
+    test_profitable_pullback_into_buy_zone_still_exits()
     print("All GRID_ZONE_SPEC paper-test validation checks pass successfully!")

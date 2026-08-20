@@ -2230,10 +2230,10 @@ def run_grid():
                                 state["grid_trailing_high"] = trailing_high
                                 log("["+pair+"] Trailing high updated to $"+str(price))
                     # Sell when price drops trailing_pct% below the peak.
-                    # Evaluated in BOTH zones so a pullback into the buy zone still
-                    # exits (previously reset to 0 without selling - the no-sell bug).
+                    # Evaluated in BOTH zones so a pullback into the buy zone (at/below mid_idx)
+                    # still exits (previously reset to 0 without selling - the no-sell bug).
                     if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
-                            _sell_cell = i if (not is_buy_zone) else mid_idx
+                            _sell_cell = i if (not is_buy_zone) else (mid_idx + 1)
                             for buy_idx in sorted(_grid_sell_indices(filled, _sell_cell, levels)):
                                 amt = filled[buy_idx]["amount"]
                                 buy_price = filled[buy_idx]["price"]
