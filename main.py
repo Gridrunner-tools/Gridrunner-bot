@@ -2178,7 +2178,8 @@ def run_grid():
                                 log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
                                 del filled[sl_buy_idx]
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
-                    # ── SELL ZONE: trailing take profit ──
+                    # ── Trailing take profit (fires on pullback regardless of grid zone) ──
+                    # Arm / raise the trailing high while price is in the sell zone.
                     if not is_buy_zone:
                         if not trailing_sell_active and filled:
                             trailing_sell_active = True
@@ -2191,9 +2192,12 @@ def run_grid():
                                 trailing_high = price
                                 state["grid_trailing_high"] = trailing_high
                                 log("["+pair+"] Trailing high updated to $"+str(price))
-                        # Sell when price drops trailing_pct% below peak
-                        if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
-                            for buy_idx in sorted(_grid_sell_indices(filled, i, levels)):
+                    # Sell when price drops trailing_pct% below the peak.
+                    # Evaluated in BOTH zones so a pullback into the buy zone still
+                    # exits (previously reset to 0 without selling - the no-sell bug).
+                    if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
+                            _sell_cell = i if (not is_buy_zone) else mid_idx
+                            for buy_idx in sorted(_grid_sell_indices(filled, _sell_cell, levels)):
                                 amt = filled[buy_idx]["amount"]
                                 buy_price = filled[buy_idx]["price"]
                                 partial_pct = cfg.get("partial_sell_pct", 50)
@@ -2248,12 +2252,6 @@ def run_grid():
                                         state["grid_trailing_high"] = 0.0
                                         state["grid_filled"] = {k: v for k, v in filled.items()}
                                         break
-                    else:
-                        # Price back in buy zone — reset sell trailing
-                        if trailing_sell_active:
-                            log("["+pair+"] Trailing sell reset — price back in buy zone")
-                            trailing_sell_active = False
-                            trailing_high = 0.0
             # ── Gap-fill, Buy-On-The-Way-Up, and Drop-Through Recovery Fill ──
             last_price = gs.get("last_price")
             drop_through_active = gs.get("drop_through_active", False)
@@ -2329,12 +2327,12 @@ def run_grid():
                         continue
                     
                     # Downward gap-fill: price fell below level
-                    is_downward_gap = (last_price is not None) and (price <= grids[gap_i] < last_price)
+                    _DISABLED_downward_gap = (last_price is not None) and (price <= grids[gap_i] < last_price)
                     
                     # Upward gap-fill: price rose above/through level
                     is_upward_gap = (last_price is not None) and (last_price < grids[gap_i] <= price)
                     
-                    if is_downward_gap or is_upward_gap:
+                    if is_upward_gap:
                         # Check balance safety rail
                         current_bal = get_balance()
                         if current_bal < size:
@@ -2346,7 +2344,7 @@ def run_grid():
                             filled[gap_i] = {"price": price, "amount": gap_amt}
                             state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                             record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
-                            log(f"[{pair}] {'UPWARD' if is_upward_gap else 'DOWNWARD'} GAP-FILL BUY level {gap_i} @ ${price:.2f}", "WARN")
+                            log(f"[{pair}] 'UPWARD' GAP-FILL BUY level {gap_i} @ ${price:.2f}", "WARN")
 
             # Save state variables in gs dict
             gs["last_price"] = price
