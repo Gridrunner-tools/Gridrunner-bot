@@ -28,7 +28,7 @@ if __name__ == "__main__":
 def test_security_regressions_present():
     assert "import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string, math" in SOURCE
     # Credentials are read at point of use, not retained in module-level cfg.
-    cfg_block = SOURCE[SOURCE.index("cfg = {"):SOURCE.index("}\nimport threading", SOURCE.index("cfg = {"))]
+    cfg_block = SOURCE[SOURCE.index("cfg = {"):SOURCE.index("import threading", SOURCE.index("cfg = {"))]
     for name in ("api_key", "api_secret", "private_key", "sol_key", "license_key", "tg_bot_token", "tg_chat_id"):
         assert f'"{name}"' not in cfg_block
     assert 'requests.post("https://api.telegram.org/bot" + token + "/sendMessage"' in SOURCE

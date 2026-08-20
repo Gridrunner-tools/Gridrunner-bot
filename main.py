@@ -2585,9 +2585,6 @@ DASHBOARD = '''<!DOCTYPE html>
 <meta name="apple-mobile-web-app-title" content="GridRunner"/>
 <link rel="apple-touch-icon" href="/logo.jpeg"/>
 <script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
-<script>
-function activateLimitAddon() { var key=document.getElementById("limit-addon-key").value.trim(); if(!key){showToast("Enter a Limit Orders license key","error");return;} apiFetch("/limit_orders/activate?key="+encodeURIComponent(key)).then(function(r){return r.json()}).then(function(d){var el=document.getElementById("limit-addon-status"); el.textContent=d.valid?"Active":"Locked"; el.className="badge "+(d.valid?"badge-p":"badge-s"); showToast(d.valid?"Limit Orders add-on activated":(d.error||"Activation failed"),d.valid?"info":"error")})}
-</script>
 <style>
 :root{--bg:#080808;--card:#111;--border:#1a1a1a;--text:#eee;--text2:#888;--dim:#444;--accent:#00ff9d;--red:#ff6b6b;--blue:#4dabf7;--purple:#cc99ff;--yellow:#ffd43b}
 .light{--bg:#f0f2f5;--card:#fff;--border:#d0d5dd;--text:#1a1a1a;--text2:#555;--dim:#999;--accent:#00b875;--red:#e03131;--blue:#1971c2;--purple:#7c3aed;--yellow:#e67700}
@@ -3666,6 +3663,21 @@ window.addEventListener("resize", function() {
 setInterval(refresh, 3000);
 refresh();
 initChart();
+  function activateLimitAddon() {
+    var key = document.getElementById("limit-addon-key").value.trim();
+    if (!key) {
+      showToast("Enter a Limit Orders license key", "error");
+      return;
+    }
+    apiFetch("/limit_orders/activate?key=" + encodeURIComponent(key))
+      .then(function(r) { return r.json(); })
+      .then(function(d) {
+        var el = document.getElementById("limit-addon-status");
+        el.textContent = d.valid ? "Active" : "Locked";
+        el.className = "badge " + (d.valid ? "badge-p" : "badge-s");
+        showToast(d.valid ? "Limit Orders add-on activated" : (d.error || "Activation failed"), d.valid ? "info" : "error");
+      });
+  }
   function apiFetch(url, opts) {
     opts = opts || {};
     opts.credentials = "same-origin";
