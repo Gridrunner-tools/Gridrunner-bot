@@ -2062,6 +2062,7 @@ def _execute_base_buy_if_needed(pair, gs, price):
                 state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
                 record_trade("GRID-BUY", price, base_amt, pair=pair)
                 log(f"[{pair}] BASE BUY {base_amt} @ ${price} (grid start)")
+                send_telegram("🟢 <b>BUY</b> "+pair+"\nLevel: "+str(cell)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(base_amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                 _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
         gs["seeded"] = True
 
