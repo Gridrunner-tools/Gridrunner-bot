@@ -280,6 +280,7 @@ def test_profitable_pullback_into_buy_zone_still_exits():
     gs["filled"] = {4: {"price": 102.0, "amount": 0.1}}
     gs["trailing_sell_active"] = True
     gs["trailing_high"] = 105.0
+    gs["previous_price"] = 105.0
 
     # Tick price down to 103.5
     price_calls = [103.5]
