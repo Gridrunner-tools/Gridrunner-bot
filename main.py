@@ -1964,6 +1964,17 @@ def run_dca():
             log("Daily loss limit reached — pausing 1hr", "WARN"); time.sleep(3600)
         time.sleep(60)
 
+def _make_grids(price, spread, levels):
+    mid_idx = (levels + 1) // 2
+    s = price * spread * 2 / levels
+    grids = []
+    for i in range(levels + 1):
+        if i <= mid_idx:
+            grids.append(round(price * (1 - spread) + i * s, 4))
+        else:
+            grids.append(round(price * (1 - spread) + mid_idx * s + (i - mid_idx) * 2 * s, 4))
+    return grids
+
 def _init_grid_pair(pair):
     """Initialize grid state for a pair, return dict with all local vars."""
     price = get_price(pair)
@@ -1982,7 +1993,7 @@ def _init_grid_pair(pair):
                     vol = (var**0.5)/avg if avg>0 else 0
                     spread = min(spread * (1 + vol * 10), spread * 3)  # max 3x
         except Exception: pass
-    grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+    grids = _make_grids(price, spread, levels)
     mid_idx = len(grids) // 2
     return {
         "grids": grids, "mid_idx": mid_idx, "filled": {},
@@ -2128,13 +2139,13 @@ def run_grid():
                 else:
                     log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
                 if has_positions and price < grids[0]:
-                    new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                    new_grids = _make_grids(price, spread, levels)
                     for i in range(mid_idx + 2):
                         grids[i] = new_grids[i]
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+2])+" sell zone kept: "+str(grids[mid_idx+1:]))
                 else:
-                    grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                    grids = _make_grids(price, spread, levels)
                     mid_idx = len(grids) // 2
                     gs["grids"] = grids
                     gs["mid_idx"] = mid_idx
