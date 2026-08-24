@@ -37,6 +37,7 @@ run('test_limit_order_pnl')
 run('test_grid_base_buy')
 run('test_grid_zone_spec')
 run('test_asymmetric_grid_geometry')
+run('test_dashboard_grid_zones')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
 print("\nALL SUITES PASS")
