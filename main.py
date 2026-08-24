@@ -3801,20 +3801,28 @@ initChart();
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
 
-    def _check_auth(self):
-        sent = self.headers.get("X-API-Secret", "")
-        cookie = self.headers.get("Cookie", "")
-        cookie_secret = cookie.split("api_auth=", 1)[1].split(";", 1)[0] if "api_auth=" in cookie else ""
+    def _is_authenticated(self):
+        """Check credentials without writing a response — callers decide what to send on failure."""
         secret = os.environ.get("API_SECRET", "")
-        if not secret or not hmac.compare_digest(sent or cookie_secret, secret):
-            self.respond(401, "text/plain", b"Unauthorized")
+        if not secret:
             return False
-        return True
+        # Programmatic access (webhooks, scripts): X-API-Secret header
+        sent = self.headers.get("X-API-Secret", "")
+        if sent and hmac.compare_digest(sent, secret):
+            return True
+        # Browser access: HTTP Basic Auth (browser prompts natively, caches per-origin)
+        auth_header = self.headers.get("Authorization", "")
+        expected = "Basic " + base64.b64encode(("dashboard:" + secret).encode()).decode()
+        if auth_header and hmac.compare_digest(auth_header, expected):
+            return True
+        return False
 
     def _auth_or_401(self):
-        if not self._check_auth():
-            return False
-        return True
+        if self._is_authenticated():
+            return True
+        self.respond(401, "text/plain", b"Unauthorized",
+                      extra_headers=[("WWW-Authenticate", 'Basic realm="GridRunner"')])
+        return False
 
     def do_OPTIONS(self):
         self.respond(204, "text/plain", b"")
@@ -3824,7 +3832,8 @@ class Handler(BaseHTTPRequestHandler):
         params=parse_qs(parsed.query)
 
         if path=="/":
-            self.respond(200,"text/html",DASHBOARD.encode(), extra_headers=[("Set-Cookie", "api_auth=" + os.environ["API_SECRET"] + "; HttpOnly; Secure; SameSite=Strict; Path=/")])
+            if not self._auth_or_401(): return
+            self.respond(200,"text/html",DASHBOARD.encode())
         elif path=="/logo.jpeg":
             try:
                 with open("logo.jpeg","rb") as f: logo_data=f.read()
@@ -3855,7 +3864,7 @@ class Handler(BaseHTTPRequestHandler):
                 stats["win_rate"] = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0.0
             state["pair_stats"] = pair_stats
             state["positions_count"] = len(state.get("positions", []))
-            if not self._check_auth():
+            if not self._is_authenticated():
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
                 return
             self.respond(200,"application/json",json.dumps(state).encode())
