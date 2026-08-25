@@ -7,25 +7,6 @@ Strategies: DCA, Grid, Scalping, Copy Trading, Arbitrage
 """
 import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string, math
 
-PAPER_MODE_FILE = os.environ.get("PAPER_MODE_FILE", "/tmp/gridrunner-paper-mode.json")
-
-def load_paper_mode(default):
-    try:
-        with open(PAPER_MODE_FILE) as f:
-            value = json.load(f).get("paper_trading")
-            return bool(value) if isinstance(value, bool) else default
-    except (OSError, ValueError, TypeError):
-        return default
-
-def save_paper_mode(value):
-    tmp = PAPER_MODE_FILE + ".tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump({"paper_trading": bool(value)}, f)
-        os.replace(tmp, PAPER_MODE_FILE)
-    except OSError as exc:
-        log("Could not persist paper mode: " + str(exc), "WARN")
-
 TRADE_LOG = "trade_history.log"  # persistent trade log
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -240,11 +221,11 @@ cfg = {
     "max_pos":      float(os.environ.get("MAX_POSITION_USD", "500")),
     "max_loss":     float(os.environ.get("MAX_DAILY_LOSS_USD", "200")),
     "source_wallet":os.environ.get("SOURCE_WALLET", ""),
-    # Default to live if wallet is configured, paper otherwise
     "min_arb_spread":  float(os.environ.get("MIN_ARB_SPREAD", "1.5")),
-    # Explicit env mode wins over persisted state; otherwise default live only
-    # when a signing key is configured.
-    "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
+    # Explicit env mode wins. Otherwise defaults to LIVE trading — paper mode
+    # only turns on via PAPER_MODE/PAPER_TRADING env var or a manual dashboard
+    # toggle (which persists in paper_mode.json for future restarts).
+    "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else False),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
 }
@@ -4054,7 +4035,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(403,"application/json",json.dumps({"error":"Cannot enable live trading — invalid license"}).encode())
                 return
             state["paper_trading"] = not state["paper_trading"]
-            save_paper_mode(state["paper_trading"])
+            _save_paper_mode(state["paper_trading"])
             mode = "PAPER" if state["paper_trading"] else "LIVE"
             log("Switched to "+mode+" trading mode")
             self.respond(200,"application/json",json.dumps({"paper_trading":state["paper_trading"]}).encode())
