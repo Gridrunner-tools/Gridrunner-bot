@@ -1061,7 +1061,7 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
             return False, 0.0
         # Check USDC balance before attempting swap
         usdc_bal = state.get("sol_usdc", 0)
-        if from_token in ("USDC","USDT") and usdc_bal > 0 and amount_input > usdc_bal:
+        if from_token in ("USDC","USDT") and amount_input > usdc_bal:
             log(f"Insufficient USDC: need ${amount_input:.2f}, have ${usdc_bal:.2f}", "WARN")
             return False, 0.0
 
@@ -1339,7 +1339,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
             return False, 0.0
         # Check USDC balance before attempting swap
         usdc_bal = state.get("sol_usdc", 0)
-        if from_token in ("USDC","USDT") and usdc_bal > 0 and amount_input > usdc_bal:
+        if from_token in ("USDC","USDT") and amount_input > usdc_bal:
             log(f"Insufficient USDC: need ${amount_input:.2f}, have ${usdc_bal:.2f}", "WARN")
             return False, 0.0
 
@@ -2050,7 +2050,13 @@ def _execute_base_buy_if_needed(pair, gs, price):
     if not gs.get("seeded"):
         if price <= 0:
             return
-        bal = get_balance()
+        if state.get("mode") == "dex" and state.get("chain") == "solana":
+            if cfg.get("sol_wallet"):
+                try: sol_get_balance()
+                except Exception: pass
+            bal = state.get("sol_usdc", 0.0)
+        else:
+            bal = get_balance()
         effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
         min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
         levels = gs["levels"]
@@ -2075,7 +2081,7 @@ def _execute_base_buy_if_needed(pair, gs, price):
                 log(f"[{pair}] BASE BUY {base_amt} @ ${price} (grid start)")
                 send_telegram("🟢 <b>BUY</b> "+pair+"\nLevel: "+str(cell)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(base_amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                 _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
-        gs["seeded"] = True
+                gs["seeded"] = True
 
 def run_grid():
     pair = state.get("pair","SOL/USDC")
