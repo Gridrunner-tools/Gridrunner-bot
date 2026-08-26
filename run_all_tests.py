@@ -30,6 +30,7 @@ run('test_config_controls')
 run('test_strategy')
 run('test_buy_on_way_up')
 run('test_multi_grid_dashboard')
+run('test_ai_trading')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
 print("\nALL SUITES PASS")

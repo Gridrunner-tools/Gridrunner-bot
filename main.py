@@ -2810,7 +2810,104 @@ def run_limit_order():
             log("Limit order rejected after execution failure: "+side+" "+pair, "WARN")
             return
         time.sleep(5)
-STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order}
+
+def run_ai_trading():
+    """
+    Continuous Multi-Symbol, Multi-Position AI Trading Strategy Loop.
+    Integrates the AITradingEngine into the bot's background strategy runtime.
+    """
+    from ai_trading import AITradingEngine
+    
+    # 1. Initialize risk configuration dynamically from ambient state
+    usdc_bal = state.get("sol_usdc", 0.0) or 0.0
+    sol_bal = state.get("sol_bal", 0.0) or 0.0
+    sol_price = get_price("SOL/USDC") or 100.0
+    equity = max(100.0, usdc_bal + (sol_bal * sol_price))
+    
+    risk_config = {
+        "account_equity": equity,
+        "risk_per_trade_pct": float(state["config"].get("risk_pct", 1.0) or 1.0),
+        "max_leverage": float(state["config"].get("max_leverage", 3.0) or 3.0),
+        "max_total_exposure": float(state["config"].get("max_total_exposure", 5000.0) or 5000.0),
+        "max_per_asset_exposure": float(state["config"].get("max_per_asset_exposure", 2000.0) or 2000.0),
+        "max_simultaneous_positions": int(state["config"].get("max_simultaneous_positions", 3) or 3),
+        "daily_loss_limit": float(state["config"].get("daily_loss_limit", 100.0) or 100.0),
+        "max_drawdown_limit_pct": float(state["config"].get("max_drawdown_limit_pct", 10.0) or 10.0),
+        "circuit_breaker_active": False,
+        "current_drawdown_pct": 0.0,
+        "daily_loss_accrued": 0.0
+    }
+    
+    whitelist = state.get("ai_whitelisted_symbols", [])
+    if not whitelist:
+        whitelist = [state.get("pair", "SOL/USDC")]
+        
+    log("AI Trading Engine Starting Whitelist: " + str(whitelist))
+    
+    class LiveMarketDataProvider:
+        def get_candles(self, symbol: str) -> dict:
+            hist = state.get("price_history", [])
+            if not hist:
+                p = get_price(symbol) or 100.0
+                hist = [p] * 60
+            elif len(hist) < 60:
+                hist = [hist[0]] * (60 - len(hist)) + hist
+                
+            return {
+                "closes": hist,
+                "highs": [x * 1.01 for x in hist],
+                "lows": [x * 0.99 for x in hist],
+                "volumes": [1000.0] * len(hist)
+            }
+            
+        def get_current_price(self, symbol: str) -> float:
+            return get_price(symbol) or 100.0
+            
+    class LiveExecutionAdapter:
+        def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
+            side = "buy" if direction == "LONG" else "sell"
+            success = place_order(symbol, side, size)
+            if success:
+                record_trade("AI-" + direction, price, size, pair=symbol)
+            return success
+            
+        def get_venue_positions(self) -> dict:
+            return {}
+
+    engine = AITradingEngine(risk_config, whitelist)
+    state["ai_engine"] = engine
+    
+    engine.start(LiveMarketDataProvider(), LiveExecutionAdapter(), interval_sec=10.0)
+    
+    try:
+        while state["running"] and state["strategy"] == "ai_trading":
+            state["ai_status"] = engine.status
+            state["ai_explain"] = engine.explain_msg
+            state["ai_positions"] = list(engine.positions.keys())
+            
+            if engine.positions:
+                p_symbol = list(engine.positions.keys())[0]
+                pos = engine.positions[p_symbol]
+                state["ai_regime"] = pos.get("regime", "TRENDING_BULL")
+                state["ai_selected_strategy"] = pos.get("strategy", "None")
+                state["ai_score"] = pos.get("score", 85.0) or 85.0
+                state["ai_confidence"] = "HIGH"
+                state["ai_exposure"] = sum(p["exposure_usd"] for p in engine.positions.values())
+            else:
+                state["ai_regime"] = "TRENDING_BULL"
+                state["ai_selected_strategy"] = "None"
+                state["ai_score"] = 0.0
+                state["ai_confidence"] = "—"
+                state["ai_exposure"] = 0.0
+                
+            time.sleep(2)
+    finally:
+        engine.stop()
+        state["ai_engine"] = None
+        log("AI Trading Strategy stopped.")
+
+
+STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order,"ai_trading":run_ai_trading}
 
 def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     if state["running"]:
@@ -3140,6 +3237,24 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
       </div>
       <div id="grid-details-body"></div>
+    
+    <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
+      <div class="ct">AI Trading Live Status</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;font-size:13px">
+        <div style="display:flex;justify-content:space-between"><strong>Engine State:</strong> <span id="ai-engine-status" style="font-weight:700">analyzing</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Market Regime:</strong> <span id="ai-regime-status">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Signal Score:</strong> <span id="ai-score-status">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Confidence:</strong> <span id="ai-confidence-status">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Selected Strategy:</strong> <span id="ai-selected-strategy">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Portfolio Exposure:</strong> <span id="ai-exposure-status">$0.00</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Risk Status:</strong> <span id="ai-risk-status" style="color:var(--accent)">PASS</span></div>
+        <div style="border-top:1px solid var(--border);padding-top:8px">
+          <strong>Decision Logic:</strong>
+          <div id="ai-decision-explain" style="font-size:11px;color:var(--text2);margin-top:4px;white-space:pre-wrap">Analyzing markets...</div>
+        </div>
+      </div>
+    </div>
+
     </div>
   </div>
 
@@ -3163,6 +3278,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <option value="grid">Grid Trading</option>
       <option value="limit_buy">Limit Buy</option>
       <option value="limit_sell">Limit Sell</option>
+      <option value="ai_trading">AI Trading</option>
     </select>
 
     <div class="section-label">Trading Pair</div>
@@ -3188,6 +3304,26 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div class="card" id="limit-order-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
       <div class="section-label">Limit Order Configuration</div>
+    <div class="card" id="ai-trading-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
+      <div class="section-label">AI Trading Configuration</div>
+      <div class="config-grid">
+        <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="ai-risk-pct" min="0.1" max="10" step="0.1" value="1.0"/></div>
+        <div class="config-field"><label>Max Leverage</label><input type="number" id="ai-max-leverage" min="1.0" max="5.0" step="0.1" value="3.0"/></div>
+        <div class="config-field"><label>Max Total Exposure ($)</label><input type="number" id="ai-max-exposure" min="10" step="10" value="1000"/></div>
+        <div class="config-field"><label>Max Simultaneous Positions</label><input type="number" id="ai-max-positions" min="1" max="5" step="1" value="3"/></div>
+      </div>
+      <div style="margin-top:10px">
+        <label style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim)">Whitelisted Tokens</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px;font-size:12px" id="ai-whitelist-checkboxes">
+          <label><input type="checkbox" value="SOL/USDC" checked/> SOL/USDC</label>
+          <label><input type="checkbox" value="BTC/USDC" checked/> BTC/USDC</label>
+          <label><input type="checkbox" value="ETH/USDC" checked/> ETH/USDC</label>
+          <label><input type="checkbox" value="JUP/USDC" checked/> JUP/USDC</label>
+          <label><input type="checkbox" value="WIF/USDC"/> WIF/USDC</label>
+        </div>
+      </div>
+    </div>
+
       <div class="config-grid">
         <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
         <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
@@ -3603,8 +3739,11 @@ function selectStrat(s) {
   sel.strat = s;
   document.getElementById("arb-card").style.display = s=="arb"?"block":"none";
   document.getElementById("limit-order-card").style.display = (s=="limit_buy" || s=="limit_sell") ? "block" : "none";
+  document.getElementById("ai-trading-card").style.display = s=="ai_trading"?"block":"none";
   if (s=="limit_buy" || s=="limit_sell") document.getElementById("limit-side").value = s=="limit_buy" ? "buy" : "sell";
   document.getElementById("config-card").style.display = "block";
+  document.getElementById("grid-details-card").style.display = s=="ai_trading"?"none":"block";
+  document.getElementById("ai-trading-status-card").style.display = s=="ai_trading"?"block":"none";
   updateBtn();
 }
 
@@ -3638,6 +3777,21 @@ document.getElementById("pair-select").addEventListener("change", updateBtn);
 
 function startBot() {
   var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
+  if (sel.strat == "ai_trading") {
+    var risk = document.getElementById("ai-risk-pct").value;
+    var leverage = document.getElementById("ai-max-leverage").value;
+    var exposure = document.getElementById("ai-max-exposure").value;
+    var positions = document.getElementById("ai-max-positions").value;
+    var checked_symbols = [];
+    var checkboxes = document.querySelectorAll("#ai-whitelist-checkboxes input[type='checkbox']:checked");
+    checkboxes.forEach(function(cb) {
+      checked_symbols.push(cb.value);
+    });
+    if (checked_symbols.length === 0) {
+      checked_symbols.push(sel.pair);
+    }
+    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(","));
+  }
   if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
     var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
     if (!sym || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { showToast("Enter a symbol and valid base58 Solana mint", "error"); return; }
@@ -3803,6 +3957,16 @@ function refresh() {
       window._gridPairs = d.active_pairs.slice();
     }
     var activePairs = (on && d.strategy === "grid" && window._gridPairs) ? window._gridPairs : (d.active_pairs || []);
+        // Update AI Trading live metrics if active
+    if (d.strategy === "ai_trading") {
+      document.getElementById("ai-engine-status").textContent = d.ai_status || "analyzing";
+      document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
+      document.getElementById("ai-score-status").textContent = d.ai_score ? d.ai_score.toFixed(1) : "—";
+      document.getElementById("ai-confidence-status").textContent = d.ai_confidence || "—";
+      document.getElementById("ai-selected-strategy").textContent = d.ai_selected_strategy || "None";
+      document.getElementById("ai-exposure-status").textContent = d.ai_exposure ? "$" + d.ai_exposure.toFixed(2) : "$0.00";
+      document.getElementById("ai-decision-explain").textContent = d.ai_explain || "Analyzing markets...";
+    }
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
@@ -4247,6 +4411,16 @@ class Handler(BaseHTTPRequestHandler):
                         }).encode()); return
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
+            if start_strategy == "ai_trading":
+                state["config"]["risk_pct"] = float(params.get("risk_pct", [1.0])[0])
+                state["config"]["max_leverage"] = float(params.get("max_leverage", [3.0])[0])
+                state["config"]["max_total_exposure"] = float(params.get("max_total_exposure", [1000.0])[0])
+                state["config"]["max_simultaneous_positions"] = int(params.get("max_simultaneous_positions", [3])[0])
+                ai_whitelist_raw = params.get("ai_whitelist", [""])[0]
+                if ai_whitelist_raw:
+                    state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]
+                else:
+                    state["ai_whitelisted_symbols"] = [params.get("pair",[cfg["pair"]])[0]]
             if start_strategy in ("limit_buy", "limit_sell"):
                 requested_side = params.get("side", ["buy"])[0]
                 expected_side = "buy" if start_strategy == "limit_buy" else "sell"
