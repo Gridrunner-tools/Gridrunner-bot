@@ -7,25 +7,6 @@ Strategies: DCA, Grid, Scalping, Copy Trading, Arbitrage
 """
 import os, json, time, hmac, hashlib, threading, requests, logging, base64, random, string, math
 
-PAPER_MODE_FILE = os.environ.get("PAPER_MODE_FILE", "/tmp/gridrunner-paper-mode.json")
-
-def load_paper_mode(default):
-    try:
-        with open(PAPER_MODE_FILE) as f:
-            value = json.load(f).get("paper_trading")
-            return bool(value) if isinstance(value, bool) else default
-    except (OSError, ValueError, TypeError):
-        return default
-
-def save_paper_mode(value):
-    tmp = PAPER_MODE_FILE + ".tmp"
-    try:
-        with open(tmp, "w") as f:
-            json.dump({"paper_trading": bool(value)}, f)
-        os.replace(tmp, PAPER_MODE_FILE)
-    except OSError as exc:
-        log("Could not persist paper mode: " + str(exc), "WARN")
-
 TRADE_LOG = "trade_history.log"  # persistent trade log
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import parse_qs, urlparse
@@ -240,11 +221,11 @@ cfg = {
     "max_pos":      float(os.environ.get("MAX_POSITION_USD", "500")),
     "max_loss":     float(os.environ.get("MAX_DAILY_LOSS_USD", "200")),
     "source_wallet":os.environ.get("SOURCE_WALLET", ""),
-    # Default to live if wallet is configured, paper otherwise
     "min_arb_spread":  float(os.environ.get("MIN_ARB_SPREAD", "1.5")),
-    # Explicit env mode wins over persisted state; otherwise default live only
-    # when a signing key is configured.
-    "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else not (os.environ.get("SOL_PRIVATE_KEY") or os.environ.get("ETH_PRIVATE_KEY"))),
+    # Explicit env mode wins over persisted state; otherwise default to PAPER
+    # trading — live trading only turns on via PAPER_MODE/PAPER_TRADING env
+    # var or a manual dashboard toggle (which persists in paper_mode.json).
+    "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else True),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
     "grid_level_count":  max(2, min(int(os.environ.get("GRID_LEVELS", "5")), 100)),
@@ -895,7 +876,10 @@ SOL_RPC = "https://api.mainnet-beta.solana.com"
 JUPITER_API     = "https://api.jup.ag/swap/v1"
 JUPITER_API_KEY = os.environ.get("JUPITER_API_KEY", "")
 
-# Solana token mints
+from token_registry import get_registry_entry, is_approved, authorize_trade, add_pending_token, register_verified_token
+
+# Solana token mints — presence here is NOT authorization to trade; every
+# swap is gated through token_registry.authorize_trade() before execution.
 SOL_TOKENS = {
     "USDC":  "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
     "USDT":  "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB",
@@ -927,6 +911,181 @@ SOL_RPCS = [SOLANA_RPC] if SOLANA_RPC else [
     "https://rpc.ankr.com/solana",
     "https://solana-rpc.publicnode.com",
 ]
+
+def verify_token_authenticity(mint, claimed_symbol=""):
+    """
+    Live authenticity check for a newly-supplied mint. Combines an on-chain
+    lookup (does the mint exist, are mint/freeze authority revoked, real
+    decimals) with DexScreener market data (liquidity, pool age, on-chain
+    name/symbol) so a new token can be evaluated automatically instead of
+    trusting a symbol label alone.
+
+    Returns a dict consumed by token_registry.evaluate_verification():
+        exists, decimals, mint_authority, freeze_authority, supply_raw,
+        liquidity_usd, pool_age_hours, dex_symbol, dex_name
+    Any field that couldn't be determined is left as None so the registry's
+    evaluation logic treats it as a hard-fail rather than guessing.
+    """
+    result = {
+        "exists": False, "decimals": None, "mint_authority": None,
+        "freeze_authority": None, "supply_raw": None, "liquidity_usd": None,
+        "pool_age_hours": None, "dex_symbol": None, "dex_name": None,
+    }
+
+    # ── On-chain mint account lookup ──
+    payload = {
+        "jsonrpc": "2.0", "id": 1,
+        "method": "getAccountInfo",
+        "params": [mint, {"encoding": "jsonParsed"}],
+    }
+    for rpc in SOL_RPCS:
+        try:
+            r = requests.post(rpc, json=payload, timeout=8)
+            data = r.json().get("result", {}).get("value")
+            if not data:
+                continue
+            parsed = data.get("data", {}).get("parsed", {})
+            info = parsed.get("info", {})
+            if parsed.get("type") != "mint" or not info:
+                continue
+            result["exists"] = True
+            result["decimals"] = info.get("decimals")
+            result["mint_authority"] = info.get("mintAuthority")
+            result["freeze_authority"] = info.get("freezeAuthority")
+            result["supply_raw"] = info.get("supply")
+            break
+        except Exception as e:
+            log("verify_token_authenticity RPC error: " + str(e), "WARN")
+            continue
+
+    if not result["exists"]:
+        log("Token verification: mint " + mint[:12] + "... not found on-chain", "WARN")
+        return result
+
+    # ── DexScreener liquidity, pool age, and name/symbol cross-check ──
+    try:
+        r = requests.get("https://api.dexscreener.com/latest/dex/tokens/" + mint, timeout=8)
+        pairs = r.json().get("pairs", []) or []
+        best = None
+        for p in pairs:
+            if p.get("quoteToken", {}).get("symbol", "") not in ("USDC", "USDT", "SOL"):
+                continue
+            liq = float(p.get("liquidity", {}).get("usd", 0) or 0)
+            if best is None or liq > float(best.get("liquidity", {}).get("usd", 0) or 0):
+                best = p
+        if best:
+            result["liquidity_usd"] = float(best.get("liquidity", {}).get("usd", 0) or 0)
+            result["dex_symbol"] = best.get("baseToken", {}).get("symbol")
+            result["dex_name"] = best.get("baseToken", {}).get("name")
+            created_ms = best.get("pairCreatedAt")
+            if created_ms:
+                result["pool_age_hours"] = max(0.0, (time.time() * 1000 - created_ms) / 3_600_000)
+    except Exception as e:
+        log("verify_token_authenticity DexScreener error: " + str(e), "WARN")
+
+    return result
+
+def get_holder_concentration(mint, decimals, supply_raw):
+    """
+    Top-holder concentration via getTokenLargestAccounts (returns up to the
+    20 largest token ACCOUNTS, not necessarily 20 unique wallets — a wallet
+    can hold multiple accounts for the same mint, though that's uncommon in
+    practice). Used as a heuristic, not an authoritative wallet-level count.
+    """
+    out = {"top1_holder_pct": None, "top10_holder_pct": None, "accounts_sampled": 0}
+    if not decimals or not supply_raw:
+        return out
+    payload = {"jsonrpc": "2.0", "id": 1, "method": "getTokenLargestAccounts", "params": [mint]}
+    for rpc in SOL_RPCS:
+        try:
+            r = requests.post(rpc, json=payload, timeout=8)
+            accounts = r.json().get("result", {}).get("value", []) or []
+            if not accounts:
+                continue
+            amounts = [float(a.get("uiAmount") or 0) for a in accounts]
+            supply_ui = float(supply_raw) / (10 ** decimals)
+            if supply_ui <= 0:
+                continue
+            out["top1_holder_pct"] = round(min((amounts[0] / supply_ui) * 100, 100.0), 2) if amounts else None
+            out["top10_holder_pct"] = round(min((sum(amounts[:10]) / supply_ui) * 100, 100.0), 2)
+            out["accounts_sampled"] = len(amounts)
+            break
+        except Exception as e:
+            log("get_holder_concentration RPC error: " + str(e), "WARN")
+            continue
+    return out
+
+def get_rugcheck_report(mint):
+    """
+    Best-effort pull from RugCheck.xyz's public report API — covers LP
+    lock/burn status and an aggregate risk score, which is a specialized
+    analysis this codebase doesn't reimplement itself. If the service is
+    unreachable or its response shape has changed, this fails soft: the
+    rest of the scan proceeds without it rather than blocking on it.
+    """
+    try:
+        r = requests.get("https://api.rugcheck.xyz/v1/tokens/" + mint + "/report", timeout=10)
+        if r.status_code != 200:
+            return {"available": False, "reason": "HTTP " + str(r.status_code)}
+        data = r.json()
+        risks = data.get("risks", [])
+        risk_names = [x.get("name") for x in risks if isinstance(x, dict) and x.get("name")] if isinstance(risks, list) else []
+        return {
+            "available": True,
+            "score": data.get("score"),
+            "risks": risk_names,
+            "lp_locked_pct": data.get("markets", [{}])[0].get("lp", {}).get("lpLockedPct") if data.get("markets") else None,
+        }
+    except Exception as e:
+        log("get_rugcheck_report error: " + str(e), "WARN")
+        return {"available": False, "reason": str(e)[:100]}
+
+def scan_token_full(mint, symbol=""):
+    """
+    Combined safety-scanner report for a single mint. Read-only — never
+    writes to the token registry, unlike register_verified_token(). This
+    is the diagnostic panel; /add_token remains the only path that actually
+    makes a token tradeable.
+    """
+    verification = verify_token_authenticity(mint, symbol)
+    holders = {"top1_holder_pct": None, "top10_holder_pct": None, "accounts_sampled": 0}
+    rugcheck = {"available": False, "reason": "skipped — mint not found on-chain"}
+    status, reg_warnings = "REJECTED", ["Mint does not exist on-chain"]
+
+    if verification["exists"]:
+        holders = get_holder_concentration(mint, verification.get("decimals"), verification.get("supply_raw"))
+        rugcheck = get_rugcheck_report(mint)
+        from token_registry import evaluate_verification
+        status, reg_warnings = evaluate_verification(verification, symbol or (verification.get("dex_symbol") or ""))
+
+    extra_flags = []
+    if holders.get("top1_holder_pct") is not None and holders["top1_holder_pct"] >= 40:
+        extra_flags.append(f"Top holder controls {holders['top1_holder_pct']}% of supply — high dump risk")
+    elif holders.get("top1_holder_pct") is not None and holders["top1_holder_pct"] >= 20:
+        extra_flags.append(f"Top holder controls {holders['top1_holder_pct']}% of supply — worth watching")
+    if rugcheck.get("available") and rugcheck.get("lp_locked_pct") is not None and rugcheck["lp_locked_pct"] < 50:
+        extra_flags.append(f"RugCheck reports only {rugcheck['lp_locked_pct']}% of LP locked/burned")
+    if rugcheck.get("available") and rugcheck.get("risks"):
+        extra_flags.append("RugCheck flags: " + ", ".join(rugcheck["risks"][:5]))
+
+    all_flags = list(reg_warnings) + extra_flags
+    if status == "REJECTED":
+        rating = "CRITICAL"
+    elif status == "APPROVED" and not all_flags:
+        rating = "LOW RISK"
+    elif status == "APPROVED":
+        rating = "LOW-MEDIUM RISK"
+    elif any("dump risk" in f or "unlimited" in f for f in all_flags):
+        rating = "HIGH RISK"
+    else:
+        rating = "MEDIUM RISK"
+
+    return {
+        "mint": mint, "symbol": symbol.upper() if symbol else None,
+        "rating": rating, "registry_status": status,
+        "verification": verification, "holders": holders, "rugcheck": rugcheck,
+        "flags": all_flags, "scanned_at": int(time.time()),
+    }
 
 def sol_get_balance():
     """Get SOL + USDC + USDT balance. Tries multiple RPC endpoints for reliability."""
@@ -1728,6 +1887,11 @@ def place_order(pair, side, amount, grid_idx=None):
         stablecoin = pair.split("/")[1]
 
         if chain == "solana":
+            if token not in ("USDC", "USDT"):  # quote currencies aren't gated as trade targets
+                ok, reason = authorize_trade(token)
+                if not ok:
+                    log(f"ORDER BLOCKED by token registry: {reason}", "WARN")
+                    return False
             # Use Jupiter/Raydium for Solana trades
             if side in ("buy","buy_market"):
                 # amount is token quantity, jupiter_swap needs USDC cost
@@ -2315,6 +2479,7 @@ def run_grid():
                                         state["grid_trailing_high"] = 0.0
                                         state["grid_filled"] = {k: v for k, v in filled.items()}
                                         break
+
             # ── Gap-fill, Buy-On-The-Way-Up, and Drop-Through Recovery Fill ──
             last_price = gs.get("last_price")
             drop_through_active = gs.get("drop_through_active", False)
@@ -2766,7 +2931,125 @@ def run_limit_order():
             log("Limit order rejected after execution failure: "+side+" "+pair, "WARN")
             return
         time.sleep(5)
-STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order}
+
+def run_ai_trading():
+    """
+    Continuous Multi-Symbol, Multi-Position AI Trading Strategy Loop.
+    Integrates the AITradingEngine into the bot's background strategy runtime.
+    """
+    from ai_trading import AITradingEngine
+    
+    # 1. Initialize risk configuration dynamically from ambient state
+    usdc_bal = state.get("sol_usdc", 0.0) or 0.0
+    sol_bal = state.get("sol_bal", 0.0) or 0.0
+    sol_price = get_price("SOL/USDC") or 100.0
+    comp_prof = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
+    equity = max(100.0, usdc_bal + (sol_bal * sol_price) + comp_prof)
+    
+    risk_config = {
+        "account_equity": equity,
+        "risk_per_trade_pct": float(state["config"].get("risk_pct", 1.0) or 1.0),
+        "max_leverage": float(state["config"].get("max_leverage", 3.0) or 3.0),
+        "max_total_exposure": float(state["config"].get("max_total_exposure", 5000.0) or 5000.0),
+        "max_per_asset_exposure": float(state["config"].get("max_per_asset_exposure", 2000.0) or 2000.0),
+        "max_simultaneous_positions": int(state["config"].get("max_simultaneous_positions", 3) or 3),
+        "daily_loss_limit": float(state["config"].get("daily_loss_limit", 100.0) or 100.0),
+        "max_drawdown_limit_pct": float(state["config"].get("max_drawdown_limit_pct", 10.0) or 10.0),
+        "circuit_breaker_active": False,
+        "current_drawdown_pct": 0.0,
+        "daily_loss_accrued": 0.0,
+        "auto_compound": state["config"].get("auto_compound", True)
+    }
+    
+    whitelist = state.get("ai_whitelisted_symbols", [])
+    if not whitelist:
+        whitelist = [state.get("pair", "SOL/USDC")]
+        
+    log("AI Trading Engine Starting Whitelist: " + str(whitelist))
+    
+    class LiveMarketDataProvider:
+        def get_candles(self, symbol: str) -> dict:
+            hist = state.get("price_history", [])
+            if not hist:
+                p = get_price(symbol) or 100.0
+                hist = [p] * 60
+            elif len(hist) < 60:
+                hist = [hist[0]] * (60 - len(hist)) + hist
+                
+            return {
+                "closes": hist,
+                "highs": [x * 1.01 for x in hist],
+                "lows": [x * 0.99 for x in hist],
+                "volumes": [1000.0] * len(hist)
+            }
+            
+        def get_current_price(self, symbol: str) -> float:
+            return get_price(symbol) or 100.0
+            
+    class LiveExecutionAdapter:
+        def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
+            side = "buy" if direction == "LONG" else "sell"
+            success = place_order(symbol, side, size)
+            if success:
+                record_trade("AI-" + direction, price, size, pair=symbol)
+            return success
+            
+        def get_venue_positions(self) -> dict:
+            return {}
+
+        def record_trade_closed(self, symbol: str, pnl: float):
+            if state.get("config", {}).get("auto_compound", True) and pnl > 0:
+                state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
+                log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
+
+    engine = AITradingEngine(risk_config, whitelist)
+    state["ai_engine"] = engine
+    
+    engine.start(LiveMarketDataProvider(), LiveExecutionAdapter(), interval_sec=10.0)
+    
+    try:
+        while state["running"] and state["strategy"] == "ai_trading":
+            if engine:
+                cur_usdc = state.get("sol_usdc", 0.0) or 0.0
+                cur_sol = state.get("sol_bal", 0.0) or 0.0
+                cur_price = get_price("SOL/USDC") or 100.0
+                comp_added = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
+                cur_equity = max(100.0, cur_usdc + (cur_sol * cur_price) + comp_added)
+                
+                engine.risk_engine.config["account_equity"] = cur_equity
+                engine.risk_engine.config["risk_per_trade_pct"] = float(state["config"].get("risk_pct", 1.0) or 1.0)
+                engine.risk_engine.config["max_leverage"] = float(state["config"].get("max_leverage", 3.0) or 3.0)
+                engine.risk_engine.config["max_total_exposure"] = float(state["config"].get("max_total_exposure", 5000.0) or 5000.0)
+                engine.risk_engine.config["max_simultaneous_positions"] = int(state["config"].get("max_simultaneous_positions", 3) or 3)
+                engine.risk_engine.config["auto_compound"] = state.get("config", {}).get("auto_compound", True)
+
+            state["ai_status"] = engine.status
+            state["ai_explain"] = engine.explain_msg
+            state["ai_positions"] = list(engine.positions.keys())
+            
+            if engine.positions:
+                p_symbol = list(engine.positions.keys())[0]
+                pos = engine.positions[p_symbol]
+                state["ai_regime"] = pos.get("regime", "TRENDING_BULL")
+                state["ai_selected_strategy"] = pos.get("strategy", "None")
+                state["ai_score"] = pos.get("score", 85.0) or 85.0
+                state["ai_confidence"] = "HIGH"
+                state["ai_exposure"] = sum(p["exposure_usd"] for p in engine.positions.values())
+            else:
+                state["ai_regime"] = "TRENDING_BULL"
+                state["ai_selected_strategy"] = "None"
+                state["ai_score"] = 0.0
+                state["ai_confidence"] = "—"
+                state["ai_exposure"] = 0.0
+                
+            time.sleep(2)
+    finally:
+        engine.stop()
+        state["ai_engine"] = None
+        log("AI Trading Strategy stopped.")
+
+
+STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order,"ai_trading":run_ai_trading}
 
 def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     if state["running"]:
@@ -2810,6 +3093,172 @@ try:
     limit_orders_addon = LimitOrdersAddon()
 except Exception:
     limit_orders_addon = None
+
+SCANNER_HTML = '''<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Token Safety Scanner</title>
+<style>
+:root{--bg:#080808;--card:#111;--border:#1a1a1a;--text:#eee;--text2:#888;--dim:#444;--accent:#00ff9d;--red:#ff6b6b;--yellow:#ffd43b;--blue:#4dabf7}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;background:var(--bg);color:var(--text);padding:16px}
+h1{font-size:18px;font-weight:900;margin-bottom:4px}
+.sub{font-size:12px;color:var(--dim);margin-bottom:16px}
+.input-row{display:flex;gap:8px;margin-bottom:8px}
+input{flex:1;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--card);color:var(--text);font-family:monospace}
+input:focus{outline:none;border-color:var(--accent)}
+.scan-btn{background:var(--accent);color:#000;border:none;padding:10px 20px;border-radius:8px;font-weight:800;font-size:13px;cursor:pointer;white-space:nowrap}
+.scan-btn:disabled{background:var(--card);color:var(--dim);cursor:not-allowed}
+.symbol-input{margin-bottom:14px}
+.symbol-input input{width:100%}
+#status{font-size:12px;color:var(--dim);margin-bottom:14px;min-height:16px}
+.rating-banner{padding:14px;border-radius:10px;text-align:center;font-weight:900;font-size:16px;margin-bottom:16px;letter-spacing:1px}
+.r-low{background:var(--accent)18;color:var(--accent);border:1.5px solid var(--accent)}
+.r-lowmed{background:var(--blue)18;color:var(--blue);border:1.5px solid var(--blue)}
+.r-med{background:var(--yellow)18;color:var(--yellow);border:1.5px solid var(--yellow)}
+.r-high,.r-crit{background:var(--red)18;color:var(--red);border:1.5px solid var(--red)}
+.section{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px;margin-bottom:12px}
+.section-title{font-size:10px;font-weight:700;letter-spacing:1.5px;color:var(--dim);text-transform:uppercase;margin-bottom:10px}
+.row{display:flex;justify-content:space-between;padding:5px 0;border-bottom:1px solid var(--border);font-size:12px}
+.row:last-child{border-bottom:none}
+.row .label{color:var(--text2)}
+.row .val{font-family:monospace;font-weight:600}
+.ok{color:var(--accent)}.warn{color:var(--yellow)}.bad{color:var(--red)}.unknown{color:var(--dim)}
+.flags{list-style:none}
+.flags li{padding:8px 10px;background:var(--yellow)0d;border-left:3px solid var(--yellow);border-radius:4px;font-size:12px;margin-bottom:6px;color:var(--text)}
+.flags li.crit{background:var(--red)0d;border-left-color:var(--red)}
+.flags.empty{color:var(--dim);font-size:12px;padding:8px 0}
+.mint-display{font-family:monospace;font-size:10px;color:var(--dim);word-break:break-all;margin-top:2px}
+</style>
+</head>
+<body>
+<h1>&#128269; Token Safety Scanner</h1>
+<div class="sub">Read-only diagnostic — scanning a token here does NOT add it to GridRunner or make it tradeable.</div>
+
+<div class="input-row">
+  <input type="text" id="mint-input" placeholder="Paste Solana mint address (base58)..." autocomplete="off"/>
+</div>
+<div class="input-row symbol-input">
+  <input type="text" id="symbol-input" placeholder="Expected symbol (optional, e.g. BONK) — helps catch impersonators" autocomplete="off"/>
+</div>
+<div class="input-row">
+  <button class="scan-btn" id="scan-btn" onclick="runScan()" style="flex:1">Scan Token</button>
+</div>
+<div id="status"></div>
+<div id="results"></div>
+
+<script>
+function apiFetch(url) {
+  return fetch(url, { credentials: "same-origin" });
+}
+function ratingClass(r) {
+  if (r === "LOW RISK") return "r-low";
+  if (r === "LOW-MEDIUM RISK") return "r-lowmed";
+  if (r === "MEDIUM RISK") return "r-med";
+  if (r === "HIGH RISK") return "r-high";
+  return "r-crit";
+}
+function fmtBool(v, goodWhenFalse) {
+  if (v === null || v === undefined) return '<span class="unknown">unknown</span>';
+  var isBad = goodWhenFalse ? !!v : !v;
+  return '<span class="' + (isBad ? "bad" : "ok") + '">' + (v ? "yes" : "no") + '</span>';
+}
+function fmtPct(v, warnAt, badAt) {
+  if (v === null || v === undefined) return '<span class="unknown">unknown</span>';
+  var cls = "ok";
+  if (badAt !== undefined && v >= badAt) cls = "bad";
+  else if (warnAt !== undefined && v >= warnAt) cls = "warn";
+  return '<span class="' + cls + '">' + v + '%</span>';
+}
+function esc(s) {
+  var d = document.createElement("div"); d.textContent = s == null ? "" : s; return d.innerHTML;
+}
+
+function runScan() {
+  var mint = document.getElementById("mint-input").value.trim();
+  var symbol = document.getElementById("symbol-input").value.trim();
+  var statusEl = document.getElementById("status");
+  var resultsEl = document.getElementById("results");
+  var btn = document.getElementById("scan-btn");
+  if (!mint) { statusEl.innerHTML = '<span class="bad">Enter a mint address first</span>'; return; }
+  btn.disabled = true; btn.textContent = "Scanning...";
+  statusEl.textContent = "Querying on-chain data, DexScreener, and RugCheck — this can take a few seconds...";
+  resultsEl.innerHTML = "";
+
+  var url = "/scan_token?mint=" + encodeURIComponent(mint) + (symbol ? "&symbol=" + encodeURIComponent(symbol) : "");
+  apiFetch(url).then(function(r) { return r.json(); }).then(function(d) {
+    btn.disabled = false; btn.textContent = "Scan Token";
+    if (d.error) { statusEl.innerHTML = '<span class="bad">' + esc(d.error) + '</span>'; return; }
+    statusEl.textContent = "Scanned " + new Date(d.scanned_at * 1000).toLocaleTimeString();
+    render(d);
+  }).catch(function(e) {
+    btn.disabled = false; btn.textContent = "Scan Token";
+    statusEl.innerHTML = '<span class="bad">Scan failed: ' + esc(String(e)) + '</span>';
+  });
+}
+
+function render(d) {
+  var v = d.verification || {};
+  var h = d.holders || {};
+  var rc = d.rugcheck || {};
+  var html = "";
+
+  html += '<div class="rating-banner ' + ratingClass(d.rating) + '">' + esc(d.rating) + ' &mdash; Registry: ' + esc(d.registry_status) + '</div>';
+
+  html += '<div class="section"><div class="section-title">On-Chain Mint</div>';
+  html += '<div class="mint-display">' + esc(d.mint) + '</div><br/>';
+  html += '<div class="row"><span class="label">Exists on-chain</span><span class="val">' + fmtBool(v.exists, false) + '</span></div>';
+  html += '<div class="row"><span class="label">Decimals</span><span class="val">' + (v.decimals ?? '<span class="unknown">unknown</span>') + '</span></div>';
+  html += '<div class="row"><span class="label">Mint authority revoked</span><span class="val">' + fmtBool(!v.mint_authority, false) + '</span></div>';
+  html += '<div class="row"><span class="label">Freeze authority active</span><span class="val">' + fmtBool(!!v.freeze_authority, true) + '</span></div>';
+  html += '</div>';
+
+  html += '<div class="section"><div class="section-title">Market Data</div>';
+  html += '<div class="row"><span class="label">Liquidity (USD)</span><span class="val">' + (v.liquidity_usd != null ? "$" + Math.round(v.liquidity_usd).toLocaleString() : '<span class="unknown">unknown</span>') + '</span></div>';
+  html += '<div class="row"><span class="label">Pool age</span><span class="val">' + (v.pool_age_hours != null ? v.pool_age_hours.toFixed(1) + "h" : '<span class="unknown">unknown</span>') + '</span></div>';
+  html += '<div class="row"><span class="label">Market symbol / name</span><span class="val">' + esc(v.dex_symbol || "?") + ' / ' + esc(v.dex_name || "?") + '</span></div>';
+  html += '</div>';
+
+  html += '<div class="section"><div class="section-title">Holder Concentration</div>';
+  html += '<div class="row"><span class="label">Top holder</span><span class="val">' + fmtPct(h.top1_holder_pct, 20, 40) + '</span></div>';
+  html += '<div class="row"><span class="label">Top 10 holders</span><span class="val">' + fmtPct(h.top10_holder_pct, 50, 75) + '</span></div>';
+  html += '<div class="row"><span class="label">Accounts sampled</span><span class="val">' + (h.accounts_sampled || 0) + '</span></div>';
+  html += '</div>';
+
+  html += '<div class="section"><div class="section-title">RugCheck.xyz</div>';
+  if (rc.available) {
+    html += '<div class="row"><span class="label">Risk score</span><span class="val">' + (rc.score ?? '<span class="unknown">n/a</span>') + '</span></div>';
+    html += '<div class="row"><span class="label">LP locked/burned</span><span class="val">' + fmtPct(rc.lp_locked_pct, undefined, undefined) + '</span></div>';
+  } else {
+    html += '<div class="row"><span class="label">Status</span><span class="val unknown">unavailable (' + esc(rc.reason || "unknown") + ')</span></div>';
+  }
+  html += '</div>';
+
+  html += '<div class="section"><div class="section-title">Flags (' + (d.flags ? d.flags.length : 0) + ')</div>';
+  if (d.flags && d.flags.length) {
+    html += '<ul class="flags">';
+    d.flags.forEach(function(f) {
+      var isCrit = /unlimited|does not exist/.test(f);
+      html += '<li' + (isCrit ? ' class="crit"' : '') + '>' + esc(f) + '</li>';
+    });
+    html += '</ul>';
+  } else {
+    html += '<div class="flags empty">No flags raised.</div>';
+  }
+  html += '</div>';
+
+  document.getElementById("results").innerHTML = html;
+}
+
+document.getElementById("mint-input").addEventListener("keydown", function(e) {
+  if (e.key === "Enter") runScan();
+});
+</script>
+</body>
+</html>'''
+
 DASHBOARD = '''<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -2908,6 +3357,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <button class="btn" onclick="exportCSV()" style="font-size:11px">&#11015; CSV</button>
       <button class="btn" onclick="killSwitch()" title="Emergency close all positions" style="font-size:11px;color:var(--red);border-color:var(--red)44">&#128721; Kill</button>
       <button class="btn" onclick="runBacktest()" style="font-size:11px">📊 Backtest</button>
+      <button class="btn" onclick="openScanner()" title="Scan a token's mint for safety before trading it" style="font-size:11px;color:var(--accent);border-color:var(--accent)44">&#128269; Scanner</button>
     </div>
   </div>
 
@@ -2931,6 +3381,24 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
       </div>
       <div id="grid-details-body"></div>
+    
+    <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
+      <div class="ct">AI Trading Live Status</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;font-size:13px">
+        <div style="display:flex;justify-content:space-between"><strong>Engine State:</strong> <span id="ai-engine-status" style="font-weight:700">analyzing</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Market Regime:</strong> <span id="ai-regime-status">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Signal Score:</strong> <span id="ai-score-status">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Confidence:</strong> <span id="ai-confidence-status">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Selected Strategy:</strong> <span id="ai-selected-strategy">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Portfolio Exposure:</strong> <span id="ai-exposure-status">$0.00</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>Risk Status:</strong> <span id="ai-risk-status" style="color:var(--accent)">PASS</span></div>
+        <div style="border-top:1px solid var(--border);padding-top:8px">
+          <strong>Decision Logic:</strong>
+          <div id="ai-decision-explain" style="font-size:11px;color:var(--text2);margin-top:4px;white-space:pre-wrap">Analyzing markets...</div>
+        </div>
+      </div>
+    </div>
+
     </div>
   </div>
 
@@ -2954,6 +3422,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <option value="grid">Grid Trading</option>
       <option value="limit_buy">Limit Buy</option>
       <option value="limit_sell">Limit Sell</option>
+      <option value="ai_trading">AI Trading</option>
     </select>
 
     <div class="section-label">Trading Pair</div>
@@ -2979,6 +3448,26 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div class="card" id="limit-order-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
       <div class="section-label">Limit Order Configuration</div>
+    <div class="card" id="ai-trading-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
+      <div class="section-label">AI Trading Configuration</div>
+      <div class="config-grid">
+        <div class="config-field"><label>Risk Per Trade (%)</label><input type="number" id="ai-risk-pct" min="0.1" max="10" step="0.1" value="1.0"/></div>
+        <div class="config-field"><label>Max Leverage</label><input type="number" id="ai-max-leverage" min="1.0" max="5.0" step="0.1" value="3.0"/></div>
+        <div class="config-field"><label>Max Total Exposure ($)</label><input type="number" id="ai-max-exposure" min="10" step="10" value="1000"/></div>
+        <div class="config-field"><label>Max Simultaneous Positions</label><input type="number" id="ai-max-positions" min="1" max="5" step="1" value="3"/></div>
+      </div>
+      <div style="margin-top:10px">
+        <label style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim)">Whitelisted Tokens</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:4px;font-size:12px" id="ai-whitelist-checkboxes">
+          <label><input type="checkbox" value="SOL/USDC" checked/> SOL/USDC</label>
+          <label><input type="checkbox" value="BTC/USDC" checked/> BTC/USDC</label>
+          <label><input type="checkbox" value="ETH/USDC" checked/> ETH/USDC</label>
+          <label><input type="checkbox" value="JUP/USDC" checked/> JUP/USDC</label>
+          <label><input type="checkbox" value="WIF/USDC"/> WIF/USDC</label>
+        </div>
+      </div>
+    </div>
+
       <div class="config-grid">
         <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
         <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
@@ -3434,8 +3923,11 @@ function selectStrat(s) {
   sel.strat = s;
   document.getElementById("arb-card").style.display = s=="arb"?"block":"none";
   document.getElementById("limit-order-card").style.display = (s=="limit_buy" || s=="limit_sell") ? "block" : "none";
+  document.getElementById("ai-trading-card").style.display = s=="ai_trading"?"block":"none";
   if (s=="limit_buy" || s=="limit_sell") document.getElementById("limit-side").value = s=="limit_buy" ? "buy" : "sell";
   document.getElementById("config-card").style.display = "block";
+  document.getElementById("grid-details-card").style.display = s=="ai_trading"?"none":"block";
+  document.getElementById("ai-trading-status-card").style.display = s=="ai_trading"?"block":"none";
   updateBtn();
 }
 
@@ -3469,6 +3961,21 @@ document.getElementById("pair-select").addEventListener("change", updateBtn);
 
 function startBot() {
   var params = "strategy=" + sel.strat + "&pair=" + encodeURIComponent(sel.pair) + "&mode=dex&chain=solana";
+  if (sel.strat == "ai_trading") {
+    var risk = document.getElementById("ai-risk-pct").value;
+    var leverage = document.getElementById("ai-max-leverage").value;
+    var exposure = document.getElementById("ai-max-exposure").value;
+    var positions = document.getElementById("ai-max-positions").value;
+    var checked_symbols = [];
+    var checkboxes = document.querySelectorAll("#ai-whitelist-checkboxes input[type='checkbox']:checked");
+    checkboxes.forEach(function(cb) {
+      checked_symbols.push(cb.value);
+    });
+    if (checked_symbols.length === 0) {
+      checked_symbols.push(sel.pair);
+    }
+    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(","));
+  }
   if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
     var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
     if (!sym || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(mint)) { showToast("Enter a symbol and valid base58 Solana mint", "error"); return; }
@@ -3535,6 +4042,10 @@ function killSwitch() {
   apiFetch("/kill",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({confirm:true})}).then(function(r){return r.json()}).then(function(d){
     showToast("KILL: "+d.closed+" positions closed, $"+d.total_value.toFixed(2),"error");
   }).catch(function(){showToast("Kill failed","error")});
+}
+
+function openScanner() {
+  window.open("/scanner", "TokenScanner", "width=480,height=760,resizable=yes,scrollbars=yes");
 }
 
 function runBacktest() {
@@ -3706,6 +4217,16 @@ function refresh() {
       window._gridPairs = d.active_pairs.slice();
     }
     var activePairs = (on && d.strategy === "grid" && window._gridPairs) ? window._gridPairs : (d.active_pairs || []);
+        // Update AI Trading live metrics if active
+    if (d.strategy === "ai_trading") {
+      document.getElementById("ai-engine-status").textContent = d.ai_status || "analyzing";
+      document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
+      document.getElementById("ai-score-status").textContent = d.ai_score ? d.ai_score.toFixed(1) : "—";
+      document.getElementById("ai-confidence-status").textContent = d.ai_confidence || "—";
+      document.getElementById("ai-selected-strategy").textContent = d.ai_selected_strategy || "None";
+      document.getElementById("ai-exposure-status").textContent = d.ai_exposure ? "$" + d.ai_exposure.toFixed(2) : "$0.00";
+      document.getElementById("ai-decision-explain").textContent = d.ai_explain || "Analyzing markets...";
+    }
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
@@ -4075,20 +4596,28 @@ initChart();
 # ── HTTP Server ───────────────────────────────────────────────────────────────
 class Handler(BaseHTTPRequestHandler):
 
-    def _check_auth(self):
-        sent = self.headers.get("X-API-Secret", "")
-        cookie = self.headers.get("Cookie", "")
-        cookie_secret = cookie.split("api_auth=", 1)[1].split(";", 1)[0] if "api_auth=" in cookie else ""
+    def _is_authenticated(self):
+        """Check credentials without writing a response — callers decide what to send on failure."""
         secret = os.environ.get("API_SECRET", "")
-        if not secret or not hmac.compare_digest(sent or cookie_secret, secret):
-            self.respond(401, "text/plain", b"Unauthorized")
+        if not secret:
             return False
-        return True
+        # Programmatic access (webhooks, scripts): X-API-Secret header
+        sent = self.headers.get("X-API-Secret", "")
+        if sent and hmac.compare_digest(sent, secret):
+            return True
+        # Browser access: HTTP Basic Auth (browser prompts natively, caches per-origin)
+        auth_header = self.headers.get("Authorization", "")
+        expected = "Basic " + base64.b64encode(("dashboard:" + secret).encode()).decode()
+        if auth_header and hmac.compare_digest(auth_header, expected):
+            return True
+        return False
 
     def _auth_or_401(self):
-        if not self._check_auth():
-            return False
-        return True
+        if self._is_authenticated():
+            return True
+        self.respond(401, "text/plain", b"Unauthorized",
+                      extra_headers=[("WWW-Authenticate", 'Basic realm="GridRunner"')])
+        return False
 
     def do_OPTIONS(self):
         self.respond(204, "text/plain", b"")
@@ -4098,7 +4627,8 @@ class Handler(BaseHTTPRequestHandler):
         params=parse_qs(parsed.query)
 
         if path=="/":
-            self.respond(200,"text/html",DASHBOARD.encode(), extra_headers=[("Set-Cookie", "api_auth=" + os.environ["API_SECRET"] + "; HttpOnly; Secure; SameSite=Strict; Path=/")])
+            if not self._auth_or_401(): return
+            self.respond(200,"text/html",DASHBOARD.encode())
         elif path=="/logo.jpeg":
             try:
                 with open("logo.jpeg","rb") as f: logo_data=f.read()
@@ -4129,7 +4659,7 @@ class Handler(BaseHTTPRequestHandler):
                 stats["win_rate"] = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0.0
             state["pair_stats"] = pair_stats
             state["positions_count"] = len(state.get("positions", []))
-            if not self._check_auth():
+            if not self._is_authenticated():
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
                 return
             self.respond(200,"application/json",json.dumps(state).encode())
@@ -4152,16 +4682,50 @@ class Handler(BaseHTTPRequestHandler):
                 "days_remaining": state.get("license_days_left"),
             }
             self.respond(200, "application/json", json.dumps(info).encode())
+        elif path=="/scanner":
+            if not self._auth_or_401(): return
+            self.respond(200, "text/html", SCANNER_HTML.encode())
+        elif path=="/scan_token":
+            if not self._auth_or_401(): return
+            mint = params.get("mint", [""])[0].strip()
+            symbol = params.get("symbol", [""])[0].strip()
+            if not validate_solana_mint(mint):
+                self.respond(400, "application/json", json.dumps({"error": "Invalid Solana mint address"}).encode())
+                return
+            log("Scan requested for " + mint[:12] + "...", "INFO")
+            report = scan_token_full(mint, symbol)
+            self.respond(200, "application/json", json.dumps(report).encode())
         elif path=="/start":
             if not self._auth_or_401(): return
             if params.get("custom_mint", [""])[0]:
                 custom_mint = params["custom_mint"][0]; custom_symbol = params.get("custom_symbol", [""])[0].upper()
                 if not validate_solana_mint(custom_mint) or not custom_symbol or not custom_symbol.isalnum():
                     self.respond(400,"application/json",json.dumps({"error":"Invalid custom token mint or symbol"}).encode()); return
-                if custom_symbol in SOL_TOKENS and SOL_TOKENS[custom_symbol] != custom_mint:
-                    self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped"}).encode()); return
+                existing = get_registry_entry(custom_symbol)
+                if existing and existing.get("mint") not in (None, custom_mint):
+                    self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped to a different mint"}).encode()); return
+                if not existing or existing.get("status") not in ("APPROVED",):
+                    log("Verifying new token " + custom_symbol + " (" + custom_mint[:12] + "...) before starting strategy", "INFO")
+                    verification = verify_token_authenticity(custom_mint, custom_symbol)
+                    status, warnings, message = register_verified_token(custom_symbol, custom_mint, verification)
+                    if status != "APPROVED":
+                        self.respond(403,"application/json",json.dumps({
+                            "error": "Token not approved for trading",
+                            "status": status, "warnings": warnings, "message": message,
+                        }).encode()); return
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
+            if start_strategy == "ai_trading":
+                state["config"]["risk_pct"] = float(params.get("risk_pct", [1.0])[0])
+                state["config"]["max_leverage"] = float(params.get("max_leverage", [3.0])[0])
+                state["config"]["max_total_exposure"] = float(params.get("max_total_exposure", [1000.0])[0])
+                state["config"]["max_simultaneous_positions"] = int(params.get("max_simultaneous_positions", [3])[0])
+                state["config"]["auto_compound"] = params.get("auto_compound", ["true"])[0].lower() != "false"
+                ai_whitelist_raw = params.get("ai_whitelist", [""])[0]
+                if ai_whitelist_raw:
+                    state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]
+                else:
+                    state["ai_whitelisted_symbols"] = [params.get("pair",[cfg["pair"]])[0]]
             if start_strategy in ("limit_buy", "limit_sell"):
                 requested_side = params.get("side", ["buy"])[0]
                 expected_side = "buy" if start_strategy == "limit_buy" else "sell"
@@ -4327,7 +4891,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(403,"application/json",json.dumps({"error":"Cannot enable live trading — invalid license"}).encode())
                 return
             state["paper_trading"] = not state["paper_trading"]
-            save_paper_mode(state["paper_trading"])
+            _save_paper_mode(state["paper_trading"])
             mode = "PAPER" if state["paper_trading"] else "LIVE"
             log("Switched to "+mode+" trading mode")
             self.respond(200,"application/json",json.dumps({"paper_trading":state["paper_trading"]}).encode())
@@ -4347,12 +4911,22 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(400,"application/json",json.dumps({"error":"Symbol and mint required"}).encode()); return
             if not validate_solana_mint(mint):
                 self.respond(400,"application/json",json.dumps({"error":"Invalid Solana mint: expected base58 32-byte public key"}).encode()); return
-            if symbol in SOL_TOKENS and SOL_TOKENS[symbol] != mint:
-                self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped; use a unique symbol"}).encode()); return
-            SOL_TOKENS[symbol] = mint
-            TOKEN_DECIMALS[symbol] = 6  # default 6 decimals
-            log("Added custom token: "+symbol+" ("+mint+")")
-            self.respond(200,"application/json",json.dumps({"ok":True,"symbol":symbol,"pair":pair}).encode())
+            existing = get_registry_entry(symbol)
+            if existing and existing.get("mint") not in (None, mint):
+                self.respond(409,"application/json",json.dumps({"error":"Symbol already mapped to a different mint"}).encode()); return
+            log("Verifying new token " + symbol + " (" + mint[:12] + "...) — running authenticity check", "INFO")
+            verification = verify_token_authenticity(mint, symbol)
+            status, warnings, message = register_verified_token(symbol, mint, verification)
+            if status is None:
+                self.respond(409,"application/json",json.dumps({"error":message}).encode()); return
+            if status != "REJECTED":
+                SOL_TOKENS[symbol] = mint
+                TOKEN_DECIMALS[symbol] = verification.get("decimals") or 6
+            log("Token verification result for " + symbol + ": " + status + (" — " + "; ".join(warnings) if warnings else ""), "WARN" if status != "APPROVED" else "INFO")
+            self.respond(200,"application/json",json.dumps({
+                "ok": status != "REJECTED", "symbol": symbol, "pair": pair,
+                "status": status, "warnings": warnings, "message": message,
+            }).encode())
             return
         elif path=="/pause":
             if not self._auth_or_401(): return
