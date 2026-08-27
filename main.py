@@ -2836,7 +2836,8 @@ def run_ai_trading():
         "max_drawdown_limit_pct": float(state["config"].get("max_drawdown_limit_pct", 10.0) or 10.0),
         "circuit_breaker_active": False,
         "current_drawdown_pct": 0.0,
-        "daily_loss_accrued": 0.0
+        "daily_loss_accrued": 0.0,
+        "auto_compound": state["config"].get("auto_compound", True)
     }
     
     whitelist = state.get("ai_whitelisted_symbols", [])
@@ -2899,6 +2900,7 @@ def run_ai_trading():
                 engine.risk_engine.config["max_leverage"] = float(state["config"].get("max_leverage", 3.0) or 3.0)
                 engine.risk_engine.config["max_total_exposure"] = float(state["config"].get("max_total_exposure", 5000.0) or 5000.0)
                 engine.risk_engine.config["max_simultaneous_positions"] = int(state["config"].get("max_simultaneous_positions", 3) or 3)
+                engine.risk_engine.config["auto_compound"] = state.get("config", {}).get("auto_compound", True)
 
             state["ai_status"] = engine.status
             state["ai_explain"] = engine.explain_msg
@@ -4435,6 +4437,7 @@ class Handler(BaseHTTPRequestHandler):
                 state["config"]["max_leverage"] = float(params.get("max_leverage", [3.0])[0])
                 state["config"]["max_total_exposure"] = float(params.get("max_total_exposure", [1000.0])[0])
                 state["config"]["max_simultaneous_positions"] = int(params.get("max_simultaneous_positions", [3])[0])
+                state["config"]["auto_compound"] = params.get("auto_compound", ["true"])[0].lower() != "false"
                 ai_whitelist_raw = params.get("ai_whitelist", [""])[0]
                 if ai_whitelist_raw:
                     state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]

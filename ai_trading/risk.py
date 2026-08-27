@@ -28,6 +28,9 @@ class RiskEngine:
         
         # Track simulated daily loss reset time (e.g., 24h rolling or midnight)
         self.last_loss_reset = time.time()
+        self.realized_pnl = 0.0
+        from ai_trading.journal import TradeJournal
+        self.journal = TradeJournal()
 
     def check_circuit_breakers(self, market_data: Dict[str, Any] = None) -> Tuple[bool, str]:
         """Verify circuit breaker thresholds and conditions."""
@@ -133,6 +136,10 @@ class RiskEngine:
         # Sizing formula: Position Loss = Account Equity * Risk %
         # Position Size = Position Loss / Stop Distance
         account_equity = self.config.get("account_equity", 1000.0)
+        auto_compound = self.config.get("auto_compound", True)
+        if auto_compound:
+            account_equity += self.realized_pnl
+            
         risk_pct = self.config.get("risk_per_trade_pct", 1.0)
         
         risk_dollar = account_equity * (risk_pct / 100.0)
@@ -187,6 +194,13 @@ class RiskEngine:
         """Log trade closure and accrue performance tracking metrics."""
         if symbol in self.active_positions:
             del self.active_positions[symbol]
+        self.realized_pnl += profit_loss_usd
+        if self.journal:
+            self.journal.record_trade({
+                "symbol": symbol,
+                "pnl_usd": profit_loss_usd,
+                "timestamp": time.time()
+            })
         if profit_loss_usd < 0:
             self.daily_loss_accrued += abs(profit_loss_usd)
 

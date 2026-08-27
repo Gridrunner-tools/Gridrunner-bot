@@ -203,6 +203,62 @@ class TestAITradingRiskEngine(unittest.TestCase):
         self.assertEqual(sized.position_size, 1.0)
         self.assertEqual(sized.direction, "LONG")
 
+    def test_auto_compounding_toggle_risk_engine(self):
+        # 1. auto_compound = True (ON)
+        self.config["auto_compound"] = True
+        self.risk_engine.realized_pnl = 500.0  # mock realized PnL
+        sig = Signal(
+            symbol="SOL/USDC",
+            venue="Solana",
+            direction="LONG",
+            signal_score=85.0,
+            confidence="HIGH",
+            regime="TRENDING_BULL",
+            strategy="Trend Following",
+            entry=100.0,
+            stop=90.0, # $10 stop distance
+            take_profit=120.0,
+            trailing_stop=1.5,
+            risk_pct=1.0,
+            position_size=0.0,
+            recommended_leverage=1.0,
+            reward_risk=2.0,
+            reasons=[],
+            warnings=[],
+            timestamp=time.time()
+        )
+        # Account equity is 1000.0. Since auto_compound is True and realized_pnl is 500.0:
+        # Effective equity is 1500.0. Sizing: 1% risk of 1500 = $15 loss / $10 stop distance = 1.5 SOL
+        sized = self.risk_engine.evaluate_and_size_signal(sig)
+        self.assertEqual(sized.position_size, 1.5)
+
+        # 2. auto_compound = False (OFF)
+        self.config["auto_compound"] = False
+        sig2 = Signal(
+            symbol="SOL/USDC",
+            venue="Solana",
+            direction="LONG",
+            signal_score=85.0,
+            confidence="HIGH",
+            regime="TRENDING_BULL",
+            strategy="Trend Following",
+            entry=100.0,
+            stop=90.0, # $10 stop distance
+            take_profit=120.0,
+            trailing_stop=1.5,
+            risk_pct=1.0,
+            position_size=0.0,
+            recommended_leverage=1.0,
+            reward_risk=2.0,
+            reasons=[],
+            warnings=[],
+            timestamp=time.time()
+        )
+        # Account equity is 1000.0. Since auto_compound is False, realized_pnl of 500.0 is ignored.
+        # Effective equity is 1000.0. Sizing: 1% risk of 1000 = $10 loss / $10 stop distance = 1.0 SOL
+        sized2 = self.risk_engine.evaluate_and_size_signal(sig2)
+        self.assertEqual(sized2.position_size, 1.0)
+
     def test_circuit_breaker_active(self):
         self.risk_engine.daily_loss_accrued = 150.0 # above $100 limit
         sig = Signal(
