@@ -320,6 +320,60 @@ class TestAITradingContinuousLoop(unittest.TestCase):
         # Verify scanner analyzing state, preparing order, or entering position successfully
         self.assertIn(engine.status, ("analyzing", "preparing order", "in position", "blocked"))
 
+    def test_auto_compounding_flow(self):
+        closes = [100.0, 101.0, 102.0, 100.0, 99.0, 101.0, 102.0] * 10
+        prov = self.MockMarketDataProvider(closes)
+        
+        class MockCompoundingAdapter:
+            def __init__(self):
+                self.executed = False
+                self.compounded_pnl = 0.0
+            def execute_swap(self, symbol, direction, size, price):
+                self.executed = True
+                return True
+            def get_venue_positions(self):
+                return {}
+            def record_trade_closed(self, symbol, pnl):
+                self.compounded_pnl += pnl
+
+        adapter = MockCompoundingAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0
+        }
+        
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        
+        # Manually enter a position
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC",
+            "direction": "LONG",
+            "entry": 100.0,
+            "stop": 95.0,
+            "take_profit": 110.0,
+            "size": 2.0,
+            "leverage": 1.0,
+            "strategy": "Trend Following",
+            "regime": "TRENDING_BULL",
+            "timestamp": time.time()
+        }
+        
+        # Mock price to hit take profit (110.0)
+        prov.closes[-1] = 115.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        
+        self.assertTrue(adapter.executed)
+        self.assertEqual(adapter.compounded_pnl, 20.0) # size 2 * (110.0 - 100.0) = 20.0
+
 def test_ai_trading_all():
     import unittest
     suite = unittest.TestSuite()

@@ -2822,7 +2822,8 @@ def run_ai_trading():
     usdc_bal = state.get("sol_usdc", 0.0) or 0.0
     sol_bal = state.get("sol_bal", 0.0) or 0.0
     sol_price = get_price("SOL/USDC") or 100.0
-    equity = max(100.0, usdc_bal + (sol_bal * sol_price))
+    comp_prof = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
+    equity = max(100.0, usdc_bal + (sol_bal * sol_price) + comp_prof)
     
     risk_config = {
         "account_equity": equity,
@@ -2874,6 +2875,11 @@ def run_ai_trading():
         def get_venue_positions(self) -> dict:
             return {}
 
+        def record_trade_closed(self, symbol: str, pnl: float):
+            if state.get("config", {}).get("auto_compound", True) and pnl > 0:
+                state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
+                log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
+
     engine = AITradingEngine(risk_config, whitelist)
     state["ai_engine"] = engine
     
@@ -2881,6 +2887,19 @@ def run_ai_trading():
     
     try:
         while state["running"] and state["strategy"] == "ai_trading":
+            if engine:
+                cur_usdc = state.get("sol_usdc", 0.0) or 0.0
+                cur_sol = state.get("sol_bal", 0.0) or 0.0
+                cur_price = get_price("SOL/USDC") or 100.0
+                comp_added = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
+                cur_equity = max(100.0, cur_usdc + (cur_sol * cur_price) + comp_added)
+                
+                engine.risk_engine.config["account_equity"] = cur_equity
+                engine.risk_engine.config["risk_per_trade_pct"] = float(state["config"].get("risk_pct", 1.0) or 1.0)
+                engine.risk_engine.config["max_leverage"] = float(state["config"].get("max_leverage", 3.0) or 3.0)
+                engine.risk_engine.config["max_total_exposure"] = float(state["config"].get("max_total_exposure", 5000.0) or 5000.0)
+                engine.risk_engine.config["max_simultaneous_positions"] = int(state["config"].get("max_simultaneous_positions", 3) or 3)
+
             state["ai_status"] = engine.status
             state["ai_explain"] = engine.explain_msg
             state["ai_positions"] = list(engine.positions.keys())

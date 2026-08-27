@@ -168,6 +168,8 @@ class AITradingEngine:
             
             if success:
                 self.risk_engine.record_trade_closed(symbol, pnl)
+                if hasattr(execution_adapter, "record_trade_closed"):
+                    execution_adapter.record_trade_closed(symbol, pnl)
                 del self.positions[symbol]
                 self.log_event(f"Successfully exited position on {symbol} with P&L: ${pnl:.2f} ({exit_reason})")
             else:
