@@ -39,6 +39,7 @@ run('test_grid_zone_spec')
 run('test_asymmetric_grid_geometry')
 run('test_dashboard_grid_zones')
 run('test_base_buy_safety_fixes')
+run('test_grid_stuck_running_fixes')
 run('test_ai_trading')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)

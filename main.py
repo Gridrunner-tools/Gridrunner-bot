@@ -2218,13 +2218,16 @@ def _execute_base_buy_if_needed(pair, gs, price):
             if cfg.get("sol_wallet"):
                 try: sol_get_balance()
                 except Exception: pass
-            bal = state.get("sol_usdc", 0.0)
+            bal = state.get("sol_usdc", 0.0) or 0.0
         else:
-            bal = get_balance()
-        effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
-        min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))
-        levels = gs["levels"]
-        size = max(min_order, min(effective_bal * cfg["risk_pct"] / 100, cfg["max_pos"]) / levels)
+            bal = get_balance() or 0.0
+        comp_prof = state.get("compound_profit", 0.0) or 0.0
+        effective_bal = bal + (comp_prof if cfg.get("auto_compound", True) else 0.0)
+        min_order = max(5.0, float(cfg.get("min_order_usdc", 5) or 5.0))
+        levels = int(gs.get("levels", 5) or 5)
+        risk_pct = float(cfg.get("risk_pct", 2.0) or 2.0)
+        max_pos = float(cfg.get("max_pos", 500.0) or 500.0)
+        size = max(min_order, min(effective_bal * risk_pct / 100, max_pos) / levels)
 
         if size > 1:
             grids = gs["grids"]
@@ -3051,6 +3054,21 @@ def run_ai_trading():
 
 STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order,"ai_trading":run_ai_trading}
 
+def _safe_strategy_runner(target_func):
+    def wrapper(*args, **kwargs):
+        try:
+            target_func(*args, **kwargs)
+        except Exception as e:
+            import traceback
+            err_msg = f"Fatal error in strategy thread: {e}"
+            log(err_msg, "ERROR")
+            log(traceback.format_exc(), "DEBUG")
+            state["running"] = False
+            state["strategy"] = None
+            state["active_pairs"] = []
+            state["error"] = err_msg
+    return wrapper
+
 def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     if state["running"]:
         # Multi-pair: if grid is already running, add new pair without restarting.
@@ -3074,9 +3092,12 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     else: state["chain"]="solana"
     state["running"]=True
     state["error"]=None
-    t=threading.Thread(target=STRATEGIES.get(strategy,run_dca),daemon=True)
+    target_fn = STRATEGIES.get(strategy, run_dca)
+    safe_fn = _safe_strategy_runner(target_fn)
+    t=threading.Thread(target=safe_fn, daemon=True)
     t.start()
-    log("Started "+strategy.upper()+" on "+pair+" via "+mode.upper()+((" / "+chain) if mode=="dex" else ""))
+    chain_str = f" / {chain.upper()}" if (mode == "dex" and chain) else ""
+    log(f"Started {strategy.upper()} on {pair} via {mode.upper()}{chain_str}")
 
 def stop_bot():
     state["running"]=False
