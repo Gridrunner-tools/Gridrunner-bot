@@ -3469,6 +3469,18 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div class="card" id="limit-order-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
       <div class="section-label">Limit Order Configuration</div>
+      <div class="config-grid">
+        <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
+        <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
+        <div class="config-field"><label>Order Type</label><select id="limit-type"><option value="limit">Limit</option><option value="market">Market</option></select></div>
+        <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
+        <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
+      </div>
+      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
+      <div id="limit-order-status" style="font-size:12px;margin-top:8px;line-height:1.6"></div>
+      <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
+    </div>
+
     <div class="card" id="ai-trading-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
       <div class="section-label">AI Trading Configuration</div>
       <div class="config-grid">
@@ -3487,18 +3499,6 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
           <label><input type="checkbox" value="WIF/USDC"/> WIF/USDC</label>
         </div>
       </div>
-    </div>
-
-      <div class="config-grid">
-        <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
-        <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
-        <div class="config-field"><label>Order Type</label><select id="limit-type"><option value="limit">Limit</option><option value="market">Market</option></select></div>
-        <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
-        <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
-      </div>
-      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
-      <div id="limit-order-status" style="font-size:12px;margin-top:8px;line-height:1.6"></div>
-      <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1">
