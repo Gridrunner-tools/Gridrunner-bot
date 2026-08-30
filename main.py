@@ -4282,7 +4282,11 @@ function selectStrat(s) {
   if (s=="limit_buy" || s=="limit_sell") document.getElementById("limit-side").value = s=="limit_buy" ? "buy" : "sell";
   document.getElementById("config-card").style.display = "block";
   document.getElementById("grid-details-card").style.display = s=="ai_trading"?"none":"block";
-  document.getElementById("ai-trading-status-card").style.display = s=="ai_trading"?"block":"none";
+  // The AI live-status card follows whether an AI strategy is actually running
+  // (refresh() owns show/hide). Only show it here when AI Trading is selected
+  // so the panel is visible during configuration; do NOT hide it on other
+  // selections: starting a grid must not make a running AI status card vanish.
+  if (s=="ai_trading") document.getElementById("ai-trading-status-card").style.display = "block";
   updateBtn();
 }
 
@@ -4648,8 +4652,17 @@ function refresh() {
       window._gridPairs = d.active_pairs.slice();
     }
     var activePairs = (on && d.strategy === "grid" && window._gridPairs) ? window._gridPairs : (d.active_pairs || []);
-        // Update AI Trading live metrics if active
-    if (d.strategy === "ai_trading") {
+    // Update AI Trading live metrics whenever an AI Trading strategy is actually
+    // running — not only when it is the most-recently-started strategy.
+    // d.strategy is "most recently started", so starting a grid would otherwise
+    // freeze the metrics and let the AI status card disappear while AI still runs.
+    var aiRunning = !!(d.strategies && Object.keys(d.strategies).some(function(k) {
+      var st = d.strategies[k];
+      return st && st.type === "ai_trading" && st.running;
+    }));
+    var aiStatusCard = document.getElementById("ai-trading-status-card");
+    if (aiStatusCard) aiStatusCard.style.display = (aiRunning || sel.strat === "ai_trading") ? "block" : "none";
+    if (aiRunning) {
       document.getElementById("ai-engine-status").textContent = d.ai_status || "analyzing";
       document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
       document.getElementById("ai-score-status").textContent = d.ai_score ? d.ai_score.toFixed(1) : "—";
