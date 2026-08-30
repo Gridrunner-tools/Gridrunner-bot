@@ -235,8 +235,83 @@ cfg = {
 import threading
 _state_lock = threading.Lock()
 
+def get_reserved_capital(strategy_type, strategy_config, current_balance):
+    if strategy_type == "grid":
+        risk_pct = float(strategy_config.get("risk_pct", 2.0))
+        max_pos = float(strategy_config.get("max_pos", 500.0))
+        return min(current_balance * risk_pct / 100, max_pos) if current_balance > 0 else max_pos
+    elif strategy_type in ("limit_buy", "limit_sell"):
+        return float(strategy_config.get("limit_amount_usdc", 0.0))
+    elif strategy_type == "ai_trading":
+        return float(strategy_config.get("max_total_exposure", 5000.0) or 5000.0)
+    else:
+        risk_pct = float(strategy_config.get("risk_pct", 2.0))
+        max_pos = float(strategy_config.get("max_pos", 500.0))
+        return min(current_balance * risk_pct / 100, max_pos) if current_balance > 0 else max_pos
+
+def get_available_balance():
+    if state.get("paper_trading", False):
+        return 10000.0
+    return get_balance() or 0.0
+
+def is_strategy_running(sid, expected_type=None):
+    if sid:
+        return state.get("strategies", {}).get(sid, {}).get("running", False)
+    else:
+        if expected_type:
+            return state.get("running", False) and state.get("strategy") == expected_type
+        return state.get("running", False)
+
+class ThreadSafeState(dict):
+    def __getitem__(self, key):
+        thread_name = threading.current_thread().name
+        strategies = dict.get(self, "strategies")
+        if strategies and thread_name in strategies:
+            strat = strategies[thread_name]
+            if key == "running":
+                return strat.get("running", False)
+            elif key == "strategy":
+                return strat.get("type")
+            elif key == "pair":
+                return strat.get("pair")
+            elif key == "paper_trading":
+                return strat.get("config", {}).get("paper_trading", True)
+            elif key == "limit_side":
+                return strat.get("config", {}).get("limit_side")
+            elif key == "limit_amount_usdc":
+                return strat.get("config", {}).get("limit_amount_usdc")
+            elif key == "limit_price":
+                return strat.get("config", {}).get("limit_price")
+            elif key == "limit_order_type":
+                return strat.get("config", {}).get("limit_order_type")
+            elif key == "effective_mode":
+                return strat.get("config", {}).get("effective_mode")
+        return dict.__getitem__(self, key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __setitem__(self, key, value):
+        thread_name = threading.current_thread().name
+        strategies = dict.get(self, "strategies")
+        if strategies and thread_name in strategies:
+            strat = strategies[thread_name]
+            if key == "running":
+                strat["running"] = value
+                if not value:
+                    if strat.get("status") not in ("FILLED", "REJECTED"):
+                        strat["status"] = "STOPPED"
+            elif key == "strategy":
+                strat["type"] = value
+            elif key == "error":
+                strat["error"] = value
+        dict.__setitem__(self, key, value)
+
 # ── Bot State ─────────────────────────────────────────────────────────────────
-state = {
+state = ThreadSafeState({
     "running":       False,
     "strategy":      None,
     "mode":          None,
@@ -295,7 +370,8 @@ state = {
     "dip_24h_high":   0.0,
     "last_midnight":  0,
     "emergency_stop":  False,
-}
+    "strategies":      {},
+})
 
 def send_telegram(msg):
     # Telegram requires the bot token in its endpoint, but POST avoids token-bearing
@@ -1936,12 +2012,20 @@ def log_trade_to_file(entry):
 def record_trade(side, price, amount, pnl=None, pair=None):
     _pair = pair if pair else state.get("pair","")
     trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl,"pair":_pair}
+    thread_name = threading.current_thread().name
+    if "strategies" in state and thread_name in state["strategies"]:
+        strat = state["strategies"][thread_name]
+        trade["strategy"] = strat["type"]
+        trade["sid"] = thread_name
+    else:
+        trade["strategy"] = state.get("strategy", "") or ""
+        trade["sid"] = ""
     with _state_lock:
         state["trades"].append(trade)
         if len(state["trades"]) > 500:
             state["trades"] = state["trades"][-500:]
         state["last_trade"] = {"action": side, "pair": _pair, "price": price, "time": time.time()}
-        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
+        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair",""), "strategy": t.get("strategy", "")} for t in state["trades"][-50:]]
         # Rebuild pair stats from completed (PnL-bearing) trades.  Buy entries
         # intentionally do not count as trades until their matching sell has a
         # realized PnL; this keeps BTC/ETH metrics consistent with trade history.
@@ -1959,7 +2043,7 @@ def record_trade(side, price, amount, pnl=None, pair=None):
             stats["win_rate"] = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0.0
         state["pair_stats"] = pair_stats
     # Persist to file
-    log_trade_to_file({"event":"TRADE","time":trade["time"],"side":side,"pair":trade["pair"],"price":price,"amount":amount,"pnl":pnl})
+    log_trade_to_file({"event":"TRADE","time":trade["time"],"side":side,"pair":trade["pair"],"price":price,"amount":amount,"pnl":pnl, "strategy": trade.get("strategy", "")})
 
 
 # ── Technical Indicators (stdlib only) ────────────────────────────────────
@@ -3056,48 +3140,97 @@ STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"a
 
 def _safe_strategy_runner(target_func):
     def wrapper(*args, **kwargs):
+        sid = kwargs.get("sid") or (args[0] if args else None)
         try:
-            target_func(*args, **kwargs)
+            try:
+                target_func(*args, **kwargs)
+            except TypeError as te:
+                if "takes" in str(te) or "argument" in str(te):
+                    target_func()
+                else:
+                    raise te
         except Exception as e:
             import traceback
             err_msg = f"Fatal error in strategy thread: {e}"
             log(err_msg, "ERROR")
             log(traceback.format_exc(), "DEBUG")
-            state["running"] = False
-            state["strategy"] = None
-            state["active_pairs"] = []
+            if sid and "strategies" in state and sid in state["strategies"]:
+                state["strategies"][sid]["running"] = False
+                state["strategies"][sid]["status"] = "REJECTED"
+                state["strategies"][sid]["error"] = err_msg
+            else:
+                state["running"] = False
+                state["strategy"] = None
+                state["active_pairs"] = []
             state["error"] = err_msg
     return wrapper
 
+def stop_strategy(sid):
+    if "strategies" in state and sid in state["strategies"]:
+        strat = state["strategies"][sid]
+        strat["running"] = False
+        strat["status"] = "STOPPED"
+        running_any = any(s.get("running") for s in state.get("strategies", {}).values() if s.get("sid") != sid)
+        if not running_any:
+            state["running"] = False
+            state["strategy"] = None
+            state["active_pairs"] = []
+        log(f"Strategy {sid} stopped")
+
+def stop_all():
+    if "strategies" in state:
+        for sid, strat in state["strategies"].items():
+            strat["running"] = False
+            strat["status"] = "STOPPED"
+    state["running"] = False
+    state["strategy"] = None
+    state["active_pairs"] = []
+    for k in list(state.keys()):
+        if k.startswith("_rsi_peak_") or k.startswith("_bb_peak_"):
+            del state[k]
+    log("All strategies stopped")
+
 def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
-    if state["running"]:
-        # Multi-pair: if grid is already running, add new pair without restarting.
-        # Seed here rather than relying on run_grid so the dashboard gets history
-        # immediately and behavior is consistent across strategies.
-        if strategy == "grid" and pair not in state.get("active_pairs", []):
-            state["active_pairs"].append(pair)
-            seed_history(pair)
-            log("Added "+pair+" to active grids ("+str(len(state["active_pairs"]))+" total)")
-            return
-        log("Already running — stop first","WARN"); return
-    state["strategy"]=strategy
-    if order: state.update(order)
-    state["pair"]=pair
-    state["mode"]=mode
-    # Chart history is initialized on the shared bot-start path, not inside a
-    # strategy loop. This keeps startup history available for every strategy.
+    if "strategies" not in state:
+        state["strategies"] = {}
+        
+    sid = f"{strategy}_{pair}"
+    state["strategy"] = strategy
+    state["pair"] = pair
+    state["mode"] = mode
+    state["running"] = True
+    state["error"] = None
+    if exchange: state["exchange"] = exchange
+    if chain: state["chain"] = chain
+    else: state["chain"] = "solana"
+    
+    strategy_config = order if order else {}
+    if "paper_trading" not in strategy_config:
+        strategy_config["paper_trading"] = state.get("paper_trading", True)
+        
+    state["strategies"][sid] = {
+        "sid": sid,
+        "type": strategy,
+        "pair": pair,
+        "running": True,
+        "paused": False,
+        "config": strategy_config,
+        "status": "RUNNING",
+        "last_trade": None,
+        "log_tail": [],
+        "started_at": int(time.time()),
+    }
+    
     seed_history(pair)
-    if exchange: state["exchange"]=exchange
-    if chain: state["chain"]=chain
-    else: state["chain"]="solana"
-    state["running"]=True
-    state["error"]=None
+    
     target_fn = STRATEGIES.get(strategy, run_dca)
     safe_fn = _safe_strategy_runner(target_fn)
-    t=threading.Thread(target=safe_fn, daemon=True)
+    t = threading.Thread(target=safe_fn, args=(sid,), name=sid, daemon=True)
+    state["strategies"][sid]["thread"] = t
     t.start()
+    
     chain_str = f" / {chain.upper()}" if (mode == "dex" and chain) else ""
-    log(f"Started {strategy.upper()} on {pair} via {mode.upper()}{chain_str}")
+    log(f"Started {strategy.upper()} on {pair} via {mode.upper()}{chain_str} (sid: {sid})")
 
 def stop_bot():
     state["running"]=False
@@ -3106,6 +3239,10 @@ def stop_bot():
     for k in list(state.keys()):
         if k.startswith("_rsi_peak_") or k.startswith("_bb_peak_"):
             del state[k]
+    if "strategies" in state:
+        for sid, strat in state["strategies"].items():
+            strat["running"] = False
+            strat["status"] = "STOPPED"
     log("Bot stopped")
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -3488,6 +3625,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div class="config-field"><label>Max Leverage</label><input type="number" id="ai-max-leverage" min="1.0" max="5.0" step="0.1" value="3.0"/></div>
         <div class="config-field"><label>Max Total Exposure ($)</label><input type="number" id="ai-max-exposure" min="10" step="10" value="1000"/></div>
         <div class="config-field"><label>Max Simultaneous Positions</label><input type="number" id="ai-max-positions" min="1" max="5" step="1" value="3"/></div>
+        <div class="config-field"><label>Trading Mode</label><select id="ai-trade-mode"><option value="paper" selected>📋 PAPER</option><option value="live">🔴 LIVE</option></select></div>
       </div>
       <div style="margin-top:10px">
         <label style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim)">Whitelisted Tokens</label>
@@ -3571,6 +3709,16 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div id="mt-result" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
   </div>
 
+  <div class="card" id="strategies-card">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Active Strategies</span>
+      <button class="btn" onclick="stopAll()" style="font-size:11px;color:var(--red);border-color:var(--red)44">🛑 Stop All</button>
+    </div>
+    <div id="strategies-list" style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+      <div style="color:var(--dim);text-align:center;padding:12px;font-size:12px">No active strategies running</div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
       <span>Trade History</span>
@@ -3578,7 +3726,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div style="overflow-x:auto">
       <table>
-        <thead><tr><th>Pair</th><th>Action</th><th>Price</th><th>Amount</th><th>P&amp;L</th><th>Via</th></tr></thead>
+        <thead><tr><th>Pair</th><th>Strategy</th><th>Action</th><th>Price</th><th>Amount</th><th>P&amp;L</th><th>Via</th></tr></thead>
         <tbody id="trades-body"><tr><td colspan="7" style="color:var(--dim);text-align:center;padding:20px">No trades yet</td></tr></tbody>
       </table>
     </div>
@@ -3987,6 +4135,7 @@ function startBot() {
     var leverage = document.getElementById("ai-max-leverage").value;
     var exposure = document.getElementById("ai-max-exposure").value;
     var positions = document.getElementById("ai-max-positions").value;
+    var ai_mode = document.getElementById("ai-trade-mode").value;
     var checked_symbols = [];
     var checkboxes = document.querySelectorAll("#ai-whitelist-checkboxes input[type='checkbox']:checked");
     checkboxes.forEach(function(cb) {
@@ -3995,7 +4144,7 @@ function startBot() {
     if (checked_symbols.length === 0) {
       checked_symbols.push(sel.pair);
     }
-    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(","));
+    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(",")) + "&ai_mode=" + ai_mode;
   }
   if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
     var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
@@ -4227,6 +4376,74 @@ function checkAlreadyRunning(d) {
     window._alreadyRunningWarned = false;
   }
 }
+function stopStrategy(sid) {
+  apiFetch("/stop?sid=" + encodeURIComponent(sid)).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok || d.success) {
+      showToast("Strategy stopped", "info");
+      refresh();
+    } else {
+      showToast(d.error || "Failed to stop", "error");
+    }
+  });
+}
+function stopAll() {
+  apiFetch("/stop_all").then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok || d.success) {
+      showToast("All strategies stopped", "info");
+      refresh();
+    } else {
+      showToast(d.error || "Failed to stop all", "error");
+    }
+  });
+}
+function updateStrategiesList(d) {
+  var container = document.getElementById("strategies-list");
+  if (!container) return;
+  var strats = d.strategies || {};
+  var keys = Object.keys(strats);
+  var runningKeys = keys.filter(function(k) { return strats[k].running; });
+  if (runningKeys.length === 0) {
+    container.innerHTML = '<div style="color:var(--dim);text-align:center;padding:12px;font-size:12px">No active strategies running</div>';
+    return;
+  }
+  var html = '';
+  runningKeys.forEach(function(sid) {
+    var s = strats[sid];
+    var isPaper = s.config && s.config.paper_trading;
+    var modeLabel = isPaper ? '<span style="color:var(--yellow);font-size:10px;font-weight:700;background:var(--yellow)11;padding:2px 6px;border-radius:4px;border:1px solid var(--yellow)22">📋 PAPER</span>' : '<span style="color:var(--red);font-size:10px;font-weight:700;background:var(--red)11;padding:2px 6px;border-radius:4px;border:1px solid var(--red)22">🔴 LIVE</span>';
+    var statusColor = "var(--dim)";
+    if (s.status === "RUNNING") statusColor = "var(--accent)";
+    else if (s.status === "ARMED") statusColor = "var(--blue)";
+    else if (s.status === "FILLED") statusColor = "var(--accent)";
+    else if (s.status === "REJECTED") statusColor = "var(--red)";
+    else if (s.status === "STOPPED") statusColor = "var(--dim)";
+    
+    var statusBadge = '<span style="color:' + statusColor + ';font-size:11px;font-weight:700;background:' + statusColor + '11;padding:2px 6px;border-radius:4px;border:1px solid ' + statusColor + '22">' + (s.status || "RUNNING") + '</span>';
+    
+    var paramsText = '';
+    if (s.type === "grid") {
+      paramsText = "Risk: " + (s.config.risk_pct || 2) + "%, Max Pos: $" + (s.config.max_pos || 500);
+    } else if (s.type === "limit_buy" || s.type === "limit_sell") {
+      paramsText = "Amount: $" + (s.config.limit_amount_usdc || 0) + ", Price: $" + (s.config.limit_price || 0) + ", Type: " + (s.config.limit_order_type || "limit");
+    } else if (s.type === "ai_trading") {
+      paramsText = "Risk: " + (s.config.risk_pct || 1) + "%, Max Leverage: " + (s.config.max_leverage || 3) + ", Max Exposure: $" + (s.config.max_total_exposure || 5000);
+    } else {
+      paramsText = "Risk: " + (s.config.risk_pct || 2) + "%";
+    }
+
+    html += '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;justify-content:space-between;align-items:center;font-size:12px">';
+    html += '  <div>';
+    html += '    <div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:8px">' + s.type.toUpperCase() + ' <span style="font-weight:400;color:var(--text2)">' + s.pair + '</span> ' + modeLabel + ' ' + statusBadge + '</div>';
+    html += '    <div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>';
+    html += '  </div>';
+    html += '  <div>';
+    html += '    <button class="btn" onclick="stopStrategy('' + sid + '')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>';
+    html += '  </div>';
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+
 function refresh() {
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     try {
@@ -4254,6 +4471,7 @@ function refresh() {
     // Live limit-order status card + already-running warning (dashboard only)
     updateLimitOrderStatus(d);
     checkAlreadyRunning(d);
+    updateStrategiesList(d);
     // Multi-pair mode: show per-pair charts when 2+ active pairs
     var multiPair = activePairs.length >= 2;
     var singleRow = document.getElementById("single-chart-row");
@@ -4450,7 +4668,7 @@ function refresh() {
       d.trades_list.forEach(function(t) {
         var actionClass = t.action === "buy" ? "buy" : t.action === "sell" ? "sell" : "stop";
         var pnlBadge = t.pnl != null ? pnlHtml(t.pnl) : "—";
-        html += "<tr><td>" + (t.pair || "—") + "</td><td class='" + actionClass + "'>" + t.action.toUpperCase() + "</td><td>$" + t.price + "</td><td>" + t.amount + "</td><td>" + pnlBadge + "</td><td>" + (t.via || "—") + "</td></tr>";
+        html += "<tr><td>" + (t.pair || "—") + "</td><td>" + (t.strategy || "—") + "</td><td class='" + actionClass + "'>" + t.action.toUpperCase() + "</td><td>$" + t.price + "</td><td>" + t.amount + "</td><td>" + pnlBadge + "</td><td>" + (t.via || "—") + "</td></tr>";
         // Log to trade log for CSV export
         tradeLog.push({time: t.time, action: t.action, price: t.price, amount: t.amount, pnl: t.pnl, via: t.via || "", strategy: d.strategy, pair: t.pair || d.pair});
       });
@@ -4736,6 +4954,9 @@ class Handler(BaseHTTPRequestHandler):
                         }).encode()); return
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
+            pair_param = params.get("pair",[cfg["pair"]])[0]
+            
+            order_cfg = {}
             if start_strategy == "ai_trading":
                 state["config"]["risk_pct"] = float(params.get("risk_pct", [1.0])[0])
                 state["config"]["max_leverage"] = float(params.get("max_leverage", [3.0])[0])
@@ -4746,8 +4967,34 @@ class Handler(BaseHTTPRequestHandler):
                 if ai_whitelist_raw:
                     state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]
                 else:
-                    state["ai_whitelisted_symbols"] = [params.get("pair",[cfg["pair"]])[0]]
-            if start_strategy in ("limit_buy", "limit_sell"):
+                    state["ai_whitelisted_symbols"] = [pair_param]
+                    
+                ai_mode = params.get("ai_mode", ["paper"])[0]
+                ai_paper = (ai_mode != "live")
+                
+                if not ai_paper:
+                    has_keys = False
+                    chain_choice = params.get("chain", ["solana"])[0]
+                    if chain_choice == "solana":
+                        if cfg.get("sol_wallet") and _secret("SOL_PRIVATE_KEY"):
+                            has_keys = True
+                    else:
+                        if cfg.get("wallet") and _secret("PRIVATE_KEY"):
+                            has_keys = True
+                    if not has_keys:
+                        self.respond(400, "application/json", json.dumps({"error": "Cannot start in LIVE mode: Wallet/API keys are not configured."}).encode())
+                        return
+                        
+                order_cfg = {
+                    "paper_trading": ai_paper,
+                    "risk_pct": float(state["config"].get("risk_pct", 1.0)),
+                    "max_leverage": float(state["config"].get("max_leverage", 3.0)),
+                    "max_total_exposure": float(state["config"].get("max_total_exposure", 1000.0)),
+                    "max_simultaneous_positions": int(state["config"].get("max_simultaneous_positions", 3)),
+                    "auto_compound": state["config"].get("auto_compound", True),
+                    "ai_whitelist": state["ai_whitelisted_symbols"]
+                }
+            elif start_strategy in ("limit_buy", "limit_sell"):
                 requested_side = params.get("side", ["buy"])[0]
                 expected_side = "buy" if start_strategy == "limit_buy" else "sell"
                 if requested_side != expected_side:
@@ -4761,18 +5008,49 @@ class Handler(BaseHTTPRequestHandler):
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
                 if not ok:
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
+                order_cfg = {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode, "paper_trading": (effective_mode == "paper")}
+            else:
+                order_cfg = {
+                    "paper_trading": state.get("paper_trading", True),
+                    "risk_pct": float(state["config"].get("risk_pct", 2.0)),
+                    "max_pos": float(state["config"].get("max_pos", 500.0)),
+                }
+
+            sid = f"{start_strategy}_{pair_param}"
+            if "strategies" in state and sid in state["strategies"] and state["strategies"][sid].get("running"):
+                self.respond(400, "application/json", json.dumps({"error": "Strategy already running on this pair"}).encode())
+                return
+                
+            current_balance = get_available_balance()
+            sum_reserved = sum(get_reserved_capital(s["type"], s["config"], current_balance) for s in state.get("strategies", {}).values() if s.get("running"))
+            new_reserved = get_reserved_capital(start_strategy, order_cfg, current_balance)
+            
+            if sum_reserved + new_reserved > current_balance:
+                self.respond(400, "application/json", json.dumps({
+                    "error": f"Insufficient balance: strategy requires ${new_reserved:.2f} but only ${current_balance - sum_reserved:.2f} remains available (total balance: ${current_balance:.2f})"
+                }).encode())
+                return
+
             start_bot(
                 start_strategy,
-                params.get("pair",[cfg["pair"]])[0],
+                pair_param,
                 params.get("mode",["dex"])[0],
                 params.get("exchange",[cfg["exchange"]])[0],
                 params.get("chain",["solana"])[0],
-                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
+                order_cfg
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
             if not self._auth_or_401(): return
-            stop_bot()
+            sid = params.get("sid", [""])[0]
+            if sid:
+                stop_strategy(sid)
+            else:
+                stop_bot()
+            self.respond(200,"application/json",b'{"ok":true}')
+        elif path=="/stop_all":
+            if not self._auth_or_401(): return
+            stop_all()
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/backtest":
             if not self._auth_or_401(): return
