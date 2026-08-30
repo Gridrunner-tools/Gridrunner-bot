@@ -2,6 +2,11 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 import time
 
+# Configurable tradeable signal-score floor. Aggressive tuning lowered this from
+# 40.0 to 25.0 so more setups qualify; it is the single source of truth for the
+# "is this signal tradeable" decision across signal.py and strategies.py.
+AI_MIN_SCORE = 25.0
+
 @dataclass
 class Signal:
     symbol: str
@@ -24,7 +29,7 @@ class Signal:
     timestamp: float = field(default_factory=time.time)
 
     def is_tradeable(self) -> bool:
-        return self.direction in ("LONG", "SHORT") and self.signal_score >= 40.0
+        return self.direction in ("LONG", "SHORT") and self.signal_score >= AI_MIN_SCORE
 
 def create_no_trade_signal(symbol: str, venue: str, regime: str, reason: str, warnings: List[str] = None) -> Signal:
     return Signal(

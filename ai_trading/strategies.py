@@ -1,7 +1,7 @@
 import time
 from typing import List, Tuple, Dict, Any
 from ai_trading.indicators import ema, rsi, macd, atr, bollinger_bands, vwap, swing_highs_lows, momentum
-from ai_trading.signal import Signal, create_no_trade_signal
+from ai_trading.signal import Signal, create_no_trade_signal, AI_MIN_SCORE
 
 def evaluate_falling_knife(closes: List[float], highs: List[float], lows: List[float], volumes: List[float]) -> Tuple[bool, List[str]]:
     """
@@ -62,7 +62,7 @@ def generate_signals_and_score(
     closes: List[float], 
     volumes: List[float],
     regime_info: Dict[str, Any],
-    min_rr_ratio: float = 1.5
+    min_rr_ratio: float = 1.2
 ) -> Signal:
     """
     Analyze market data and generate a standardized Signal with weighted scoring.
@@ -208,9 +208,9 @@ def generate_signals_and_score(
     if direction == "SHORT" and closes[-1] > recent_resistance:
         return create_no_trade_signal(symbol, venue, regime, "SHORT signal invalidated — local resistance already broken")
 
-    # Score Bands check: 0-39 NO TRADE
-    if score < 40.0:
-        return create_no_trade_signal(symbol, venue, regime, f"Signal score ({score:.1f}) is too weak (< 40.0 floor)")
+    # Score Bands check: below the tradeable floor is NO TRADE
+    if score < AI_MIN_SCORE:
+        return create_no_trade_signal(symbol, venue, regime, f"Signal score ({score:.1f}) is too weak (< {AI_MIN_SCORE:.1f} floor)")
 
     # 3. Dynamic Stop Loss & Take Profit (ATR & Technical S/R Stops)
     atr_val = atr_series[-1]
