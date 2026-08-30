@@ -436,6 +436,13 @@ def log(msg, level="INFO"):
         state["log"].insert(0, entry)
         if len(state["log"]) > 150:
             state["log"] = state["log"][:150]
+        thread_name = threading.current_thread().name
+        strategies = state.get("strategies")
+        if strategies and thread_name in strategies:
+            tail = strategies[thread_name].setdefault("log_tail", [])
+            tail.insert(0, entry)
+            if len(tail) > 40:
+                del tail[40:]
 
 # ── Price Feeds (Kraken — no API key needed) ──────────────────────────────────
 KRAKEN_PAIRS = {
@@ -3132,9 +3139,13 @@ def run_ai_trading():
     state["ai_engine"] = engine
     
     engine.start(LiveMarketDataProvider(), LiveExecutionAdapter(), interval_sec=10.0)
+    sid = threading.current_thread().name
+    log("AI Trading engine started - scanning market every 10s.")
     
     try:
         while state["running"] and state["strategy"] == "ai_trading":
+            if "strategies" in state and sid in state["strategies"]:
+                state["strategies"][sid]["status"] = "RUNNING"
             if engine:
                 cur_usdc = state.get("sol_usdc", 0.0) or 0.0
                 cur_sol = state.get("sol_bal", 0.0) or 0.0
@@ -3177,6 +3188,23 @@ def run_ai_trading():
 
 STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order,"ai_trading":run_ai_trading}
 
+def _mark_strategy_stopped(sid, status="STOPPED"):
+    """Mark a strategy no-longer-running and reconcile the page-level running flag.
+
+    Called when a strategy thread ends (normally or after a fatal error) so the
+    per-strategy card and the global "running" indicator never diverge.
+    """
+    if sid and "strategies" in state and sid in state["strategies"]:
+        strat = state["strategies"][sid]
+        strat["running"] = False
+        if strat.get("status") not in ("FILLED", "REJECTED"):
+            strat["status"] = status
+    remaining = [st for st in state.get("strategies", {}).values() if st.get("running")]
+    if not remaining:
+        dict.__setitem__(state, "running", False)
+        dict.__setitem__(state, "strategy", None)
+        state["active_pairs"] = []
+
 def _safe_strategy_runner(target_func):
     def wrapper(*args, **kwargs):
         sid = kwargs.get("sid") or (args[0] if args else None)
@@ -3197,11 +3225,10 @@ def _safe_strategy_runner(target_func):
                 state["strategies"][sid]["running"] = False
                 state["strategies"][sid]["status"] = "REJECTED"
                 state["strategies"][sid]["error"] = err_msg
-            else:
-                state["running"] = False
-                state["strategy"] = None
-                state["active_pairs"] = []
             state["error"] = err_msg
+            _mark_strategy_stopped(sid)
+        else:
+            _mark_strategy_stopped(sid)
     return wrapper
 
 def stop_strategy(sid):
@@ -4473,7 +4500,14 @@ function updateStrategiesList(d) {
     html += '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;justify-content:space-between;align-items:center;font-size:12px">';
     html += '  <div>';
     html += '    <div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:8px">' + s.type.toUpperCase() + ' <span style="font-weight:400;color:var(--text2)">' + s.pair + '</span> ' + modeLabel + ' ' + statusBadge + '</div>';
-    html += '    <div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>';
+    var logLines = (s.log_tail || []).slice(0, 4);
+    var logHtml = '';
+    if (logLines.length) {
+      logHtml = '<div style="margin-top:6px;font-family:monospace;font-size:10px;color:var(--text2);line-height:1.4;max-height:46px;overflow:hidden">' +
+        logLines.map(function(l){ return '<div>' + String(l).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;') + '</div>'; }).join('') +
+        '</div>';
+    }
+    html += '    <div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>' + logHtml;
     html += '  </div>';
     html += '  <div>';
     html += `    <button class="btn" onclick="stopStrategy('${sid}')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>`;
