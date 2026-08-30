@@ -249,10 +249,49 @@ def get_reserved_capital(strategy_type, strategy_config, current_balance):
         max_pos = float(strategy_config.get("max_pos", 500.0))
         return min(current_balance * risk_pct / 100, max_pos) if current_balance > 0 else max_pos
 
-def get_available_balance():
-    if state.get("paper_trading", False):
+def get_available_balance(paper=None):
+    if paper is None:
+        paper = state.get("paper_trading", False)
+    if paper:
         return 10000.0
     return get_balance() or 0.0
+
+def check_capital_reservation(strategy_type, strategy_config):
+    """Reserve capital per mode so the shared wallet is never double-spent.
+
+    Live strategies reserve against the REAL wallet balance; paper strategies
+    reserve against the simulated paper balance (10000). They are pooled
+    separately, so a paper AI Trading strategy cannot consume the live-grid
+    capital and vice versa. Returns (ok: bool, error_msg: str|None).
+    """
+    paper = bool(strategy_config.get("paper_trading", True))
+    balance = get_available_balance(paper)
+    reserved = 0.0
+    for s in state.get("strategies", {}).values():
+        if not s.get("running"):
+            continue
+        s_paper = bool((s.get("config") or {}).get("paper_trading", True))
+        if s_paper != paper:
+            continue
+        reserved += get_reserved_capital(s["type"], s.get("config", {}), balance)
+    new_reserved = get_reserved_capital(strategy_type, strategy_config, balance)
+    if reserved + new_reserved > balance:
+        pool = "paper" if paper else "live"
+        return False, (f"Insufficient balance: strategy requires ${new_reserved:.2f} "
+                       f"but only ${balance - reserved:.2f} remains available "
+                       f"(total {pool} balance: ${balance:.2f})")
+    return True, None
+
+def default_strategy_paper(strategy_type):
+    """Default paper flag for a strategy type.
+
+    AI Trading is paper-by-default (never auto-enables live). All other
+    strategies (grid, dca, limit, etc.) default to LIVE, unless the license is
+    invalid — in which case a global paper-only lock forces paper everywhere.
+    """
+    if strategy_type == "ai_trading":
+        return True
+    return not state.get("license_valid", True)
 
 def is_strategy_running(sid, expected_type=None):
     if sid:
@@ -4437,7 +4476,7 @@ function updateStrategiesList(d) {
     html += '    <div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>';
     html += '  </div>';
     html += '  <div>';
-    html += '    <button class="btn" onclick="stopStrategy('' + sid + '')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>';
+    html += `    <button class="btn" onclick="stopStrategy('${sid}')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>`;
     html += '  </div>';
     html += '</div>';
   });
@@ -4994,6 +5033,7 @@ class Handler(BaseHTTPRequestHandler):
                     "auto_compound": state["config"].get("auto_compound", True),
                     "ai_whitelist": state["ai_whitelisted_symbols"]
                 }
+                state["paper_trading"] = ai_paper
             elif start_strategy in ("limit_buy", "limit_sell"):
                 requested_side = params.get("side", ["buy"])[0]
                 expected_side = "buy" if start_strategy == "limit_buy" else "sell"
@@ -5010,33 +5050,40 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
                 order_cfg = {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode, "paper_trading": (effective_mode == "paper")}
             else:
+                # Grid and all other non-AI strategies default to LIVE. Paper
+                # applies automatically ONLY to AI Trading. A globally-forced
+                # paper-only license lock (license_valid False) still wins.
+                grid_paper = default_strategy_paper(start_strategy)
                 order_cfg = {
-                    "paper_trading": state.get("paper_trading", True),
+                    "paper_trading": grid_paper,
                     "risk_pct": float(state["config"].get("risk_pct", 2.0)),
                     "max_pos": float(state["config"].get("max_pos", 500.0)),
                 }
+                state["paper_trading"] = grid_paper
 
             sid = f"{start_strategy}_{pair_param}"
             if "strategies" in state and sid in state["strategies"] and state["strategies"][sid].get("running"):
                 self.respond(400, "application/json", json.dumps({"error": "Strategy already running on this pair"}).encode())
                 return
                 
-            current_balance = get_available_balance()
-            sum_reserved = sum(get_reserved_capital(s["type"], s["config"], current_balance) for s in state.get("strategies", {}).values() if s.get("running"))
-            new_reserved = get_reserved_capital(start_strategy, order_cfg, current_balance)
-            
-            if sum_reserved + new_reserved > current_balance:
-                self.respond(400, "application/json", json.dumps({
-                    "error": f"Insufficient balance: strategy requires ${new_reserved:.2f} but only ${current_balance - sum_reserved:.2f} remains available (total balance: ${current_balance:.2f})"
-                }).encode())
+            mode_param = params.get("mode", ["dex"])[0]
+            chain_param = params.get("chain", ["solana"])[0]
+            exchange_param = params.get("exchange", [cfg["exchange"]])[0]
+            # Reflect the requested venue before the capital-reservation check so
+            # live reservations are measured against the correct chain's balance.
+            state["mode"] = mode_param
+            state["chain"] = chain_param
+            state["exchange"] = exchange_param
+            ok, cap_error = check_capital_reservation(start_strategy, order_cfg)
+            if not ok:
+                self.respond(400, "application/json", json.dumps({"error": cap_error}).encode())
                 return
-
             start_bot(
                 start_strategy,
                 pair_param,
-                params.get("mode",["dex"])[0],
-                params.get("exchange",[cfg["exchange"]])[0],
-                params.get("chain",["solana"])[0],
+                mode_param,
+                exchange_param,
+                chain_param,
                 order_cfg
             )
             self.respond(200,"application/json",b'{"ok":true}')
