@@ -228,13 +228,90 @@ cfg = {
     "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else True),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
+    "grid_level_count":  max(2, min(int(os.environ.get("GRID_LEVELS", "5")), 100)),
 }
+
 
 import threading
 _state_lock = threading.Lock()
 
+def get_reserved_capital(strategy_type, strategy_config, current_balance):
+    if strategy_type == "grid":
+        risk_pct = float(strategy_config.get("risk_pct", 2.0))
+        max_pos = float(strategy_config.get("max_pos", 500.0))
+        return min(current_balance * risk_pct / 100, max_pos) if current_balance > 0 else max_pos
+    elif strategy_type in ("limit_buy", "limit_sell"):
+        return float(strategy_config.get("limit_amount_usdc", 0.0))
+    elif strategy_type == "ai_trading":
+        return float(strategy_config.get("max_total_exposure", 5000.0) or 5000.0)
+    else:
+        risk_pct = float(strategy_config.get("risk_pct", 2.0))
+        max_pos = float(strategy_config.get("max_pos", 500.0))
+        return min(current_balance * risk_pct / 100, max_pos) if current_balance > 0 else max_pos
+
+def get_available_balance():
+    if state.get("paper_trading", False):
+        return 10000.0
+    return get_balance() or 0.0
+
+def is_strategy_running(sid, expected_type=None):
+    if sid:
+        return state.get("strategies", {}).get(sid, {}).get("running", False)
+    else:
+        if expected_type:
+            return state.get("running", False) and state.get("strategy") == expected_type
+        return state.get("running", False)
+
+class ThreadSafeState(dict):
+    def __getitem__(self, key):
+        thread_name = threading.current_thread().name
+        strategies = dict.get(self, "strategies")
+        if strategies and thread_name in strategies:
+            strat = strategies[thread_name]
+            if key == "running":
+                return strat.get("running", False)
+            elif key == "strategy":
+                return strat.get("type")
+            elif key == "pair":
+                return strat.get("pair")
+            elif key == "paper_trading":
+                return strat.get("config", {}).get("paper_trading", True)
+            elif key == "limit_side":
+                return strat.get("config", {}).get("limit_side")
+            elif key == "limit_amount_usdc":
+                return strat.get("config", {}).get("limit_amount_usdc")
+            elif key == "limit_price":
+                return strat.get("config", {}).get("limit_price")
+            elif key == "limit_order_type":
+                return strat.get("config", {}).get("limit_order_type")
+            elif key == "effective_mode":
+                return strat.get("config", {}).get("effective_mode")
+        return dict.__getitem__(self, key)
+
+    def get(self, key, default=None):
+        try:
+            return self[key]
+        except KeyError:
+            return default
+
+    def __setitem__(self, key, value):
+        thread_name = threading.current_thread().name
+        strategies = dict.get(self, "strategies")
+        if strategies and thread_name in strategies:
+            strat = strategies[thread_name]
+            if key == "running":
+                strat["running"] = value
+                if not value:
+                    if strat.get("status") not in ("FILLED", "REJECTED"):
+                        strat["status"] = "STOPPED"
+            elif key == "strategy":
+                strat["type"] = value
+            elif key == "error":
+                strat["error"] = value
+        dict.__setitem__(self, key, value)
+
 # ── Bot State ─────────────────────────────────────────────────────────────────
-state = {
+state = ThreadSafeState({
     "running":       False,
     "strategy":      None,
     "mode":          None,
@@ -293,7 +370,8 @@ state = {
     "dip_24h_high":   0.0,
     "last_midnight":  0,
     "emergency_stop":  False,
-}
+    "strategies":      {},
+})
 
 def send_telegram(msg):
     # Telegram requires the bot token in its endpoint, but POST avoids token-bearing
@@ -1218,7 +1296,7 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
             return False, 0.0
         # Check USDC balance before attempting swap
         usdc_bal = state.get("sol_usdc", 0)
-        if from_token in ("USDC","USDT") and usdc_bal > 0 and amount_input > usdc_bal:
+        if from_token in ("USDC","USDT") and amount_input > usdc_bal:
             log(f"Insufficient USDC: need ${amount_input:.2f}, have ${usdc_bal:.2f}", "WARN")
             return False, 0.0
 
@@ -1496,7 +1574,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
             return False, 0.0
         # Check USDC balance before attempting swap
         usdc_bal = state.get("sol_usdc", 0)
-        if from_token in ("USDC","USDT") and usdc_bal > 0 and amount_input > usdc_bal:
+        if from_token in ("USDC","USDT") and amount_input > usdc_bal:
             log(f"Insufficient USDC: need ${amount_input:.2f}, have ${usdc_bal:.2f}", "WARN")
             return False, 0.0
 
@@ -1934,12 +2012,20 @@ def log_trade_to_file(entry):
 def record_trade(side, price, amount, pnl=None, pair=None):
     _pair = pair if pair else state.get("pair","")
     trade = {"time":time.strftime("%H:%M:%S"),"side":side,"price":price,"amount":amount,"pnl":pnl,"pair":_pair}
+    thread_name = threading.current_thread().name
+    if "strategies" in state and thread_name in state["strategies"]:
+        strat = state["strategies"][thread_name]
+        trade["strategy"] = strat["type"]
+        trade["sid"] = thread_name
+    else:
+        trade["strategy"] = state.get("strategy", "") or ""
+        trade["sid"] = ""
     with _state_lock:
         state["trades"].append(trade)
         if len(state["trades"]) > 500:
             state["trades"] = state["trades"][-500:]
         state["last_trade"] = {"action": side, "pair": _pair, "price": price, "time": time.time()}
-        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair","")} for t in state["trades"][-50:]]
+        state["trades_list"] = [{"time":t["time"],"action":t["side"],"price":t["price"],"amount":t["amount"],"pnl":t.get("pnl"),"via":t.get("router",""),"pair":t.get("pair",""), "strategy": t.get("strategy", "")} for t in state["trades"][-50:]]
         # Rebuild pair stats from completed (PnL-bearing) trades.  Buy entries
         # intentionally do not count as trades until their matching sell has a
         # realized PnL; this keeps BTC/ETH metrics consistent with trade history.
@@ -1957,7 +2043,7 @@ def record_trade(side, price, amount, pnl=None, pair=None):
             stats["win_rate"] = stats["wins"] / stats["trades"] * 100 if stats["trades"] else 0.0
         state["pair_stats"] = pair_stats
     # Persist to file
-    log_trade_to_file({"event":"TRADE","time":trade["time"],"side":side,"pair":trade["pair"],"price":price,"amount":amount,"pnl":pnl})
+    log_trade_to_file({"event":"TRADE","time":trade["time"],"side":side,"pair":trade["pair"],"price":price,"amount":amount,"pnl":pnl, "strategy": trade.get("strategy", "")})
 
 
 # ── Technical Indicators (stdlib only) ────────────────────────────────────
@@ -2041,6 +2127,41 @@ def seed_history(pair):
             if pair == state.get("pair"): state["price_history"] = history[:]
             log(f"Seeded {len(history)} candles from Kraken for {pair}")
     except Exception as e: log(f"Seed history failed for {pair}: {e}", "WARN")
+def chart_history_for(pair):
+    """Return candle history for ANY requested pair, seeding it when missing.
+
+    Arbitrary dropdown pairs have no history until a strategy runs on them, so
+    the dashboard asks this endpoint when the user picks a pair. Preference
+    order: existing per-pair buffer (running/seeded pairs) -> Kraken OHLC seed
+    (reuses seed_history, mapped for BTC/ETH/SOL, generic fallback otherwise)
+    -> two points synthesized from the current live price via get_price(pair).
+    The result is stored into state["price_history_pairs"][pair] so the 3s
+    /state refresh then serves it directly. Returns [] when nothing is
+    available so the client can show a placeholder instead of stale candles.
+    """
+    pair = (pair or "").strip()
+    if not pair or "/" not in pair or len(pair) > 64:
+        return []
+    history = state["price_history_pairs"].get(pair, [])
+    if len(history) >= 2:
+        return history[-4320:]
+    seed_history(pair)
+    history = state["price_history_pairs"].get(pair, [])
+    if len(history) >= 2:
+        return history[-4320:]
+    # Live fallback for pairs Kraken does not cover (custom Solana tokens).
+    # A single sample synthesized into two points keeps the request fast and
+    # shows the selected pair's own current price, never another pair's data.
+    try:
+        price = get_price(pair)
+    except Exception:
+        price = 0
+    if price and price > 0:
+        now = int(time.time())
+        samples = [{"time": now - 1, "value": float(price)}, {"time": now, "value": float(price)}]
+        state["price_history_pairs"][pair] = samples
+        return samples
+    return []
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
     buy_prices = []
@@ -2091,11 +2212,23 @@ def run_dca():
             log("Daily loss limit reached — pausing 1hr", "WARN"); time.sleep(3600)
         time.sleep(60)
 
+def _make_grids(price, spread, levels):
+    mid_idx = (levels + 1) // 2
+    s = price * spread * 2 / levels
+    grids = []
+    for i in range(levels + 1):
+        if i <= mid_idx:
+            grids.append(round(price * (1 - spread) + i * s, 4))
+        else:
+            grids.append(round(price * (1 - spread) + mid_idx * s + (i - mid_idx) * 2 * s, 4))
+    return grids
+
 def _init_grid_pair(pair):
     """Initialize grid state for a pair, return dict with all local vars."""
     price = get_price(pair)
     if price <= 0: return None
-    levels=5; spread=cfg.get("base_spread", 0.05)
+    levels=int(cfg.get("grid_level_count", 5)); spread=cfg.get("base_spread", 0.05)
+    levels = max(2, min(levels, 100))  # safety clamp
     # Dynamic spread: widen in volatile markets
     if cfg.get("dynamic_spread", True):
         try:
@@ -2108,7 +2241,7 @@ def _init_grid_pair(pair):
                     vol = (var**0.5)/avg if avg>0 else 0
                     spread = min(spread * (1 + vol * 10), spread * 3)  # max 3x
         except Exception: pass
-    grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+    grids = _make_grids(price, spread, levels)
     mid_idx = len(grids) // 2
     return {
         "grids": grids, "mid_idx": mid_idx, "filled": {},
@@ -2124,14 +2257,14 @@ def _grid_crossed_buy_indices(grids, mid_idx, filled, previous_price, price):
     if price <= 0 or (previous_price is not None and price < previous_price):
         return set()
     floor = previous_price if previous_price is not None else price
-    return {idx for idx, level in enumerate(grids[:mid_idx])
+    return {idx for idx, level in enumerate(grids[:mid_idx+1])
             if idx not in filled and floor <= level <= price}
 
 def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high):
     """Sync per-pair grid state to state dict for dashboard display."""
     gp = state["grid_pairs"].get(pair, {})
     gp.update({
-        "grid_levels": grids[:], "grid_buy_zone": grids[mid_idx], "grid_mid_idx": mid_idx,
+        "grid_levels": grids[:], "grid_buy_zone": grids[mid_idx+1], "grid_mid_idx": mid_idx,
         "grid_filled": {k: v for k, v in filled.items()},
         "grid_trailing_active": trailing_sell_active, "grid_trailing_high": trailing_high,
         "grids": grids[:], "filled": filled, "mid_idx": mid_idx,
@@ -2141,7 +2274,7 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
     # Also set top-level state for backward compat (shows active pair's data)
     if state.get("pair") == pair:
         state["grid_levels"] = grids[:]
-        state["grid_buy_zone"] = grids[mid_idx]
+        state["grid_buy_zone"] = grids[mid_idx+1]
         state["grid_mid_idx"] = mid_idx
         state["grid_filled"] = filled
         state["grid_trailing_active"] = trailing_sell_active
@@ -2150,21 +2283,57 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
 def _grid_sell_indices(filled, grid_idx, levels):
     """Select one open tranche for an actual sell cell.
 
-    ``levels`` is the number of intervals, so sell cells are the intervals
-    from ``mid_idx`` through ``levels - 1`` (not the endpoint ``levels``).
-    There are sometimes more buy tranches than sell cells (for example,
-    levels=5 has buy cells 0..2 and sell cells 3..4).  A sell event must still
-    select exactly one tranche; choosing the nearest tranche for the lower
-    sell cell and the farthest for the upper cell gives every buy tranche a
-    reachable exit over successive sell events without cascading liquidation.
+    With the boundary shifted up by one, the first sell cell is mid_idx + 1.
     """
     mid_idx = levels // 2 + (levels % 2)
-    if grid_idx < mid_idx or grid_idx >= levels or not filled:
+    first_sell_idx = mid_idx + 1
+    if grid_idx < first_sell_idx or grid_idx >= levels or not filled:
         return []
     ordered = sorted(filled)
-    if grid_idx == mid_idx:
+    if grid_idx == first_sell_idx:
         return [ordered[-1]]
     return [ordered[0]]
+def _execute_base_buy_if_needed(pair, gs, price):
+    """Execute base buy on start / re-center if not already seeded."""
+    if not gs.get("seeded"):
+        if price <= 0:
+            return
+        if state.get("mode") == "dex" and state.get("chain") == "solana":
+            if cfg.get("sol_wallet"):
+                try: sol_get_balance()
+                except Exception: pass
+            bal = state.get("sol_usdc", 0.0) or 0.0
+        else:
+            bal = get_balance() or 0.0
+        comp_prof = state.get("compound_profit", 0.0) or 0.0
+        effective_bal = bal + (comp_prof if cfg.get("auto_compound", True) else 0.0)
+        min_order = max(5.0, float(cfg.get("min_order_usdc", 5) or 5.0))
+        levels = int(gs.get("levels", 5) or 5)
+        risk_pct = float(cfg.get("risk_pct", 2.0) or 2.0)
+        max_pos = float(cfg.get("max_pos", 500.0) or 500.0)
+        size = max(min_order, min(effective_bal * risk_pct / 100, max_pos) / levels)
+
+        if size > 1:
+            grids = gs["grids"]
+            cell = None
+            for i, g in enumerate(grids[:-1]):
+                ng = grids[i+1]
+                if g <= price < ng:
+                    cell = i
+                    break
+            if cell is None:
+                cell = gs["mid_idx"]
+
+            base_amt = round(size / price, 6)
+            if place_order(pair, "buy", base_amt, grid_idx=cell):
+                gs["filled"][cell] = {"price": price, "amount": base_amt}
+                state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
+                record_trade("GRID-BUY", price, base_amt, pair=pair)
+                log(f"[{pair}] BASE BUY {base_amt} @ ${price} (grid start)")
+                send_telegram("🟢 <b>BUY</b> "+pair+"\nLevel: "+str(cell)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(base_amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
+                _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
+                gs["seeded"] = True
+
 def run_grid():
     pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
@@ -2177,6 +2346,9 @@ def run_grid():
                 state["grid_pairs"][p] = gs
                 seed_history(p)
                 log("Grid initialized for "+p+": "+str(gs["grids"]), "INFO")
+
+                # --- NEW BASE BUY ON START (Option B) ---
+                _execute_base_buy_if_needed(p, gs, gs["price"])
     if not state["active_pairs"]:
         log("No active pairs to grid", "WARN"); return
     log("Grid started on "+str(state["active_pairs"])+" ("+state["mode"].upper()+")")
@@ -2217,25 +2389,33 @@ def run_grid():
                 if price <= 0: break
 
             # ── Grid re-centering ──
-            if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or (not filled and price >= grids[mid_idx]):
+            if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or not filled:
                 has_positions = bool(filled)
-                if not filled and price > grids[mid_idx]:
+                if not filled:
                     log("["+pair+"] Grid re-centering: no positions at $"+str(price))
                 else:
                     log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
                 if has_positions and price < grids[0]:
-                    new_grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
-                    for i in range(mid_idx + 1):
+                    new_grids = _make_grids(price, spread, levels)
+                    for i in range(mid_idx + 2):
                         grids[i] = new_grids[i]
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                    log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+1])+" sell zone kept: "+str(grids[mid_idx:]))
+                    log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+2])+" sell zone kept: "+str(grids[mid_idx+1:]))
                 else:
-                    grids = [round(price*(1-spread)+i*(price*spread*2/levels),4) for i in range(levels+1)]
+                    grids = _make_grids(price, spread, levels)
                     mid_idx = len(grids) // 2
+                    gs["grids"] = grids
+                    gs["mid_idx"] = mid_idx
                     trailing_sell_active = False; trailing_high = 0.0
                     trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                     state["partial_positions"] = {}
-                    log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx]))
+                    gs["seeded"] = False  # Reset base buy seed guard on recenter/start
+                    log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                    _execute_base_buy_if_needed(pair, gs, price)
+                    # Refresh local loop variables
+                    grids = gs["grids"]
+                    mid_idx = gs["mid_idx"]
+                    filled = gs["filled"]
             # Compute crossings against the final grid, after any recentering.
             # Downward movement defers buys until a later upward tick.
             moving_up = previous_price is None or price >= previous_price
@@ -2249,7 +2429,7 @@ def run_grid():
             for i,g in enumerate(grids[:-1]):
                 ng = grids[i+1]
                 if (g <= price < ng) or (i in crossed_buy_indices):
-                    is_buy_zone = i < mid_idx
+                    is_buy_zone = i <= mid_idx
                     # ── BUY ZONE: trailing buy (buy on bounce) ──
                     if is_buy_zone:
                         # Track the low
@@ -2304,7 +2484,8 @@ def run_grid():
                                 log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
                                 del filled[sl_buy_idx]
                                 state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
-                    # ── SELL ZONE: trailing take profit ──
+                    # ── Trailing take profit (fires on pullback regardless of grid zone) ──
+                    # Arm / raise the trailing high while price is in the sell zone.
                     if not is_buy_zone:
                         if not trailing_sell_active and filled:
                             trailing_sell_active = True
@@ -2317,11 +2498,22 @@ def run_grid():
                                 trailing_high = price
                                 state["grid_trailing_high"] = trailing_high
                                 log("["+pair+"] Trailing high updated to $"+str(price))
-                        # Sell when price drops trailing_pct% below peak
-                        if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
-                            for buy_idx in sorted(_grid_sell_indices(filled, i, levels)):
+                    # Sell when price drops trailing_pct% below the peak.
+                    # Evaluated in BOTH zones so a pullback into the buy zone (at/below mid_idx)
+                    # still exits (previously reset to 0 without selling - the no-sell bug).
+                    if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
+                            _sell_cell = i if (not is_buy_zone) else (mid_idx + 1)
+                            for buy_idx in sorted(_grid_sell_indices(filled, _sell_cell, levels)):
                                 amt = filled[buy_idx]["amount"]
                                 buy_price = filled[buy_idx]["price"]
+                                if price <= buy_price:
+                                    log(f"[{pair}] Take-profit/trailing-sell pullback to ${price:.2f} <= entry cost ${buy_price:.2f} for level {buy_idx}. HOLDING.", "WARN")
+                                    # Reset trailing sell to prevent loop/log spam, hold position
+                                    trailing_sell_active = False
+                                    trailing_high = 0.0
+                                    state["grid_trailing_active"] = False
+                                    state["grid_trailing_high"] = 0.0
+                                    break
                                 partial_pct = cfg.get("partial_sell_pct", 50)
                                 # Check if this position still has a partial remainder
                                 partial_key = str(buy_idx)
@@ -2374,12 +2566,7 @@ def run_grid():
                                         state["grid_trailing_high"] = 0.0
                                         state["grid_filled"] = {k: v for k, v in filled.items()}
                                         break
-                    else:
-                        # Price back in buy zone — reset sell trailing
-                        if trailing_sell_active:
-                            log("["+pair+"] Trailing sell reset — price back in buy zone")
-                            trailing_sell_active = False
-                            trailing_high = 0.0
+
             # ── Gap-fill, Buy-On-The-Way-Up, and Drop-Through Recovery Fill ──
             last_price = gs.get("last_price")
             drop_through_active = gs.get("drop_through_active", False)
@@ -2391,7 +2578,7 @@ def run_grid():
                 if price < last_price:
                     # Count how many unfilled buy levels were crossed/dropped through
                     crossed_levels = []
-                    for gap_i in range(mid_idx):
+                    for gap_i in range(mid_idx + 1):
                         if gap_i in filled:
                             continue
                         # Level crossed on the way down: price <= grids[gap_i] < last_price
@@ -2450,17 +2637,17 @@ def run_grid():
 
             # General gap-fill (C1 downward + upward buy-on-the-way-up) when NOT in a consecutive drop
             if not drop_through_active:
-                for gap_i in range(mid_idx):
+                for gap_i in range(mid_idx + 1):
                     if gap_i in filled:
                         continue
                     
                     # Downward gap-fill: price fell below level
-                    is_downward_gap = (last_price is not None) and (price <= grids[gap_i] < last_price)
+                    _DISABLED_downward_gap = (last_price is not None) and (price <= grids[gap_i] < last_price)
                     
                     # Upward gap-fill: price rose above/through level
                     is_upward_gap = (last_price is not None) and (last_price < grids[gap_i] <= price)
                     
-                    if is_downward_gap or is_upward_gap:
+                    if is_upward_gap:
                         # Check balance safety rail
                         current_bal = get_balance()
                         if current_bal < size:
@@ -2472,7 +2659,7 @@ def run_grid():
                             filled[gap_i] = {"price": price, "amount": gap_amt}
                             state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                             record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
-                            log(f"[{pair}] {'UPWARD' if is_upward_gap else 'DOWNWARD'} GAP-FILL BUY level {gap_i} @ ${price:.2f}", "WARN")
+                            log(f"[{pair}] 'UPWARD' GAP-FILL BUY level {gap_i} @ ${price:.2f}", "WARN")
 
             # Save state variables in gs dict
             gs["last_price"] = price
@@ -2793,14 +2980,35 @@ def run_limit_order():
     if not valid:
         state["last_trade"] = {"action": side, "pair": pair, "amount": amount_usdc, "order_type": order_type, "limit_price": limit_price, "status": "rejected", "error": reason, "time": int(time.time())}
         log("Limit order rejected: "+reason, "WARN"); state["running"] = False; state["strategy"] = None; return
-    log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type)
+    log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type+" limit=$"+str(limit_price))
     while state["running"] and state["strategy"] in ("limit_buy", "limit_sell"):
         price = get_price(pair)
         ready = order_type == "market" or (side == "buy" and price <= limit_price) or (side == "sell" and price >= limit_price)
         if price > 0 and ready:
             amount = round(amount_usdc / price, 6)
             if place_order(pair, side, amount):
-                record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
+                positions = state.setdefault("limit_positions", {})
+                if side == "buy":
+                    # Keep a per-pair position so the matching limit-sell can
+                    # realize PnL (mirrors GRID-SELL's buy-price tracking).
+                    positions[pair] = {"price": price, "amount": amount, "time": int(time.time())}
+                    record_trade("LIMIT-BUY", price, amount, pair=pair)
+                elif side == "sell":
+                    pos = positions.pop(pair, None)
+                    if pos:
+                        pnl = round((price - pos["price"]) * amount, 2)
+                        state["pnl"] += pnl
+                        state["daily_pnl"] = state.get("daily_pnl", 0) + pnl
+                        record_trade("LIMIT-SELL", price, amount, pnl, pair=pair)
+                        log("["+pair+"] LIMIT-SELL "+str(round(amount,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(pos["price"],2))+" PnL $"+str(round(pnl,2))+")")
+                    else:
+                        # No matching buy position (e.g. server restarted between
+                        # the buy and sell): keep today's behavior (pnl None) and
+                        # warn — never invent a PnL.
+                        record_trade("LIMIT-SELL", price, amount, pair=pair)
+                        log("no matching limit-buy position to compute PnL for "+pair, "WARN")
+                else:
+                    record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
                 state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"confirmed","effective_mode":effective_mode,"time":int(time.time())}
                 state["running"] = False; state["strategy"] = None
                 log("Limit order filled: "+side+" "+pair+" @ $"+str(price))
@@ -2930,32 +3138,99 @@ def run_ai_trading():
 
 STRATEGIES = {"dca":run_dca,"grid":run_grid,"scalp":run_scalp,"copy":run_copy,"arb":run_arbitrage,"rsi_ema":run_rsi_ema,"bbands":run_bbands,"webhook":run_webhook,"limit_buy":run_limit_order,"limit_sell":run_limit_order,"ai_trading":run_ai_trading}
 
+def _safe_strategy_runner(target_func):
+    def wrapper(*args, **kwargs):
+        sid = kwargs.get("sid") or (args[0] if args else None)
+        try:
+            try:
+                target_func(*args, **kwargs)
+            except TypeError as te:
+                if "takes" in str(te) or "argument" in str(te):
+                    target_func()
+                else:
+                    raise te
+        except Exception as e:
+            import traceback
+            err_msg = f"Fatal error in strategy thread: {e}"
+            log(err_msg, "ERROR")
+            log(traceback.format_exc(), "DEBUG")
+            if sid and "strategies" in state and sid in state["strategies"]:
+                state["strategies"][sid]["running"] = False
+                state["strategies"][sid]["status"] = "REJECTED"
+                state["strategies"][sid]["error"] = err_msg
+            else:
+                state["running"] = False
+                state["strategy"] = None
+                state["active_pairs"] = []
+            state["error"] = err_msg
+    return wrapper
+
+def stop_strategy(sid):
+    if "strategies" in state and sid in state["strategies"]:
+        strat = state["strategies"][sid]
+        strat["running"] = False
+        strat["status"] = "STOPPED"
+        running_any = any(s.get("running") for s in state.get("strategies", {}).values() if s.get("sid") != sid)
+        if not running_any:
+            state["running"] = False
+            state["strategy"] = None
+            state["active_pairs"] = []
+        log(f"Strategy {sid} stopped")
+
+def stop_all():
+    if "strategies" in state:
+        for sid, strat in state["strategies"].items():
+            strat["running"] = False
+            strat["status"] = "STOPPED"
+    state["running"] = False
+    state["strategy"] = None
+    state["active_pairs"] = []
+    for k in list(state.keys()):
+        if k.startswith("_rsi_peak_") or k.startswith("_bb_peak_"):
+            del state[k]
+    log("All strategies stopped")
+
 def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
-    if state["running"]:
-        # Multi-pair: if grid is already running, add new pair without restarting.
-        # Seed here rather than relying on run_grid so the dashboard gets history
-        # immediately and behavior is consistent across strategies.
-        if strategy == "grid" and pair not in state.get("active_pairs", []):
-            state["active_pairs"].append(pair)
-            seed_history(pair)
-            log("Added "+pair+" to active grids ("+str(len(state["active_pairs"]))+" total)")
-            return
-        log("Already running — stop first","WARN"); return
-    state["strategy"]=strategy
-    if order: state.update(order)
-    state["pair"]=pair
-    state["mode"]=mode
-    # Chart history is initialized on the shared bot-start path, not inside a
-    # strategy loop. This keeps startup history available for every strategy.
+    if "strategies" not in state:
+        state["strategies"] = {}
+        
+    sid = f"{strategy}_{pair}"
+    state["strategy"] = strategy
+    state["pair"] = pair
+    state["mode"] = mode
+    state["running"] = True
+    state["error"] = None
+    if exchange: state["exchange"] = exchange
+    if chain: state["chain"] = chain
+    else: state["chain"] = "solana"
+    
+    strategy_config = order if order else {}
+    if "paper_trading" not in strategy_config:
+        strategy_config["paper_trading"] = state.get("paper_trading", True)
+        
+    state["strategies"][sid] = {
+        "sid": sid,
+        "type": strategy,
+        "pair": pair,
+        "running": True,
+        "paused": False,
+        "config": strategy_config,
+        "status": "RUNNING",
+        "last_trade": None,
+        "log_tail": [],
+        "started_at": int(time.time()),
+    }
+    
     seed_history(pair)
-    if exchange: state["exchange"]=exchange
-    if chain: state["chain"]=chain
-    else: state["chain"]="solana"
-    state["running"]=True
-    state["error"]=None
-    t=threading.Thread(target=STRATEGIES.get(strategy,run_dca),daemon=True)
+    
+    target_fn = STRATEGIES.get(strategy, run_dca)
+    safe_fn = _safe_strategy_runner(target_fn)
+    t = threading.Thread(target=safe_fn, args=(sid,), name=sid, daemon=True)
+    state["strategies"][sid]["thread"] = t
     t.start()
-    log("Started "+strategy.upper()+" on "+pair+" via "+mode.upper()+((" / "+chain) if mode=="dex" else ""))
+    
+    chain_str = f" / {chain.upper()}" if (mode == "dex" and chain) else ""
+    log(f"Started {strategy.upper()} on {pair} via {mode.upper()}{chain_str} (sid: {sid})")
 
 def stop_bot():
     state["running"]=False
@@ -2964,6 +3239,10 @@ def stop_bot():
     for k in list(state.keys()):
         if k.startswith("_rsi_peak_") or k.startswith("_bb_peak_"):
             del state[k]
+    if "strategies" in state:
+        for sid, strat in state["strategies"].items():
+            strat["running"] = False
+            strat["status"] = "STOPPED"
     log("Bot stopped")
 
 # ── Dashboard ─────────────────────────────────────────────────────────────────
@@ -3251,7 +3530,9 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
 
   <div id="charts-container" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));justify-content:end;align-items:start;gap:16px;width:100%;margin-bottom:16px;box-sizing:border-box"></div>
   <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
-    <div id="chart-container" style="flex:1;min-width:0"></div>
+    <div id="chart-container" style="flex:1;min-width:0">
+      <div id="chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
+    </div>
     <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct" style="display:flex;align-items:center;gap:8px">
         Grid Details
@@ -3325,6 +3606,18 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div class="card" id="limit-order-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
       <div class="section-label">Limit Order Configuration</div>
+      <div class="config-grid">
+        <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
+        <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
+        <div class="config-field"><label>Order Type</label><select id="limit-type"><option value="limit">Limit</option><option value="market">Market</option></select></div>
+        <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
+        <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
+      </div>
+      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
+      <div id="limit-order-status" style="font-size:12px;margin-top:8px;line-height:1.6"></div>
+      <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
+    </div>
+
     <div class="card" id="ai-trading-card" style="display:none;margin:10px 0;padding:12px;background:var(--bg)">
       <div class="section-label">AI Trading Configuration</div>
       <div class="config-grid">
@@ -3332,6 +3625,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div class="config-field"><label>Max Leverage</label><input type="number" id="ai-max-leverage" min="1.0" max="5.0" step="0.1" value="3.0"/></div>
         <div class="config-field"><label>Max Total Exposure ($)</label><input type="number" id="ai-max-exposure" min="10" step="10" value="1000"/></div>
         <div class="config-field"><label>Max Simultaneous Positions</label><input type="number" id="ai-max-positions" min="1" max="5" step="1" value="3"/></div>
+        <div class="config-field"><label>Trading Mode</label><select id="ai-trade-mode"><option value="paper" selected>📋 PAPER</option><option value="live">🔴 LIVE</option></select></div>
       </div>
       <div style="margin-top:10px">
         <label style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim)">Whitelisted Tokens</label>
@@ -3343,17 +3637,6 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
           <label><input type="checkbox" value="WIF/USDC"/> WIF/USDC</label>
         </div>
       </div>
-    </div>
-
-      <div class="config-grid">
-        <div class="config-field"><label>Amount (USDC)</label><input type="number" id="limit-amount" min="0.01" step="0.01" value="10"/></div>
-        <div class="config-field"><label>Side</label><select id="limit-side"><option value="buy">Buy</option><option value="sell">Sell</option></select></div>
-        <div class="config-field"><label>Order Type</label><select id="limit-type"><option value="limit">Limit</option><option value="market">Market</option></select></div>
-        <div class="config-field"><label>Quote Token</label><select id="limit-quote"><option value="USDC">USDC</option><option value="USDT">USDT</option></select></div>
-        <div class="config-field"><label>Limit Price</label><input type="number" id="limit-price" min="0.000001" step="0.000001" placeholder="Required for limit"/></div>
-      </div>
-      <div id="limit-order-summary" style="font-size:11px;color:var(--dim)">Orders default to LIVE mode; PAPER is used only when explicitly enabled. Risk limits apply.</div>
-      <label style="display:block;margin-top:8px;color:var(--yellow);font-size:11px"><input type="checkbox" id="limit-confirm"/> I confirm this order, pair/mint, amount, price, and visible trading mode.</label>
     </div>
     <div style="display:flex;gap:8px;margin-bottom:12px;align-items:flex-end">
       <div style="flex:1">
@@ -3426,6 +3709,16 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     <div id="mt-result" style="margin-top:8px;font-size:12px;color:var(--dim)"></div>
   </div>
 
+  <div class="card" id="strategies-card">
+    <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
+      <span>Active Strategies</span>
+      <button class="btn" onclick="stopAll()" style="font-size:11px;color:var(--red);border-color:var(--red)44">🛑 Stop All</button>
+    </div>
+    <div id="strategies-list" style="margin-top:10px;display:flex;flex-direction:column;gap:10px">
+      <div style="color:var(--dim);text-align:center;padding:12px;font-size:12px">No active strategies running</div>
+    </div>
+  </div>
+
   <div class="card">
     <div class="ct" style="display:flex;justify-content:space-between;align-items:center">
       <span>Trade History</span>
@@ -3433,7 +3726,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     <div style="overflow-x:auto">
       <table>
-        <thead><tr><th>Pair</th><th>Action</th><th>Price</th><th>Amount</th><th>P&amp;L</th><th>Via</th></tr></thead>
+        <thead><tr><th>Pair</th><th>Strategy</th><th>Action</th><th>Price</th><th>Amount</th><th>P&amp;L</th><th>Via</th></tr></thead>
         <tbody id="trades-body"><tr><td colspan="7" style="color:var(--dim);text-align:center;padding:20px">No trades yet</td></tr></tbody>
       </table>
     </div>
@@ -3553,7 +3846,14 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
     gridLines.forEach(function(l) { chart.removeSeries(l); });
   } catch(e) { console.log("Grid remove error:", e); }
   gridLines = [];
-  if (!data || data.length < 2) return;
+  if (!data || data.length < 2) {
+    // Never silently keep showing the previous pair's candles: clear the
+    // series so the placeholder is visible instead of stale wrong-pair data.
+    try { if (candleSeries) candleSeries.setData([]); } catch(e) {}
+    showChartPlaceholder(pair || "", true);
+    return;
+  }
+  showChartPlaceholder(pair || "", false);
 
   // Update candles
   var candles = aggregateCandles(data, 60);
@@ -3570,9 +3870,10 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
   // Grid overlay
   if (!gridLevels || gridLevels.length < 2) return;
 
-  var midPrice = gridBuyZone;
-  var buyZone = gridLevels.filter(function(g) { return g <= midPrice; });
-  var sellZone = gridLevels.filter(function(g) { return g > midPrice; });
+  var midIdx = Math.floor(gridLevels.length / 2);
+  var midPrice = gridLevels[midIdx];
+  var buyZone = gridLevels.filter(function(g, idx) { return idx <= midIdx; });
+  var sellZone = gridLevels.filter(function(g, idx) { return idx > midIdx; });
 
   try {
     // Buy zone lines (green)
@@ -3615,6 +3916,37 @@ function updateChart(data, gridLevels, gridBuyZone, pair) {
 }
 
 
+function showChartPlaceholder(pair, show) {
+  var el = document.getElementById("chart-placeholder");
+  if (!el) return;
+  if (show) {
+    el.textContent = "No price data for " + pair + " yet — fetching…";
+    el.style.display = "flex";
+  } else {
+    el.style.display = "none";
+  }
+}
+function fetchPairChartHistory(pair, levels, buyZone) {
+  // Fetches candle history for a pair the server has not seeded yet (arbitrary
+  // dropdown pair) and renders it immediately. The server stores the history
+  // into state.price_history_pairs, so the 3s /state refresh then serves it
+  // directly. Cooldown prevents hammering the endpoint (which seeds server-
+  // side) when a pair keeps returning no data.
+  if (!window._pairChartFetches) window._pairChartFetches = {};
+  var nowTs = Date.now();
+  var last = window._pairChartFetches[pair] || 0;
+  if (nowTs - last < 15000) return;
+  window._pairChartFetches[pair] = nowTs;
+  apiFetch("/chart_history?pair=" + encodeURIComponent(pair)).then(function(r) { return r.json(); }).then(function(d) {
+    if (d && d.history && d.history.length >= 2) {
+      updateChart(d.history, levels, buyZone, pair);
+    } else {
+      updateChart([], levels, buyZone, pair);
+    }
+  }).catch(function() {
+    updateChart([], levels, buyZone, pair);
+  });
+}
 function showToast(msg, type) {
   var c = document.getElementById("toast-container");
   var t = document.createElement("div");
@@ -3803,6 +4135,7 @@ function startBot() {
     var leverage = document.getElementById("ai-max-leverage").value;
     var exposure = document.getElementById("ai-max-exposure").value;
     var positions = document.getElementById("ai-max-positions").value;
+    var ai_mode = document.getElementById("ai-trade-mode").value;
     var checked_symbols = [];
     var checkboxes = document.querySelectorAll("#ai-whitelist-checkboxes input[type='checkbox']:checked");
     checkboxes.forEach(function(cb) {
@@ -3811,7 +4144,7 @@ function startBot() {
     if (checked_symbols.length === 0) {
       checked_symbols.push(sel.pair);
     }
-    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(","));
+    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(",")) + "&ai_mode=" + ai_mode;
   }
   if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
     var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
@@ -3824,10 +4157,27 @@ function startBot() {
     if (!document.getElementById("limit-confirm").checked) { showToast("Confirm order details and trading mode", "error"); return; }
     params += "&amount_usdc="+encodeURIComponent(amount)+"&limit_price="+encodeURIComponent(price||0)+"&order_type="+typ+"&side="+side+"&trade_mode=live&confirm=true";
   }
-  apiFetch("/start?" + params).then(function(r) { return r.json(); }).then(function(d) {
+  apiFetch("/start?" + params).then(function(r) {
+    return r.json().then(function(d) { return {ok: r.ok, body: d}; });
+  }).then(function(res) {
+    var d = res.body || {};
+    // Never claim success when the server returned a non-OK or an error body
+    // (e.g. 400 {"error":"amount exceeds max position"}).
+    if (!res.ok || d.error) {
+      showToast(d.error || "Failed to start", "error");
+      return;
+    }
+    if (!d.ok) {
+      // 200 without ok:true means the strategy did not actually start; the
+      // 3s refresh surfaces the log line in the detail-card warning.
+      showToast("Bot did not start — check status", "error");
+      return;
+    }
     showToast("Bot started: " + sel.strat.toUpperCase(), "info");
     document.getElementById("pause-btn").style.display = "inline-block";
     document.getElementById("pause-btn").textContent = "⏸ Pause";
+  }).catch(function() {
+    showToast("Failed to start: server unreachable", "error");
   });
 }
 
@@ -3967,6 +4317,133 @@ function togglePaper() {
   });
 }
 
+function updateLimitOrderStatus(d) {
+  var card = document.getElementById("limit-order-card");
+  var statusEl = document.getElementById("limit-order-status");
+  if (!card || !statusEl) return;
+  var isLimit = sel.strat === "limit_buy" || sel.strat === "limit_sell";
+  if (!isLimit) { statusEl.innerHTML = ""; return; }
+  var viewPair = sel.pair || d.pair || "";
+  var marketPrice = (d.price && d.price > 0) ? d.price : 0;
+  if (!marketPrice && d.price_history_pairs && d.price_history_pairs[viewPair] && d.price_history_pairs[viewPair].length) {
+    var ph = d.price_history_pairs[viewPair];
+    marketPrice = ph[ph.length - 1].value;
+  }
+  var lt = d.last_trade || {};
+  var side = d.limit_side || "buy";
+  var amount = d.limit_amount_usdc || 0;
+  var lprice = d.limit_price || 0;
+  var otype = d.limit_order_type || "limit";
+  var pair = d.pair || viewPair;
+  var mode = d.paper_trading ? "PAPER" : "LIVE";
+  var html = "";
+  // ARMED — the limit order is live and watching the price
+  if (d.running && (d.strategy === "limit_buy" || d.strategy === "limit_sell")) {
+    var cmp = side === "buy" ? "\u2264" : "\u2265";
+    html += '<div style="color:#ffd43b">\u26A1 ARMED \u2014 ' + side.toUpperCase() + ' $' + amount + ' of ' + pair + ' at limit $' + lprice + ' (' + mode + ') \u00B7 ' + otype + ' \u00B7 waiting for price ' + cmp + ' $' + lprice + '</div>';
+  }
+  // Terminal result from the last attempted limit order
+  if (lt.status === "confirmed") {
+    html += '<div style="color:#00ff9d">\u2713 FILLED @ $' + (lt.price != null ? lt.price : "\u2014") + '</div>';
+  } else if (lt.status === "rejected") {
+    html += '<div style="color:#ff6b6b">\u2717 REJECTED: ' + (lt.error || "order failed") + '</div>';
+  }
+  if (marketPrice > 0) {
+    html += '<div style="color:var(--dim);margin-top:2px">Current ' + pair + ': $' + marketPrice + '</div>';
+  }
+  // Already-running warning from the server log tail (see checkAlreadyRunning)
+  if (d.log && d.log.length) {
+    for (var i = 0; i < Math.min(d.log.length, 10); i++) {
+      if (d.log[i].indexOf("Already running") !== -1) {
+        html += '<div style="color:#ff6b6b">\u26A0 Already running \u2014 stop first</div>';
+        break;
+      }
+    }
+  }
+  statusEl.innerHTML = html;
+}
+function checkAlreadyRunning(d) {
+  if (!d || !d.log || !d.log.length) return;
+  var found = false;
+  for (var i = 0; i < Math.min(d.log.length, 10); i++) {
+    if (d.log[i].indexOf("Already running") !== -1) { found = true; break; }
+  }
+  // Warn once per occurrence so the 3s refresh does not spam the toast.
+  if (found && !window._alreadyRunningWarned) {
+    window._alreadyRunningWarned = true;
+    showToast("Already running \u2014 stop first", "error");
+  } else if (!found) {
+    window._alreadyRunningWarned = false;
+  }
+}
+function stopStrategy(sid) {
+  apiFetch("/stop?sid=" + encodeURIComponent(sid)).then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok || d.success) {
+      showToast("Strategy stopped", "info");
+      refresh();
+    } else {
+      showToast(d.error || "Failed to stop", "error");
+    }
+  });
+}
+function stopAll() {
+  apiFetch("/stop_all").then(function(r) { return r.json(); }).then(function(d) {
+    if (d.ok || d.success) {
+      showToast("All strategies stopped", "info");
+      refresh();
+    } else {
+      showToast(d.error || "Failed to stop all", "error");
+    }
+  });
+}
+function updateStrategiesList(d) {
+  var container = document.getElementById("strategies-list");
+  if (!container) return;
+  var strats = d.strategies || {};
+  var keys = Object.keys(strats);
+  var runningKeys = keys.filter(function(k) { return strats[k].running; });
+  if (runningKeys.length === 0) {
+    container.innerHTML = '<div style="color:var(--dim);text-align:center;padding:12px;font-size:12px">No active strategies running</div>';
+    return;
+  }
+  var html = '';
+  runningKeys.forEach(function(sid) {
+    var s = strats[sid];
+    var isPaper = s.config && s.config.paper_trading;
+    var modeLabel = isPaper ? '<span style="color:var(--yellow);font-size:10px;font-weight:700;background:var(--yellow)11;padding:2px 6px;border-radius:4px;border:1px solid var(--yellow)22">📋 PAPER</span>' : '<span style="color:var(--red);font-size:10px;font-weight:700;background:var(--red)11;padding:2px 6px;border-radius:4px;border:1px solid var(--red)22">🔴 LIVE</span>';
+    var statusColor = "var(--dim)";
+    if (s.status === "RUNNING") statusColor = "var(--accent)";
+    else if (s.status === "ARMED") statusColor = "var(--blue)";
+    else if (s.status === "FILLED") statusColor = "var(--accent)";
+    else if (s.status === "REJECTED") statusColor = "var(--red)";
+    else if (s.status === "STOPPED") statusColor = "var(--dim)";
+    
+    var statusBadge = '<span style="color:' + statusColor + ';font-size:11px;font-weight:700;background:' + statusColor + '11;padding:2px 6px;border-radius:4px;border:1px solid ' + statusColor + '22">' + (s.status || "RUNNING") + '</span>';
+    
+    var paramsText = '';
+    if (s.type === "grid") {
+      paramsText = "Risk: " + (s.config.risk_pct || 2) + "%, Max Pos: $" + (s.config.max_pos || 500);
+    } else if (s.type === "limit_buy" || s.type === "limit_sell") {
+      paramsText = "Amount: $" + (s.config.limit_amount_usdc || 0) + ", Price: $" + (s.config.limit_price || 0) + ", Type: " + (s.config.limit_order_type || "limit");
+    } else if (s.type === "ai_trading") {
+      paramsText = "Risk: " + (s.config.risk_pct || 1) + "%, Max Leverage: " + (s.config.max_leverage || 3) + ", Max Exposure: $" + (s.config.max_total_exposure || 5000);
+    } else {
+      paramsText = "Risk: " + (s.config.risk_pct || 2) + "%";
+    }
+
+    html += '<div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;padding:12px;display:flex;justify-content:space-between;align-items:center;font-size:12px">';
+    html += '  <div>';
+    html += '    <div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:8px">' + s.type.toUpperCase() + ' <span style="font-weight:400;color:var(--text2)">' + s.pair + '</span> ' + modeLabel + ' ' + statusBadge + '</div>';
+    html += '    <div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>';
+    html += '  </div>';
+    html += '  <div>';
+    html += '    <button class="btn" onclick="stopStrategy('' + sid + '')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>';
+    html += '  </div>';
+    html += '</div>';
+  });
+  container.innerHTML = html;
+}
+
 function refresh() {
   apiFetch("/state").then(function(r) { return r.json(); }).then(function(d) {
     try {
@@ -3991,6 +4468,10 @@ function refresh() {
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
     document.getElementById("s-price").textContent = d.price > 0 ? "$" + (d.price||0).toFixed(4) : "—";
+    // Live limit-order status card + already-running warning (dashboard only)
+    updateLimitOrderStatus(d);
+    checkAlreadyRunning(d);
+    updateStrategiesList(d);
     // Multi-pair mode: show per-pair charts when 2+ active pairs
     var multiPair = activePairs.length >= 2;
     var singleRow = document.getElementById("single-chart-row");
@@ -4027,6 +4508,7 @@ function refresh() {
             '<div id="' + cardId + '-chart" style="height:200px"></div>' +
             '<div id="' + cardId + '-info" style="font-size:11px;color:var(--dim);margin-top:8px"></div>';
           chartsWrap.appendChild(card);
+          card._history = ph.slice();
           // Create chart after DOM layout (ensures proper width). Use an IIFE
           // to isolate card, pair, and history from subsequent refresh iterations.
           (function(ownerCard, ownerPair, ownerHistory) {
@@ -4049,11 +4531,12 @@ function refresh() {
             });
             // The initial refresh may have run before this deferred callback.
             // Replay the captured history now that the series is initialized.
-            setMultiPairChartData(ownerCard, ownerHistory, chartEl);
+            setMultiPairChartData(ownerCard, ownerCard._history || ownerHistory, chartEl);
             } catch(e) { console.log("Chart error for " + ownerPair, e); }
           }, 50);
           })(card, pair, ph.slice());
         }
+        card._history = ph.slice();
         // Update chart data using the chart instance owned by this card. The
         // deferred chart creation callback's `ch` is out of scope here; using it
         // raised ReferenceError and stopped the pair loop, leaving ETH blank.
@@ -4094,35 +4577,45 @@ function refresh() {
           var curP = lastPrice || 0;
           var trailActive = gp.trailing_sell_active || false;
           var html = '<div style="font-size:11px;margin-top:8px">';
-          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + '</span>';
+          var buySpacing = gl.length >= 2 ? (gl[1] - gl[0]) : 0;
+          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + ' (2× sell gap: $' + (buySpacing * 2).toFixed(2) + ')</span>';
           if (trailActive) html += ' <span style="color:#ff6b6b">⚠ Trailing</span>';
           html += '<div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:2px;font-size:10px">';
           for (var i = 0; i < gl.length; i++) {
             var isFilled = gp.filled && gp.filled[i] != null;
             var isMid = i === midIdx;
-            var isBuy = i < midIdx;
-            var color = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
-            var marker = isFilled ? "●" : isMid ? "◇" : isBuy ? "△" : "▽";
+            var isMidMinusOne = i === (midIdx - 1);
+            var isBuyZone = i <= midIdx;
+            var color = isMid ? "#ffd43b" : isMidMinusOne ? "#ffbc42" : isBuyZone ? "#00ff9d" : "#ff6b6b";
+            var marker = isFilled ? "●" : isMid ? "◆" : isMidMinusOne ? "◇" : isBuyZone ? "▲" : "▼";
             html += '<span style="color:' + color + '">' + marker + '$' + gl[i].toFixed(2) + '</span>';
           }
-          html += '</div></div>';
+          html += "</div></div>";
           infoEl.innerHTML = html;
         }
       });
     }
     if (!multiPair) {
-      // Show grid for currently selected pair
+      // Show grid for currently selected pair. Arbitrary dropdown pairs have
+      // no history in /state until seeded, so fetch it on demand and render
+      // the selected pair's own candles — never stale candles from another.
       var viewPair = sel.pair || d.pair || "SOL/USDC";
       var pairHistory = d.price_history_pairs && d.price_history_pairs[viewPair];
-      var chartHistory = (pairHistory && pairHistory.length) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
+      var chartHistory = (pairHistory && pairHistory.length >= 2) ? pairHistory : ((viewPair === d.pair) ? d.price_history : []);
       var gp = d.grid_pairs && d.grid_pairs[viewPair];
       var levels = gp ? gp.grids : d.grid_levels;
-      var buyZone = gp ? gp.grids[gp.mid_idx] : d.grid_buy_zone;
-      updateChart(chartHistory, levels, buyZone, viewPair);
+      var buyZone = gp ? gp.grids[gp.mid_idx + 1] : d.grid_buy_zone;
+      if (chartHistory && chartHistory.length >= 2) {
+        updateChart(chartHistory, levels, buyZone, viewPair);
+      } else {
+        // No history for the selected pair yet: clear stale candles and fetch.
+        updateChart([], levels, buyZone, viewPair);
+        fetchPairChartHistory(viewPair, levels, buyZone);
+      }
       // Override grid details for selected pair
       if (gp) {
         d.grid_levels = gp.grids;
-        d.grid_buy_zone = gp.grids[gp.mid_idx];
+        d.grid_buy_zone = gp.grids[gp.mid_idx + 1];
         d.grid_filled = gp.filled;
         d.grid_mid_idx = gp.mid_idx;
         d.grid_trailing_active = gp.trailing_sell_active;
@@ -4175,7 +4668,7 @@ function refresh() {
       d.trades_list.forEach(function(t) {
         var actionClass = t.action === "buy" ? "buy" : t.action === "sell" ? "sell" : "stop";
         var pnlBadge = t.pnl != null ? pnlHtml(t.pnl) : "—";
-        html += "<tr><td>" + (t.pair || "—") + "</td><td class='" + actionClass + "'>" + t.action.toUpperCase() + "</td><td>$" + t.price + "</td><td>" + t.amount + "</td><td>" + pnlBadge + "</td><td>" + (t.via || "—") + "</td></tr>";
+        html += "<tr><td>" + (t.pair || "—") + "</td><td>" + (t.strategy || "—") + "</td><td class='" + actionClass + "'>" + t.action.toUpperCase() + "</td><td>$" + t.price + "</td><td>" + t.amount + "</td><td>" + pnlBadge + "</td><td>" + (t.via || "—") + "</td></tr>";
         // Log to trade log for CSV export
         tradeLog.push({time: t.time, action: t.action, price: t.price, amount: t.amount, pnl: t.pnl, via: t.via || "", strategy: d.strategy, pair: t.pair || d.pair});
       });
@@ -4203,7 +4696,7 @@ function refresh() {
       var trailActive = d.grid_trailing_active || false;
       var trailHigh = d.grid_trailing_high || 0;
       var trailingPct = 0.5;
-      document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "\u23F8 Waiting for sell zone";
+      document.getElementById("gdt-status").textContent = trailActive ? "🔴 TRAILING SELL ACTIVE" : "⏸ Waiting for sell zone";
       var html = '<div style="margin-top:12px">';
       var minP = gl[0], maxP = gl[gl.length-1], range = maxP - minP;
       var curPct = range > 0 ? ((curPrice - minP) / range * 100) : 50;
@@ -4213,41 +4706,62 @@ function refresh() {
       html += '<span style="color:#00ff9d">$' + minP.toFixed(0) + '</span>';
       html += '<span style="color:#ffd43b">Mid $' + midPrice.toFixed(0) + '</span>';
       html += '<span style="color:#ff6b6b">$' + maxP.toFixed(0) + '</span></div></div>';
-      html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;font-size:11px;color:var(--dim);padding:4px 8px;text-transform:uppercase;letter-spacing:0.5px">';
-      html += '<span>Zone</span><span>Price</span><span>Status</span><span style="text-align:right">Dist</span></div>';
+      html += '<div style="display:grid;grid-template-columns:80px 80px 80px 1fr 80px;gap:4px;font-size:11px;color:var(--dim);padding:4px 8px;text-transform:uppercase;letter-spacing:0.5px">';
+      html += '<span>Zone</span><span>Price</span><span>Gap</span><span>Status</span><span style="text-align:right">Dist</span></div>';
       for (var i = gl.length - 1; i >= 0; i--) {
         var isMid = i === midIdx;
-        var isBuy = i < midIdx;
+        var isMidMinusOne = i === (midIdx - 1);
+        var isBuyZone = i <= midIdx;
         var isFilled = filled[i] != null;
         var isCur = (i < gl.length - 1 && curPrice >= gl[i] && curPrice < gl[i+1]) || (i === gl.length - 1 && curPrice >= gl[i]);
-        var zone = isMid ? "MID" : isBuy ? "BUY" : "SELL";
-        var zoneColor = isMid ? "#ffd43b" : isBuy ? "#00ff9d" : "#ff6b6b";
-        var bgColor = isMid ? "#ffd43b08" : isBuy ? "#00ff9d08" : "#ff6b6b08";
-        var borderColor = isMid ? "#ffd43b44" : isBuy ? "#00ff9d44" : "#ff6b6b44";
-        if (isCur) { zone = "\u25CF"; zoneColor = "#3399ff"; bgColor = "#3399ff10"; borderColor = "#3399ff"; }
+        
+        var zone = "SELL";
+        var zoneColor = "#ff6b6b";
+        var bgColor = "#ff6b6b08";
+        var borderColor = "#ff6b6b44";
+        
+        if (isBuyZone) {
+          if (isMid) {
+            zone = "MID (BUY)";
+            zoneColor = "#ffd43b";
+            bgColor = "#ffd43b08";
+            borderColor = "#ffd43b44";
+          } else if (isMidMinusOne) {
+            zone = "MID-1 (BUY)";
+            zoneColor = "#ffbc42";
+            bgColor = "#ffbc4208";
+            borderColor = "#ffbc4244";
+          } else {
+            zone = "BUY";
+            zoneColor = "#00ff9d";
+            bgColor = "#00ff9d08";
+            borderColor = "#00ff9d44";
+          }
+        }
+        if (isCur) { zone = "●"; zoneColor = "#3399ff"; bgColor = "#3399ff10"; borderColor = "#3399ff"; }
         if (isFilled) { zoneColor = "#00ff9d"; bgColor = "#00ff9d15"; borderColor = "#00ff9d"; }
+        
+        var gapVal = i > 0 ? (gl[i] - gl[i-1]) : 0;
+        var gapStr = "—";
+        var gapColor = "var(--dim)";
+        if (i > 0) {
+          var isSellGap = i > midIdx;
+          var multiplier = isSellGap ? " (2x)" : " (1x)";
+          gapColor = isSellGap ? "#ff6b6b" : "#00ff9d";
+          gapStr = "$" + gapVal.toFixed(2) + multiplier;
+        }
+        
         var dist = curPrice > 0 ? (gl[i] - curPrice) : 0;
-        var distStr = dist > 0 ? "+$" + dist.toFixed(0) : dist < 0 ? "-$" + Math.abs(dist).toFixed(0) : "\u2014";
-        var status = isFilled ? "\u2705 $" + filled[i].price.toFixed(0) : isCur ? "\u2190 Current" : isMid ? "Buy Zone \u2191" : "Waiting";
-        if (isFilled && trailActive && i < midIdx) status = "\u2705 Trailing...";
-        if (isFilled && !trailActive && i < midIdx) status = "\u2705 Filled";
-        html += '<div style="display:grid;grid-template-columns:50px 90px 1fr 80px;gap:4px;align-items:center;padding:5px 8px;border-radius:4px;margin-bottom:2px;font-size:12px;background:' + bgColor + ';border-left:2px solid ' + borderColor + '">';
-        html += '<span style="font-weight:600;color:' + zoneColor + ';font-size:10px;text-transform:uppercase">' + zone + '</span>';
+        var distStr = dist > 0 ? "+$" + dist.toFixed(0) : dist < 0 ? "-$" + Math.abs(dist).toFixed(0) : "—";
+        var status = isFilled ? "✅ $" + filled[i].price.toFixed(0) : isCur ? "← Current" : isBuyZone ? "Buy Zone" : "Waiting";
+        if (isFilled && trailActive && isBuyZone) status = "✅ Trailing...";
+        if (isFilled && !trailActive && isBuyZone) status = "✅ Filled";
+        html += '<div style="display:grid;grid-template-columns:80px 80px 80px 1fr 80px;gap:4px;align-items:center;padding:5px 8px;border-radius:4px;margin-bottom:2px;font-size:12px;background:' + bgColor + ';border-left:2px solid ' + borderColor + '">';
+        html += '<span style="font-weight:600;color:' + zoneColor + ';font-size:9px;text-transform:uppercase">' + zone + '</span>';
         html += '<span style="font-family:monospace;font-weight:600">$' + gl[i].toFixed(2) + '</span>';
+        html += '<span style="font-family:monospace;font-weight:600;color:' + gapColor + ';font-size:11px">' + gapStr + '</span>';
         html += '<span style="color:' + (isFilled ? "#00ff9d" : isCur ? "#3399ff" : "var(--text)") + '">' + status + '</span>';
         html += '<span style="text-align:right;font-family:monospace;font-size:11px;color:' + (dist > 0 ? "#ff6b6b" : dist < 0 ? "#00ff9d" : "var(--dim)") + '">' + distStr + '</span></div>';
-      }
-      html += '</div>';
-      if (trailActive && trailHigh > 0) {
-        var sellTrigger = trailHigh * (1 - trailingPct / 100);
-        var distToSell = curPrice - sellTrigger;
-        html += '<div style="margin-top:12px;padding:10px 12px;background:#ffd43b08;border:1px solid #ffd43b33;border-radius:6px">';
-        html += '<div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">';
-        html += '<span>🎯</span><span style="font-weight:600;color:#ffd43b">Take-profit triggered \u2014 waiting for pullback</span></div>';
-        html += '<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;font-size:12px">';
-        html += '<div><span style="color:var(--dim);font-size:10px">Peak</span><div style="font-weight:600;font-family:monospace;color:#ffd43b">$' + trailHigh.toFixed(2) + '</div></div>';
-        html += '<div><span style="color:var(--dim);font-size:10px">Sell Trigger</span><div style="font-weight:600;font-family:monospace;color:#ff6b6b">$' + sellTrigger.toFixed(2) + '</div></div>';
-        html += '<div><span style="color:var(--dim);font-size:10px">Distance</span><div style="font-weight:600;font-family:monospace;color:' + (distToSell > 0 ? "#ffd43b" : "#00ff9d") + '">$' + Math.abs(distToSell).toFixed(2) + '</div></div></div></div>';
       }
       document.getElementById("grid-details-body").innerHTML = html;
     } else {
@@ -4388,6 +4902,14 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
                 return
             self.respond(200,"application/json",json.dumps(state).encode())
+        elif path=="/chart_history":
+            if not self._auth_or_401(): return
+            pair = params.get("pair", [""])[0]
+            history = chart_history_for(pair)
+            body = {"ok": True, "pair": pair, "history": history}
+            if not history:
+                body["error"] = "No price data for " + pair + " yet"
+            self.respond(200,"application/json",json.dumps(body).encode())
         elif path=="/limit_orders/status":
             if not self._auth_or_401(): return
             self.respond(200,"application/json",json.dumps(limit_orders_addon.status() if limit_orders_addon else {"valid":False}).encode())
@@ -4432,6 +4954,9 @@ class Handler(BaseHTTPRequestHandler):
                         }).encode()); return
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
+            pair_param = params.get("pair",[cfg["pair"]])[0]
+            
+            order_cfg = {}
             if start_strategy == "ai_trading":
                 state["config"]["risk_pct"] = float(params.get("risk_pct", [1.0])[0])
                 state["config"]["max_leverage"] = float(params.get("max_leverage", [3.0])[0])
@@ -4442,8 +4967,34 @@ class Handler(BaseHTTPRequestHandler):
                 if ai_whitelist_raw:
                     state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]
                 else:
-                    state["ai_whitelisted_symbols"] = [params.get("pair",[cfg["pair"]])[0]]
-            if start_strategy in ("limit_buy", "limit_sell"):
+                    state["ai_whitelisted_symbols"] = [pair_param]
+                    
+                ai_mode = params.get("ai_mode", ["paper"])[0]
+                ai_paper = (ai_mode != "live")
+                
+                if not ai_paper:
+                    has_keys = False
+                    chain_choice = params.get("chain", ["solana"])[0]
+                    if chain_choice == "solana":
+                        if cfg.get("sol_wallet") and _secret("SOL_PRIVATE_KEY"):
+                            has_keys = True
+                    else:
+                        if cfg.get("wallet") and _secret("PRIVATE_KEY"):
+                            has_keys = True
+                    if not has_keys:
+                        self.respond(400, "application/json", json.dumps({"error": "Cannot start in LIVE mode: Wallet/API keys are not configured."}).encode())
+                        return
+                        
+                order_cfg = {
+                    "paper_trading": ai_paper,
+                    "risk_pct": float(state["config"].get("risk_pct", 1.0)),
+                    "max_leverage": float(state["config"].get("max_leverage", 3.0)),
+                    "max_total_exposure": float(state["config"].get("max_total_exposure", 1000.0)),
+                    "max_simultaneous_positions": int(state["config"].get("max_simultaneous_positions", 3)),
+                    "auto_compound": state["config"].get("auto_compound", True),
+                    "ai_whitelist": state["ai_whitelisted_symbols"]
+                }
+            elif start_strategy in ("limit_buy", "limit_sell"):
                 requested_side = params.get("side", ["buy"])[0]
                 expected_side = "buy" if start_strategy == "limit_buy" else "sell"
                 if requested_side != expected_side:
@@ -4457,18 +5008,49 @@ class Handler(BaseHTTPRequestHandler):
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
                 if not ok:
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
+                order_cfg = {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode, "paper_trading": (effective_mode == "paper")}
+            else:
+                order_cfg = {
+                    "paper_trading": state.get("paper_trading", True),
+                    "risk_pct": float(state["config"].get("risk_pct", 2.0)),
+                    "max_pos": float(state["config"].get("max_pos", 500.0)),
+                }
+
+            sid = f"{start_strategy}_{pair_param}"
+            if "strategies" in state and sid in state["strategies"] and state["strategies"][sid].get("running"):
+                self.respond(400, "application/json", json.dumps({"error": "Strategy already running on this pair"}).encode())
+                return
+                
+            current_balance = get_available_balance()
+            sum_reserved = sum(get_reserved_capital(s["type"], s["config"], current_balance) for s in state.get("strategies", {}).values() if s.get("running"))
+            new_reserved = get_reserved_capital(start_strategy, order_cfg, current_balance)
+            
+            if sum_reserved + new_reserved > current_balance:
+                self.respond(400, "application/json", json.dumps({
+                    "error": f"Insufficient balance: strategy requires ${new_reserved:.2f} but only ${current_balance - sum_reserved:.2f} remains available (total balance: ${current_balance:.2f})"
+                }).encode())
+                return
+
             start_bot(
                 start_strategy,
-                params.get("pair",[cfg["pair"]])[0],
+                pair_param,
                 params.get("mode",["dex"])[0],
                 params.get("exchange",[cfg["exchange"]])[0],
                 params.get("chain",["solana"])[0],
-                {"limit_amount_usdc": float(params.get("amount_usdc",[0])[0] or 0), "limit_price": float(params.get("limit_price",[0])[0] or 0), "limit_order_type": params.get("order_type",["limit"])[0], "limit_side": params.get("side",["buy"])[0], "custom_mint": params.get("custom_mint", [""])[0], "custom_symbol": params.get("custom_symbol", [""])[0].upper(), "quote_token": params.get("quote_token", ["USDC"])[0], "effective_mode": effective_mode} if params.get("strategy",[""])[0] in ("limit_buy","limit_sell") else None,
+                order_cfg
             )
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/stop":
             if not self._auth_or_401(): return
-            stop_bot()
+            sid = params.get("sid", [""])[0]
+            if sid:
+                stop_strategy(sid)
+            else:
+                stop_bot()
+            self.respond(200,"application/json",b'{"ok":true}')
+        elif path=="/stop_all":
+            if not self._auth_or_401(): return
+            stop_all()
             self.respond(200,"application/json",b'{"ok":true}')
         elif path=="/backtest":
             if not self._auth_or_401(): return
@@ -4510,7 +5092,7 @@ class Handler(BaseHTTPRequestHandler):
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
                     if g <= pr < ng:
-                        is_buy = i < mid_idx
+                        is_buy = i <= mid_idx
                         if is_buy and i not in filled:
                             filled[i] = {"price":pr,"amount":1}
                         elif not is_buy:
@@ -4559,7 +5141,7 @@ class Handler(BaseHTTPRequestHandler):
                 amt = round(sz/wprice,6)
                 if place_order(wpair,"buy",amt):
                     for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                        if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
                             record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
@@ -4672,7 +5254,7 @@ class Handler(BaseHTTPRequestHandler):
                 amt = round(sz/wprice,6)
                 if place_order(wpair,"buy",amt):
                     for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                        if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
                             record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
@@ -4731,7 +5313,7 @@ class Handler(BaseHTTPRequestHandler):
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
                     if g <= pr < ng:
-                        is_buy = i < mid_idx
+                        is_buy = i <= mid_idx
                         if is_buy and i not in filled:
                             filled[i] = {"price":pr,"amount":1}
                         elif not is_buy:
@@ -4887,7 +5469,7 @@ class Handler(BaseHTTPRequestHandler):
                 amt = round(sz/wprice,6)
                 if place_order(wpair,"buy",amt):
                     for i,g in enumerate(grids[:-1]):
-                        if g <= wprice < grids[i+1] and i < mid_idx and i not in filled:
+                        if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
                             state["grid_pairs"][wpair]["filled"] = filled
                             record_trade("WEBHOOK-BUY",wprice,amt, pair=wpair)
@@ -4946,7 +5528,7 @@ class Handler(BaseHTTPRequestHandler):
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
                     if g <= pr < ng:
-                        is_buy = i < mid_idx
+                        is_buy = i <= mid_idx
                         if is_buy and i not in filled:
                             filled[i] = {"price":pr,"amount":1}
                         elif not is_buy:
