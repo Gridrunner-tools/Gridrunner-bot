@@ -3258,9 +3258,9 @@ def run_ai_trading():
     engine = AITradingEngine(risk_config, whitelist)
     state["ai_engine"] = engine
     
-    engine.start(LiveMarketDataProvider(), LiveExecutionAdapter(), interval_sec=10.0)
+    engine.start(LiveMarketDataProvider(), LiveExecutionAdapter(), interval_sec=5.0)
     sid = threading.current_thread().name
-    log("AI Trading engine started - scanning market every 10s.")
+    log("AI Trading engine started - scanning market every 5s.")
     
     try:
         while state["running"] and state["strategy"] == "ai_trading":

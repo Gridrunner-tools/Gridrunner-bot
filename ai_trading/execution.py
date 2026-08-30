@@ -175,7 +175,7 @@ class AITradingEngine:
             else:
                 self.log_event(f"Failed to execute exit trade for {symbol}!")
 
-    def start(self, market_data_provider: Any, execution_adapter: Any, interval_sec: float = 10.0):
+    def start(self, market_data_provider: Any, execution_adapter: Any, interval_sec: float = 5.0):
         """Start the background execution thread loop."""
         if self.running:
             return
