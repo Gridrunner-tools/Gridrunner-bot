@@ -11,7 +11,8 @@ import threading
 import time
 
 from main import (
-    state, log, _mark_strategy_stopped, _safe_strategy_runner, DASHBOARD,
+    state, log, _mark_strategy_stopped, _safe_strategy_runner, record_trade,
+    DASHBOARD,
 )
 
 
@@ -127,6 +128,24 @@ class TestStrategyLogTail(unittest.TestCase):
     def test_dashboard_card_renders_log_tail(self):
         self.assertIn("s.log_tail", DASHBOARD)
         self.assertIn("logLines", DASHBOARD)
+
+    def test_record_trade_logs_with_sid(self):
+        sid = "grid_SOL/USDC"
+        self._register(sid)
+        self._run_in_strategy_thread(sid, record_trade, "GRID-BUY", 100.0, 0.5, None, "SOL/USDC")
+        tail = state["strategies"][sid]["log_tail"]
+        self.assertTrue(any("[TRADE] GRID-BUY" in e for e in tail),
+                        "record_trade must log a [TRADE] line to the strategy thread")
+        self.assertTrue(any("[grid_SOL/USDC]" in e for e in tail),
+                        "record_trade must include the sid tag")
+
+    def test_record_trade_logs_with_pnl(self):
+        sid = "grid_SOL/USDC"
+        self._register(sid)
+        self._run_in_strategy_thread(sid, record_trade, "GRID-SELL", 105.0, 0.5, 2.50, "SOL/USDC")
+        tail = state["strategies"][sid]["log_tail"]
+        self.assertTrue(any("PnL=$2.50" in e for e in tail),
+                        "record_trade must include PnL when present")
 
 
 def test_strategy_log_tail_all():
