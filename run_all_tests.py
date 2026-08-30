@@ -42,6 +42,7 @@ run('test_base_buy_safety_fixes')
 run('test_grid_stuck_running_fixes')
 run('test_ai_trading')
 run('test_concurrent_strategies')
+run('test_dashboard_js')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
 print("\nALL SUITES PASS")

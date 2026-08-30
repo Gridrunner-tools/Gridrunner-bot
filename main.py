@@ -4437,7 +4437,7 @@ function updateStrategiesList(d) {
     html += '    <div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>';
     html += '  </div>';
     html += '  <div>';
-    html += '    <button class="btn" onclick="stopStrategy('' + sid + '')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>';
+    html += `    <button class="btn" onclick="stopStrategy('${sid}')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px">&#9209; Stop</button>`;
     html += '  </div>';
     html += '</div>';
   });
