@@ -2067,7 +2067,9 @@ def place_order(pair, side, amount, grid_idx=None):
     else:
         success = bool(cex_place_order(pair, side, amount))
         
-    if not success:
+    if success:
+        log(f"[ORDER_FILLED] {side.upper()} {pair} amount={amount}", "INFO")
+    else:
         log(f"ORDER FAILED: swap execution returned failure for {side.upper()} {pair} {amount}", "WARN")
         
     return success
@@ -2091,6 +2093,9 @@ def record_trade(side, price, amount, pnl=None, pair=None):
     else:
         trade["strategy"] = state.get("strategy", "") or ""
         trade["sid"] = ""
+    tag = (" [" + trade["sid"] + "]") if trade.get("sid") else ""
+    pnl_str = (f" PnL=${pnl:.2f}") if pnl is not None else ""
+    log(f"[TRADE] {side} {_pair} @ ${price} x {amount}{pnl_str}{tag}")
     with _state_lock:
         state["trades"].append(trade)
         if len(state["trades"]) > 500:
