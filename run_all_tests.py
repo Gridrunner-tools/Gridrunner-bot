@@ -44,6 +44,7 @@ run('test_ai_trading')
 run('test_concurrent_strategies')
 run('test_paper_mode_defaults')
 run('test_strategy_log_tail')
+run('test_state_serialization')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
 print("\nALL SUITES PASS")

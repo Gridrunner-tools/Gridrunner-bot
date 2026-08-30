@@ -412,6 +412,31 @@ state = ThreadSafeState({
     "strategies":      {},
 })
 
+def _state_payload():
+    """Return a JSON-serializable snapshot of the dashboard state.
+
+    The live state dict holds runtime objects that json.dumps() cannot serialize
+    (each strategy's ``thread`` handle and the live ``ai_engine`` instance).
+    Sending those through ``json.dumps(state)`` made the ``/state`` endpoint
+    crash, which froze the dashboard on its static defaults ("analyzing" /
+    "Analyzing markets..."). This builds a fresh plain-dict copy containing only
+    serializable values — it never mutates shared state.
+    """
+    data = dict(state)
+    data.pop("ai_engine", None)
+    strategies = data.get("strategies")
+    if isinstance(strategies, dict):
+        clean = {}
+        for sid, strat in strategies.items():
+            if isinstance(strat, dict):
+                s = dict(strat)
+                s.pop("thread", None)
+                clean[sid] = s
+            else:
+                clean[sid] = strat
+        data["strategies"] = clean
+    return data
+
 def send_telegram(msg):
     # Telegram requires the bot token in its endpoint, but POST avoids token-bearing
     # GET requests and prevents credentials from being sent via query parameters.
@@ -4974,7 +4999,7 @@ class Handler(BaseHTTPRequestHandler):
             if not self._is_authenticated():
                 self.respond(200,"application/json",json.dumps({"price":state.get("price",0),"running":state.get("running",False),"strategy":state.get("strategy",""),"pair":state.get("pair",""),"mode":state.get("mode",""),"paper_trading":state.get("paper_trading",True)}).encode())
                 return
-            self.respond(200,"application/json",json.dumps(state).encode())
+            self.respond(200,"application/json",json.dumps(_state_payload(), default=str).encode())
         elif path=="/chart_history":
             if not self._auth_or_401(): return
             pair = params.get("pair", [""])[0]
