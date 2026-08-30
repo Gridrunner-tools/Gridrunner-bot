@@ -889,10 +889,18 @@ def dex_best_quote(chain, from_token, to_token, amount_wei):
         return q1, "1inch"
     return q2, "Uniswap"
 
-def dex_swap(chain, from_token, to_token, amount_usd, price):
+def dex_swap(chain, from_token, to_token, amount_usd, price, target_symbol=None):
     try:
         amount_wei = int(amount_usd * 1e6)
         best_amount, router = dex_best_quote(chain, from_token, to_token, amount_wei)
+        # Token-registry gate on the trade target (EVM). The registry only
+        # authorizes Solana routes (Raydium/Jupiter); an EVM route (1inch/
+        # Uniswap) is refused by authorize_trade's route check.
+        if target_symbol and target_symbol not in ("USDC", "USDT"):
+            ok, reason = authorize_trade(target_symbol, route=router)
+            if not ok:
+                log(f"ORDER BLOCKED by token registry: {reason}", "WARN")
+                return False
         log("DEX swap via "+router+": $"+str(amount_usd)+" on "+CHAIN_CONFIG[chain]["name"])
         token_amount = amount_usd / price
         trade = {"time":time.strftime("%H:%M:%S"),"side":"DEX-BUY","price":price,"amount":round(token_amount,6),"router":router,"chain":chain}
@@ -1132,6 +1140,77 @@ def verify_token_authenticity(mint, claimed_symbol=""):
 
     return result
 
+def get_token_liquidity_usd(mint_or_symbol):
+    """Fetch live pool liquidity (USD) for a Solana token.
+
+    Accepts a symbol (resolved via SOL_TOKENS) or a raw mint address. Returns
+    the largest USDC/USDT/SOL-quoted pool's liquidity as a float, or None if
+    liquidity cannot be determined. Callers must treat None as "refuse".
+    """
+    sym = str(mint_or_symbol).upper()
+    mint = SOL_TOKENS.get(sym)
+    if not mint:
+        mint = str(mint_or_symbol)
+    try:
+        r = requests.get("https://api.dexscreener.com/latest/dex/tokens/" + mint, timeout=8)
+        pairs = r.json().get("pairs", []) or []
+        best = None
+        for p in pairs:
+            if p.get("quoteToken", {}).get("symbol", "") not in ("USDC", "USDT", "SOL"):
+                continue
+            liq = float(p.get("liquidity", {}).get("usd", 0) or 0)
+            if best is None or liq > float(best.get("liquidity", {}).get("usd", 0) or 0):
+                best = p
+        if best:
+            return float(best.get("liquidity", {}).get("usd", 0) or 0)
+    except Exception as e:
+        log("get_token_liquidity_usd error: " + str(e)[:80], "WARN")
+    return None
+
+def estimate_price_impact_pct(from_mint, to_mint, amount_lamports):
+    """Estimate swap price impact (percent) from a live Jupiter quote.
+
+    Returns abs(priceImpactPct) as a float, or None if the quote cannot be
+    obtained. Callers must treat None as "refuse" — never pass it through.
+    """
+    try:
+        r = requests.get("https://api.jup.ag/swap/v1/quote", params={
+            "inputMint": from_mint,
+            "outputMint": to_mint,
+            "amount": str(int(amount_lamports)),
+            "slippageBps": "100",
+        }, timeout=10)
+        qdata = r.json()
+        if qdata and not qdata.get("error"):
+            pct = qdata.get("priceImpactPct")
+            if pct is not None:
+                return abs(float(pct))
+    except Exception as e:
+        log("estimate_price_impact_pct error: " + str(e)[:80], "WARN")
+    return None
+
+def _enforce_token_gate(symbol, route, from_mint, to_mint, amount_lamports):
+    """Full token-registry gate for a Solana swap's trade-target token.
+
+    Returns (ok, reason). Quote/stablecoin legs (USDC/USDT) are never gated —
+    only the asset being traded is checked. Liquidity and price impact are
+    fetched LIVE at trade time; if either cannot be determined the trade is
+    refused ("uncertain = refuse"), matching the registry's philosophy.
+    """
+    if symbol in ("USDC", "USDT"):
+        return True, "quote currency — not gated"
+    entry = get_registry_entry(symbol)
+    liquidity = get_token_liquidity_usd(symbol)
+    impact = estimate_price_impact_pct(from_mint, to_mint, amount_lamports)
+    if entry and entry.get("min_liquidity_usd") and liquidity is None:
+        return False, f"{symbol}: live liquidity unavailable — refusing (uncertain = refuse)"
+    if entry and entry.get("max_price_impact_pct") is not None and impact is None:
+        return False, f"{symbol}: live price impact unavailable — refusing (uncertain = refuse)"
+    ok, reason = authorize_trade(symbol, liquidity_usd=liquidity, price_impact_pct=impact, route=route)
+    if not ok:
+        log(f"ORDER BLOCKED by token registry: {reason}", "WARN")
+    return ok, reason
+
 def get_holder_concentration(mint, decimals, supply_raw):
     """
     Top-holder concentration via getTokenLargestAccounts (returns up to the
@@ -1353,6 +1432,12 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                  "price":price,"amount":out_human,"router":"Raydium","chain":"solana"}
         state["trades"].append(trade)
         return True, out_human
+
+    # Token-registry gate (live path only): refuse before sending anything to the chain.
+    target = to_token if from_token in ("USDC", "USDT") else from_token
+    ok, _ = _enforce_token_gate(target, "Raydium", from_mint, to_mint, lamports)
+    if not ok:
+        return False, 0.0
 
     try:
         from solders.keypair import Keypair
@@ -1630,6 +1715,11 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
                  "price":price,"amount":out_human,"router":"Jupiter","chain":"solana"}
         state["trades"].append(trade)
         return True, out_human
+    # Token-registry gate (live path only): refuse before sending anything to the chain.
+    target = to_token if from_token in ("USDC", "USDT") else from_token
+    ok, _ = _enforce_token_gate(target, "Jupiter", from_mint, to_mint, lamports)
+    if not ok:
+        return False, 0.0
 
     # ── Live execution via Jupiter ────────────────────────────────────────────
     try:
@@ -2061,9 +2151,9 @@ def place_order(pair, side, amount, grid_idx=None):
             from_t = tokens.get("USDT","")
             to_t   = tokens.get("W"+token, tokens.get(token,""))
             if side in ("buy","buy_market"):
-                success = dex_swap(chain, from_t, to_t, amount * price, price)
+                success = dex_swap(chain, from_t, to_t, amount * price, price, target_symbol=token)
             else:
-                success = dex_swap(chain, to_t, from_t, amount * price, price)
+                success = dex_swap(chain, to_t, from_t, amount * price, price, target_symbol=token)
     else:
         success = bool(cex_place_order(pair, side, amount))
         
