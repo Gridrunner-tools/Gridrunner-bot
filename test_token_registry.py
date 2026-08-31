@@ -98,19 +98,67 @@ class TestEnforceTokenGate(unittest.TestCase):
         self.assertTrue(ok, reason)
 
     def test_missing_liquidity_is_hard_fail(self):
-        # "uncertain = refuse": live liquidity unavailable must block.
+        # "uncertain = refuse": for an APPROVED non-blue-chip (SPCX), a live
+        # liquidity lookup failure must still block (fail-CLOSED).
         main.get_token_liquidity_usd = lambda symbol: None
         main.estimate_price_impact_pct = lambda f, t, a: 0.5
-        ok, reason = _enforce_token_gate("SOL", "Jupiter", "m", "t", 1_000_000)
+        ok, reason = _enforce_token_gate("SPCX", "Jupiter", "m", "t", 1_000_000)
         self.assertFalse(ok)
         self.assertIn("liquidity unavailable", reason)
 
     def test_missing_price_impact_is_hard_fail(self):
         main.get_token_liquidity_usd = lambda symbol: 100_000
         main.estimate_price_impact_pct = lambda f, t, a: None
-        ok, reason = _enforce_token_gate("SOL", "Jupiter", "m", "t", 1_000_000)
+        ok, reason = _enforce_token_gate("SPCX", "Jupiter", "m", "t", 1_000_000)
         self.assertFalse(ok)
         self.assertIn("price impact unavailable", reason)
+
+    def test_blue_chip_missing_liquidity_fails_open(self):
+        # APPROVED blue-chip (BTC): a transient dexscreener failure (None) must
+        # NOT block a live buy — the gate fails OPEN with a warning.
+        main.get_token_liquidity_usd = lambda symbol: None
+        main.estimate_price_impact_pct = lambda f, t, a: 0.5
+        ok, reason = _enforce_token_gate("BTC", "Raydium", "m", "t", 1_000_000)
+        self.assertTrue(ok, reason)
+
+    def test_blue_chip_missing_impact_fails_open(self):
+        # APPROVED blue-chip (BTC): transient Jupiter quote failure must not block.
+        main.get_token_liquidity_usd = lambda symbol: 100_000
+        main.estimate_price_impact_pct = lambda f, t, a: None
+        ok, reason = _enforce_token_gate("BTC", "Jupiter", "m", "t", 1_000_000)
+        self.assertTrue(ok, reason)
+
+    def test_blue_chip_real_low_liquidity_still_blocked(self):
+        # Fail-open applies ONLY to None (lookup failure). A real low number
+        # below the BTC floor ($25k) must still refuse.
+        main.get_token_liquidity_usd = lambda symbol: 1_000
+        main.estimate_price_impact_pct = lambda f, t, a: 0.5
+        ok, reason = _enforce_token_gate("BTC", "Raydium", "m", "t", 1_000_000)
+        self.assertFalse(ok)
+        self.assertIn("below the", reason)
+
+    def test_blue_chip_real_high_impact_still_blocked(self):
+        # A real (non-None) impact above the BTC cap (1%) must still refuse.
+        main.get_token_liquidity_usd = lambda symbol: 100_000
+        main.estimate_price_impact_pct = lambda f, t, a: 5.0
+        ok, reason = _enforce_token_gate("BTC", "Jupiter", "m", "t", 1_000_000)
+        self.assertFalse(ok)
+        self.assertIn("exceeds", reason)
+
+    def test_pending_token_missing_liquidity_still_refused(self):
+        # PENDING (non-APPROVED) token stays fail-CLOSED on lookup failure.
+        main.get_token_liquidity_usd = lambda symbol: None
+        main.estimate_price_impact_pct = lambda f, t, a: 0.5
+        ok, reason = _enforce_token_gate("BNB", "Jupiter", "m", "t", 1_000_000)
+        self.assertFalse(ok)
+
+    def test_unknown_token_missing_liquidity_still_refused(self):
+        # Unknown token stays fail-CLOSED on lookup failure.
+        main.get_token_liquidity_usd = lambda symbol: None
+        main.estimate_price_impact_pct = lambda f, t, a: 0.5
+        ok, reason = _enforce_token_gate("NOTATOKEN", "Jupiter", "m", "t", 1_000_000)
+        self.assertFalse(ok)
+        self.assertIn("not in the token registry", reason)
 
     def test_route_restriction_enforced_through_gate(self):
         self._stub(liquidity=100_000, impact=0.5)

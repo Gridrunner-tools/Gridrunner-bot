@@ -1189,23 +1189,47 @@ def estimate_price_impact_pct(from_mint, to_mint, amount_lamports):
         log("estimate_price_impact_pct error: " + str(e)[:80], "WARN")
     return None
 
+BLUE_CHIP_SYMBOLS = {"BTC", "ETH", "SOL", "JUP", "BONK"}
+
+
 def _enforce_token_gate(symbol, route, from_mint, to_mint, amount_lamports):
     """Full token-registry gate for a Solana swap's trade-target token.
 
     Returns (ok, reason). Quote/stablecoin legs (USDC/USDT) are never gated —
     only the asset being traded is checked. Liquidity and price impact are
-    fetched LIVE at trade time; if either cannot be determined the trade is
-    refused ("uncertain = refuse"), matching the registry's philosophy.
+    fetched LIVE at trade time.
+
+    Policy:
+      * Unknown / PENDING / REJECTED tokens (and APPROVED non-blue-chip
+        tokens) are fail-CLOSED: if live liquidity or price impact cannot be
+        determined, the trade is refused ("uncertain = refuse").
+      * APPROVED blue-chip tokens (BTC/ETH/SOL/JUP/BONK) are fail-OPEN: a
+        transient external lookup failure (dexscreener/Jupiter returning
+        None) is allowed with a warning, so an upstream outage cannot block
+        real live trades. A real (non-None) value that violates the floor or
+        cap still blocks.
     """
     if symbol in ("USDC", "USDT"):
         return True, "quote currency — not gated"
     entry = get_registry_entry(symbol)
     liquidity = get_token_liquidity_usd(symbol)
     impact = estimate_price_impact_pct(from_mint, to_mint, amount_lamports)
-    if entry and entry.get("min_liquidity_usd") and liquidity is None:
-        return False, f"{symbol}: live liquidity unavailable — refusing (uncertain = refuse)"
-    if entry and entry.get("max_price_impact_pct") is not None and impact is None:
-        return False, f"{symbol}: live price impact unavailable — refusing (uncertain = refuse)"
+    approved_blue_chip = bool(
+        entry and entry.get("status") == "APPROVED" and symbol in BLUE_CHIP_SYMBOLS
+    )
+    if not approved_blue_chip:
+        # Fail-CLOSED: "uncertain = refuse" for anything not an APPROVED blue-chip.
+        if entry and entry.get("min_liquidity_usd") and liquidity is None:
+            return False, f"{symbol}: live liquidity unavailable — refusing (uncertain = refuse)"
+        if entry and entry.get("max_price_impact_pct") is not None and impact is None:
+            return False, f"{symbol}: live price impact unavailable — refusing (uncertain = refuse)"
+    else:
+        # Fail-OPEN for APPROVED blue-chips on transient lookup failure only.
+        # A real (non-None) value still flows through authorize_trade floor/cap.
+        if liquidity is None:
+            log(f"{symbol}: live liquidity lookup failed — allowing (fail-open: APPROVED blue-chip)", "WARN")
+        if impact is None:
+            log(f"{symbol}: live price impact lookup failed — allowing (fail-open: APPROVED blue-chip)", "WARN")
     ok, reason = authorize_trade(symbol, liquidity_usd=liquidity, price_impact_pct=impact, route=route)
     if not ok:
         log(f"ORDER BLOCKED by token registry: {reason}", "WARN")
