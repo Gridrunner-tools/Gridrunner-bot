@@ -4305,7 +4305,10 @@ function selectStrat(s) {
   document.getElementById("ai-trading-card").style.display = s=="ai_trading"?"block":"none";
   if (s=="limit_buy" || s=="limit_sell") document.getElementById("limit-side").value = s=="limit_buy" ? "buy" : "sell";
   document.getElementById("config-card").style.display = "block";
-  document.getElementById("grid-details-card").style.display = s=="ai_trading"?"none":"block";
+  // The grid details card is owned by refresh() and must stay visible while
+  // a grid strategy runs; selecting AI Trading must NOT hide it (grid + AI
+  // cards render side-by-side when both run concurrently).
+  document.getElementById("grid-details-card").style.display = "block";
   // The AI live-status card follows whether an AI strategy is actually running
   // (refresh() owns show/hide). Only show it here when AI Trading is selected
   // so the panel is visible during configuration; do NOT hide it on other
@@ -4684,6 +4687,21 @@ function refresh() {
       var st = d.strategies[k];
       return st && st.type === "ai_trading" && st.running;
     }));
+    // Mirror the AI flag for the grid: the grid details card must render from
+    // the per-strategy registry, not from d.strategy (which is "most recently
+    // started"). Otherwise starting AI (or any other strategy) flips d.strategy
+    // off "grid" and the running grid's card would show its idle state.
+    var gridRunning = false;
+    var gridStrategyPair = null;
+    if (d.strategies) {
+      Object.keys(d.strategies).forEach(function(k) {
+        var st = d.strategies[k];
+        if (st && st.type === "grid" && st.running) {
+          gridRunning = true;
+          if (!gridStrategyPair) gridStrategyPair = st.pair;
+        }
+      });
+    }
     var aiStatusCard = document.getElementById("ai-trading-status-card");
     if (aiStatusCard) aiStatusCard.style.display = (aiRunning || sel.strat === "ai_trading") ? "block" : "none";
     if (aiRunning) {
@@ -4916,7 +4934,18 @@ function refresh() {
     }
     // ── Grid Details ──
     var gdCard = document.getElementById("grid-details-card");
-    if (d.strategy === "grid" && d.grid_levels && d.grid_levels.length >= 2) {
+    // Prefer the running grid strategy's own pair data so the card stays live
+    // even when another strategy (e.g. AI Trading) started more recently and
+    // reset the top-level "most recent" fields.
+    var gridPairData = (gridStrategyPair && d.grid_pairs && d.grid_pairs[gridStrategyPair]) || null;
+    if (gridPairData && gridPairData.grids) {
+      d.grid_levels = gridPairData.grids;
+      if (gridPairData.mid_idx != null) d.grid_mid_idx = gridPairData.mid_idx;
+      d.grid_filled = gridPairData.filled || {};
+      d.grid_trailing_active = gridPairData.trailing_sell_active || false;
+      d.grid_trailing_high = gridPairData.trailing_high || 0;
+    }
+    if (gridRunning && d.grid_levels && d.grid_levels.length >= 2) {
       gdCard.style.display = "block";
       var gl = d.grid_levels;
       var midIdx = d.grid_mid_idx != null ? d.grid_mid_idx : Math.floor(gl.length / 2);
