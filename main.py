@@ -3338,7 +3338,13 @@ def run_ai_trading(sid=None):
     
     class LiveMarketDataProvider:
         def get_candles(self, symbol: str) -> dict:
-            hist = state.get("price_history", [])
+            hist_raw = state.get("price_history", [])
+            hist = []
+            for x in hist_raw:
+                if isinstance(x, dict):
+                    hist.append(x.get("value", 100.0))
+                else:
+                    hist.append(float(x))
             if not hist:
                 p = get_price(symbol) or 100.0
                 hist = [p] * 60
@@ -3432,6 +3438,10 @@ def _mark_strategy_stopped(sid, status="STOPPED"):
     """
     if sid and "strategies" in state and sid in state["strategies"]:
         strat = state["strategies"][sid]
+        current_t = threading.current_thread()
+        registered_t = strat.get("thread")
+        if registered_t and registered_t != current_t:
+            return
         strat["running"] = False
         if strat.get("status") not in ("FILLED", "REJECTED"):
             strat["status"] = status
