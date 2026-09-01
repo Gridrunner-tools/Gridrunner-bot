@@ -113,6 +113,42 @@ class TestConcurrentStrategies(unittest.TestCase):
         self.assertFalse(state["running"])
         self.assertIsNone(state["strategy"])
 
+    def test_real_concurrency_decoupling_loop(self):
+        # Start a grid strategy on SOL/USDC
+        grid_cfg = {"risk_pct": 2.0, "max_pos": 500.0, "paper_trading": True}
+        start_bot("grid", "SOL/USDC", "dex", "jupiter", "solana", grid_cfg)
+        
+        # Verify grid strategy is registered and running
+        self.assertTrue(state["strategies"]["grid_SOL/USDC"]["running"])
+        
+        # Start an AI strategy concurrently
+        ai_cfg = {"risk_pct": 1.0, "max_total_exposure": 1000.0, "paper_trading": True}
+        start_bot("ai_trading", "BTC/USDC", "dex", "jupiter", "solana", ai_cfg)
+        
+        # Verify both strategies are registered and running
+        self.assertTrue(state["strategies"]["grid_SOL/USDC"]["running"])
+        self.assertTrue(state["strategies"]["ai_trading_BTC/USDC"]["running"])
+        
+        # Let the background threads process a bit
+        time.sleep(0.5)
+        
+        # Verify the grid strategy's thread and loop are STILL active and running
+        # (even though global state["strategy"] is now "ai_trading")
+        self.assertTrue(state["strategies"]["grid_SOL/USDC"]["running"])
+        self.assertTrue(state["strategies"]["grid_SOL/USDC"]["thread"].is_alive())
+        
+        # Stop AI Trading
+        stop_strategy("ai_trading_BTC/USDC")
+        self.assertFalse(state["strategies"]["ai_trading_BTC/USDC"]["running"])
+        
+        # Grid must survive and remain running
+        self.assertTrue(state["strategies"]["grid_SOL/USDC"]["running"])
+        self.assertTrue(state["strategies"]["grid_SOL/USDC"]["thread"].is_alive())
+        
+        # Stop Grid
+        stop_strategy("grid_SOL/USDC")
+        self.assertFalse(state["strategies"]["grid_SOL/USDC"]["running"])
+
 def test_concurrent_strategies_all():
     import unittest
     suite = unittest.TestLoader().loadTestsFromTestCase(TestConcurrentStrategies)
