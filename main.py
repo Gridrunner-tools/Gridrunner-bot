@@ -2456,7 +2456,9 @@ def _init_grid_pair(pair):
     # Dynamic spread: widen in volatile markets
     if cfg.get("dynamic_spread", True):
         try:
-            ph = state.get("price_history", [])
+            ph = state.get("price_history_pairs", {}).get(pair, [])
+            if not ph and pair == state.get("pair"):
+                ph = state.get("price_history", [])
             if len(ph) >= 20:
                 prices = [p["value"] for p in ph[-20:] if p.get("value")]
                 if prices:
@@ -3296,6 +3298,54 @@ def run_limit_order(sid=None):
             return
         time.sleep(5)
 
+
+class LiveMarketDataProvider:
+    def get_candles(self, symbol: str) -> dict:
+        hist_raw = state.get("price_history_pairs", {}).get(symbol, [])
+        if not hist_raw:
+            seed_history(symbol)
+            hist_raw = state.get("price_history_pairs", {}).get(symbol, [])
+        if not hist_raw and symbol == state.get("pair"):
+            hist_raw = state.get("price_history", [])
+        hist = []
+        for x in hist_raw:
+            if isinstance(x, dict):
+                hist.append(x.get("value", 100.0))
+            else:
+                hist.append(float(x))
+        if not hist:
+            p = get_price(symbol) or 100.0
+            hist = [p] * 60
+        elif len(hist) < 60:
+            hist = [hist[0]] * (60 - len(hist)) + hist
+            
+        return {
+            "closes": hist,
+            "highs": [x * 1.01 for x in hist],
+            "lows": [x * 0.99 for x in hist],
+            "volumes": [1000.0] * len(hist)
+        }
+        
+    def get_current_price(self, symbol: str) -> float:
+        return get_price(symbol) or 100.0
+        
+class LiveExecutionAdapter:
+    def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
+        side = "buy" if direction == "LONG" else "sell"
+        success = place_order(symbol, side, size)
+        if success:
+            record_trade("AI-" + direction, price, size, pair=symbol)
+        return success
+        
+    def get_venue_positions(self) -> dict:
+        return {}
+
+    def record_trade_closed(self, symbol: str, pnl: float):
+        if state.get("config", {}).get("auto_compound", True) and pnl > 0:
+            state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
+            log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
+
+
 def run_ai_trading(sid=None):
     """
     Continuous Multi-Symbol, Multi-Position AI Trading Strategy Loop.
@@ -3336,47 +3386,6 @@ def run_ai_trading(sid=None):
         
     log("AI Trading Engine Starting Whitelist: " + str(whitelist))
     
-    class LiveMarketDataProvider:
-        def get_candles(self, symbol: str) -> dict:
-            hist_raw = state.get("price_history", [])
-            hist = []
-            for x in hist_raw:
-                if isinstance(x, dict):
-                    hist.append(x.get("value", 100.0))
-                else:
-                    hist.append(float(x))
-            if not hist:
-                p = get_price(symbol) or 100.0
-                hist = [p] * 60
-            elif len(hist) < 60:
-                hist = [hist[0]] * (60 - len(hist)) + hist
-                
-            return {
-                "closes": hist,
-                "highs": [x * 1.01 for x in hist],
-                "lows": [x * 0.99 for x in hist],
-                "volumes": [1000.0] * len(hist)
-            }
-            
-        def get_current_price(self, symbol: str) -> float:
-            return get_price(symbol) or 100.0
-            
-    class LiveExecutionAdapter:
-        def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
-            side = "buy" if direction == "LONG" else "sell"
-            success = place_order(symbol, side, size)
-            if success:
-                record_trade("AI-" + direction, price, size, pair=symbol)
-            return success
-            
-        def get_venue_positions(self) -> dict:
-            return {}
-
-        def record_trade_closed(self, symbol: str, pnl: float):
-            if state.get("config", {}).get("auto_compound", True) and pnl > 0:
-                state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
-                log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
-
     engine = AITradingEngine(risk_config, whitelist)
     state["ai_engine"] = engine
     
@@ -3413,7 +3422,11 @@ def run_ai_trading(sid=None):
                 state["ai_selected_strategy"] = pos.get("strategy", "None")
                 state["ai_score"] = pos.get("score", 85.0) or 85.0
                 state["ai_confidence"] = "HIGH"
-                state["ai_exposure"] = sum(p["exposure_usd"] for p in engine.positions.values())
+                tot_exp = 0.0
+                for p in engine.positions.values():
+                    if isinstance(p, dict):
+                        tot_exp += p.get("exposure_usd") or (p.get("size", 0.0) * p.get("entry", 0.0))
+                state["ai_exposure"] = tot_exp
             else:
                 state["ai_regime"] = "TRENDING_BULL"
                 state["ai_selected_strategy"] = "None"
