@@ -102,6 +102,8 @@ class AITradingEngine:
                             "stop": sized_signal.stop,
                             "take_profit": sized_signal.take_profit,
                             "size": sized_signal.position_size,
+                            "exposure_usd": sized_signal.position_size * sized_signal.entry,
+                            "score": sized_signal.signal_score,
                             "leverage": sized_signal.recommended_leverage,
                             "strategy": sized_signal.strategy,
                             "regime": sized_signal.regime,
