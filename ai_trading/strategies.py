@@ -168,11 +168,11 @@ def generate_signals_and_score(
     # 2. Falling Knife protection for LONGs
     is_knife, knife_warns = evaluate_falling_knife(closes, highs, lows, volumes)
     
-    if (regime == "TRENDING_BULL" or regime == "HIGH_VOLATILITY") and long_score > short_score:
+    if regime == "TRENDING_BULL" or regime == "HIGH_VOLATILITY" and long_score > short_score:
         direction = "LONG"
         strategy = "Trend Following"
         score = long_score
-    elif (regime == "TRENDING_BEAR" or regime == "HIGH_VOLATILITY") and short_score > long_score:
+    elif regime == "TRENDING_BEAR" or regime == "HIGH_VOLATILITY" and short_score > long_score:
         direction = "SHORT"
         strategy = "Trend Following"
         score = short_score
