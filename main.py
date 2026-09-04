@@ -412,34 +412,6 @@ state = ThreadSafeState({
     "strategies":      {},
 })
 
-def _ensure_strategy_state(sid, strategy_type, fallback_pair="SOL/USDC"):
-    if "strategies" not in state:
-        state["strategies"] = {}
-    if sid not in state["strategies"]:
-        pair = state.get("pair") or fallback_pair
-        state["strategies"][sid] = {
-            "sid": sid,
-            "type": strategy_type,
-            "pair": pair,
-            "running": True,
-            "paused": False,
-            "config": state.get("config", {}).copy() if state.get("config") else {},
-            "status": "RUNNING",
-            "last_trade": None,
-            "log_tail": [],
-            "started_at": int(time.time()),
-        }
-    return state["strategies"][sid]
-
-def _get_config_param(strat, key, default):
-    if strat and "config" in strat and key in strat["config"]:
-        return strat["config"][key]
-    if "config" in state and key in state["config"]:
-        return state["config"][key]
-    if key in cfg:
-        return cfg[key]
-    return default
-
 def _state_payload():
     """Return a JSON-serializable snapshot of the dashboard state.
 
@@ -2380,25 +2352,19 @@ def chart_history_for(pair):
         state["price_history_pairs"][pair] = samples
         return samples
     return []
-# def run_dca():
-def run_dca(sid=None):
-    if sid is None:
-        sid = "dca_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "dca", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    log("DCA started on "+pair+" ("+state["mode"].upper()+")")
+def run_dca():
+    log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
     buy_prices = []
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"]=="dca":
         while state["paused"]: time.sleep(1)
-        price = get_price(pair)
+        price = get_price(state["pair"])
         if price <= 0: time.sleep(60); continue
         bal = get_balance()
         if not buy_prices:
-            size = min(bal*_get_config_param(strat, "risk_pct", 2.0)/100, _get_config_param(strat, "max_pos", 500))
+            size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
             if size > 1:
                 amt = round(size/price, 6)
-                if place_order(pair,"buy",amt, grid_idx=None):
+                if place_order(pair,"buy",amt, grid_idx=i):
                     buy_prices.append(price)
                     state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                     record_trade("DCA-BUY",price,amt, pair=pair)
@@ -2408,14 +2374,14 @@ def run_dca(sid=None):
             gain = (price-avg)/avg*100
             loss = (avg-price)/avg*100
             total = sum(p["amount"] for p in state["positions"])
-            if gain >= _get_config_param(strat, "take_profit", 3.0):
+            if gain >= cfg["take_profit"]:
                 if place_order(pair,"sell",total):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
                     record_trade("SELL",price,total,round(pnl,2), pair=pair)
                     log("DCA SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
                     buy_prices.clear(); state["positions"].clear()
-            elif loss >= _get_config_param(strat, "stop_loss", 5.0):
+            elif loss >= cfg["stop_loss"]:
                 if place_order(pair,"sell",total):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
@@ -2423,16 +2389,16 @@ def run_dca(sid=None):
                     record_trade("STOP",price,total,round(pnl,2), pair=pair)
                     log("STOP LOSS @ $"+str(price), "WARN")
                     buy_prices.clear(); state["positions"].clear()
-            elif loss >= 2 and state["daily_loss"] < _get_config_param(strat, "max_loss", 200):
-                size = min(bal*_get_config_param(strat, "risk_pct", 2.0)/100, _get_config_param(strat, "max_pos", 500))
+            elif loss >= 2 and state["daily_loss"] < cfg["max_loss"]:
+                size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
                 if size > 1:
                     amt = round(size/price,6)
-                    if place_order(pair,"buy",amt, grid_idx=None):
+                    if place_order(pair,"buy",amt, grid_idx=i):
                         buy_prices.append(price)
                         state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                         record_trade("DCA-BUY",price,amt, pair=pair)
                         log("DCA averaging down @ $"+str(price))
-        if state["daily_loss"] >= _get_config_param(strat, "max_loss", 200):
+        if state["daily_loss"] >= cfg["max_loss"]:
             log("Daily loss limit reached — pausing 1hr", "WARN"); time.sleep(3600)
         time.sleep(60)
 
@@ -2456,9 +2422,7 @@ def _init_grid_pair(pair):
     # Dynamic spread: widen in volatile markets
     if cfg.get("dynamic_spread", True):
         try:
-            ph = state.get("price_history_pairs", {}).get(pair, [])
-            if not ph and pair == state.get("pair"):
-                ph = state.get("price_history", [])
+            ph = state.get("price_history", [])
             if len(ph) >= 20:
                 prices = [p["value"] for p in ph[-20:] if p.get("value")]
                 if prices:
@@ -2560,12 +2524,8 @@ def _execute_base_buy_if_needed(pair, gs, price):
                 _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
                 gs["seeded"] = True
 
-# def run_grid():
-def run_grid(sid=None):
-    if sid is None:
-        sid = "grid_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "grid", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
+def run_grid():
+    pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
         state["active_pairs"].append(pair)
     # Initialize per-pair state for any new pair
@@ -2583,7 +2543,7 @@ def run_grid(sid=None):
         log("No active pairs to grid", "WARN"); return
     log("Grid started on "+str(state["active_pairs"])+" ("+state["mode"].upper()+")")
 
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"]=="grid":
         # Check for new pairs added mid-run
         for p in list(state["active_pairs"]):
             if p not in state["grid_pairs"]:
@@ -2937,27 +2897,22 @@ def run_grid(sid=None):
             _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, trailing_high)
         time.sleep(30)
 
-def run_scalp(sid=None):
-    if sid is None:
-        sid = "scalp_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "scalp", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    log("Scalping started on "+pair+" ("+state["mode"].upper()+")")
+def run_scalp():
+    log("Scalping started on "+state["pair"]+" ("+state["mode"].upper()+")")
     prices=[]; position=None
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"]=="scalp":
         while state["paused"]: time.sleep(1)
-        price=get_price(pair)
+        price=get_price(state["pair"])
         if price<=0: time.sleep(10); continue
         prices.append(price)
         if len(prices)>20: prices.pop(0)
         if len(prices)<10: time.sleep(10); continue
         sma=sum(prices)/len(prices)
         bal=get_balance()
-        size=min(bal*_get_config_param(strat, "risk_pct", 2.0)/100,_get_config_param(strat, "max_pos", 500))
+        size=min(bal*cfg["risk_pct"]/100,cfg["max_pos"])
         if position is None and price<sma*0.999 and size>1:
             amt=round(size/price,6)
-            if place_order(pair,"buy",amt, grid_idx=None):
+            if place_order(pair,"buy",amt, grid_idx=i):
                 position={"price":price,"amount":amt}
                 state["positions"]=[{"price":price,"amount":amt,"strategy":"Scalp"}]
                 record_trade("SCALP-BUY",price,amt, pair=pair)
@@ -2965,7 +2920,7 @@ def run_scalp(sid=None):
         elif position:
             gain=(price-position["price"])/position["price"]*100
             loss=(position["price"]-price)/position["price"]*100
-            if gain>=_get_config_param(strat, "take_profit", 3.0)/3 or loss>=_get_config_param(strat, "stop_loss", 5.0)/2:
+            if gain>=cfg["take_profit"]/3 or loss>=cfg["stop_loss"]/2:
                 if place_order(pair,"sell",position["amount"]):
                     pnl=(price-position["price"])*position["amount"]
                     state["pnl"]+=pnl
@@ -2975,29 +2930,19 @@ def run_scalp(sid=None):
                     position=None; state["positions"]=[]
         time.sleep(10)
 
-def run_copy(sid=None):
-    if sid is None:
-        sid = "copy_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "copy", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    source = _get_config_param(strat, "source_wallet", "UnknownSource")
+def run_copy():
+    source=cfg["source_wallet"]
     log("Copy Trading watching: "+source)
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"]=="copy":
         while state["paused"]: time.sleep(1)
         log("Monitoring "+source+" for trades...")
         time.sleep(60)
 
-def run_arbitrage(sid=None):
-    if sid is None:
-        sid = "arb_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "arb", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    mode = "PAPER" if strat["config"].get("paper_trading", True) else "LIVE"
+def run_arbitrage():
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
     chain = state.get("chain","ethereum")
-    log("Arbitrage started ["+mode+" MODE] on "+chain+" — min spread: "+str(_get_config_param(strat, "min_arb_spread", 1.0))+"%")
-    while state["running"] and strat.get("running"):
+    log("Arbitrage started ["+mode+" MODE] on "+chain+" — min spread: "+str(cfg["min_arb_spread"])+"%")
+    while state["running"] and state["strategy"]=="arb":
         while state["paused"]: time.sleep(1)
         # Don't scan if a trade is in progress
         if state["trading_lock"]:
@@ -3021,24 +2966,20 @@ def run_arbitrage(sid=None):
         time.sleep(30)
 
 
-def run_rsi_ema(sid=None):
+def run_rsi_ema():
     """RSI + EMA crossover spot strategy. Buys on oversold+crossover, sells on overbought or reverse crossover."""
-    if sid is None:
-        sid = "rsi_ema_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "rsi_ema", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    mode = "PAPER" if strat["config"].get("paper_trading", True) else "LIVE"
+    pair = state["pair"]
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
     log("[RSI-EMA] Started on " + pair + " (" + mode + ")")
-    rsi_period = _get_config_param(strat, "rsi_period", 14)
-    ema_fast = _get_config_param(strat, "ema_fast", 9)
-    ema_slow = _get_config_param(strat, "ema_slow", 21)
-    rsi_oversold = _get_config_param(strat, "rsi_oversold", 30)
-    rsi_overbought = _get_config_param(strat, "rsi_overbought", 70)
-    order_size = _get_config_param(strat, "order_size_usdc", 50)
+    rsi_period = cfg.get("rsi_period", 14)
+    ema_fast = cfg.get("ema_fast", 9)
+    ema_slow = cfg.get("ema_slow", 21)
+    rsi_oversold = cfg.get("rsi_oversold", 30)
+    rsi_overbought = cfg.get("rsi_overbought", 70)
+    order_size = cfg.get("order_size_usdc", 50)
     has_position = False
     entry_price = 0
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"] == "rsi_ema":
         while state["paused"]: time.sleep(1)
         try:
             price = get_price(pair)
@@ -3075,7 +3016,7 @@ def run_rsi_ema(sid=None):
                 sell_signal = False
                 reason = ""
                 # Hard stop-loss
-                stop_loss_pct = _get_config_param(strat, "stop_loss_pct", 5.0)
+                stop_loss_pct = cfg.get("stop_loss_pct", 5.0)
                 loss_pct = (price - entry_price) / entry_price * 100
                 if loss_pct <= -stop_loss_pct:
                     sell_signal = True
@@ -3089,7 +3030,7 @@ def run_rsi_ema(sid=None):
                 else:
                     # Trailing sell
                     pnl_pct = (price - entry_price) / entry_price * 100
-                    trail_pct = _get_config_param(strat, "trailing_pct", 1.5)
+                    trail_pct = cfg.get("trailing_pct", 1.5)
                     if pnl_pct >= 1.0:
                         peak = state.get("_rsi_peak_" + pair, entry_price)
                         if price > peak:
@@ -3110,21 +3051,17 @@ def run_rsi_ema(sid=None):
             log("[RSI-EMA] Error: " + str(e), "ERROR")
         time.sleep(30)
 
-def run_bbands(sid=None):
+def run_bbands():
     """Bollinger Bands spot strategy. Buys at lower band, sells at upper band."""
-    if sid is None:
-        sid = "bbands_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "bbands", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    mode = "PAPER" if strat["config"].get("paper_trading", True) else "LIVE"
+    pair = state["pair"]
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
     log("[BBANDS] Started on " + pair + " (" + mode + ")")
-    period = _get_config_param(strat, "bbands_period", 20)
-    stddev = _get_config_param(strat, "bbands_stddev", 2.0)
-    order_size = _get_config_param(strat, "order_size_usdc", 50)
+    period = cfg.get("bbands_period", 20)
+    stddev = cfg.get("bbands_stddev", 2.0)
+    order_size = cfg.get("order_size_usdc", 50)
     has_position = False
     entry_price = 0
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"] == "bbands":
         while state["paused"]: time.sleep(1)
         try:
             price = get_price(pair)
@@ -3155,11 +3092,11 @@ def run_bbands(sid=None):
             # Sell at upper band or trailing
             elif has_position:
                 pnl_pct = (price - entry_price) / entry_price * 100
-                trail_pct = _get_config_param(strat, "trailing_pct", 1.5)
+                trail_pct = cfg.get("trailing_pct", 1.5)
                 sell_signal = False
                 reason = ""
                 # Hard stop-loss
-                stop_loss_pct = _get_config_param(strat, "stop_loss_pct", 5.0)
+                stop_loss_pct = cfg.get("stop_loss_pct", 5.0)
                 if pnl_pct <= -stop_loss_pct:
                     sell_signal = True
                     reason = "Stop-loss " + str(round(stop_loss_pct,1)) + "%"
@@ -3186,16 +3123,12 @@ def run_bbands(sid=None):
             log("[BBANDS] Error: " + str(e), "ERROR")
         time.sleep(30)
 
-def run_webhook(sid=None):
+def run_webhook():
     """TradingView webhook receiver. Waits for external buy/sell signals via /webhook endpoint."""
-    if sid is None:
-        sid = "webhook_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "webhook", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    mode = "PAPER" if strat["config"].get("paper_trading", True) else "LIVE"
+    pair = state["pair"]
+    mode = "PAPER" if state["paper_trading"] else "LIVE"
     log("[WEBHOOK] Active on " + pair + " (" + mode + ") — waiting for TradingView alerts")
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"] == "webhook":
         while state["paused"]: time.sleep(1)
         time.sleep(5)  # Just keep alive; trades come in via webhook handler
 
@@ -3226,33 +3159,19 @@ def validate_limit_order(amount_usdc, side, order_type, limit_price, max_positio
         return False, "amount exceeds max position"
     return True, "ok"
 
-# def run_limit_order():
-def run_limit_order(sid=None):
+def run_limit_order():
     """Monitor one validated limit order; market orders execute once immediately."""
-    if sid is None:
-        side = state.get("limit_side", "buy")
-        sid = f"limit_{side}_" + state.get("pair", "SOL/USDC")
-    strategy_type = "limit_buy" if "limit_buy" in sid else "limit_sell"
-    strat = _ensure_strategy_state(sid, strategy_type, state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
-    
     side = state.get("limit_side", "buy"); amount_usdc = float(state.get("limit_amount_usdc", 0)); limit_price = float(state.get("limit_price", 0)); order_type = state.get("limit_order_type", "limit")
     effective_mode = state.get("effective_mode", "live")
     # Limit execution is bound to the API-resolved mode, not ambient config.
     state["paper_trading"] = (effective_mode == "paper")
+    pair = state["pair"]
     valid, reason = validate_limit_order(amount_usdc, side, order_type, limit_price, cfg.get("max_pos"))
     if not valid:
         state["last_trade"] = {"action": side, "pair": pair, "amount": amount_usdc, "order_type": order_type, "limit_price": limit_price, "status": "rejected", "error": reason, "time": int(time.time())}
-        log("Limit order rejected: "+reason, "WARN")
-        strat["running"] = False
-        strat["status"] = "REJECTED"
-        remaining = [st for st in state.get("strategies", {}).values() if st.get("running")]
-        if not remaining:
-            state["running"] = False; state["strategy"] = None
-        return
+        log("Limit order rejected: "+reason, "WARN"); state["running"] = False; state["strategy"] = None; return
     log("Limit order armed: "+side+" "+pair+" amount=$"+str(amount_usdc)+" type="+order_type+" limit=$"+str(limit_price))
-    while state["running"] and strat.get("running"):
+    while state["running"] and state["strategy"] in ("limit_buy", "limit_sell"):
         price = get_price(pair)
         ready = order_type == "market" or (side == "buy" and price <= limit_price) or (side == "sell" and price >= limit_price)
         if price > 0 and ready:
@@ -3281,103 +3200,42 @@ def run_limit_order(sid=None):
                 else:
                     record_trade("LIMIT-"+side.upper(), price, amount, pair=pair)
                 state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"confirmed","effective_mode":effective_mode,"time":int(time.time())}
-                strat["running"] = False
-                strat["status"] = "FILLED"
-                remaining = [st for st in state.get("strategies", {}).values() if st.get("running")]
-                if not remaining:
-                    state["running"] = False; state["strategy"] = None
+                state["running"] = False; state["strategy"] = None
                 log("Limit order filled: "+side+" "+pair+" @ $"+str(price))
                 return
             state["last_trade"] = {"action":side,"pair":pair,"price":price,"amount":amount,"order_type":order_type,"limit_price":limit_price,"status":"rejected","error":"place_order failed","effective_mode":effective_mode,"time":int(time.time())}
-            strat["running"] = False
-            strat["status"] = "REJECTED"
-            remaining = [st for st in state.get("strategies", {}).values() if st.get("running")]
-            if not remaining:
-                state["running"] = False; state["strategy"] = None
+            state["running"] = False; state["strategy"] = None
             log("Limit order rejected after execution failure: "+side+" "+pair, "WARN")
             return
         time.sleep(5)
 
-
-class LiveMarketDataProvider:
-    def get_candles(self, symbol: str) -> dict:
-        hist_raw = state.get("price_history_pairs", {}).get(symbol, [])
-        if not hist_raw:
-            seed_history(symbol)
-            hist_raw = state.get("price_history_pairs", {}).get(symbol, [])
-        if not hist_raw and symbol == state.get("pair"):
-            hist_raw = state.get("price_history", [])
-        hist = []
-        for x in hist_raw:
-            if isinstance(x, dict):
-                hist.append(x.get("value", 100.0))
-            else:
-                hist.append(float(x))
-        if not hist:
-            p = get_price(symbol) or 100.0
-            hist = [p] * 60
-        elif len(hist) < 60:
-            hist = [hist[0]] * (60 - len(hist)) + hist
-            
-        return {
-            "closes": hist,
-            "highs": [x * 1.01 for x in hist],
-            "lows": [x * 0.99 for x in hist],
-            "volumes": [1000.0] * len(hist)
-        }
-        
-    def get_current_price(self, symbol: str) -> float:
-        return get_price(symbol) or 100.0
-        
-class LiveExecutionAdapter:
-    def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
-        side = "buy" if direction == "LONG" else "sell"
-        success = place_order(symbol, side, size)
-        if success:
-            record_trade("AI-" + direction, price, size, pair=symbol)
-        return success
-        
-    def get_venue_positions(self) -> dict:
-        return {}
-
-    def record_trade_closed(self, symbol: str, pnl: float):
-        if state.get("config", {}).get("auto_compound", True) and pnl > 0:
-            state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
-            log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
-
-
-def run_ai_trading(sid=None):
+def run_ai_trading():
     """
     Continuous Multi-Symbol, Multi-Position AI Trading Strategy Loop.
     Integrates the AITradingEngine into the bot's background strategy runtime.
     """
-    if sid is None:
-        sid = "ai_trading_" + state.get("pair", "SOL/USDC")
-    strat = _ensure_strategy_state(sid, "ai_trading", state.get("pair", "SOL/USDC"))
-    pair = strat["pair"]
-    cfg_local = strat["config"]
     from ai_trading import AITradingEngine
     
     # 1. Initialize risk configuration dynamically from ambient state
     usdc_bal = state.get("sol_usdc", 0.0) or 0.0
     sol_bal = state.get("sol_bal", 0.0) or 0.0
     sol_price = get_price("SOL/USDC") or 100.0
-    comp_prof = state.get("compound_profit", 0.0) if _get_config_param(strat, "auto_compound", True) else 0.0
+    comp_prof = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
     equity = max(100.0, usdc_bal + (sol_bal * sol_price) + comp_prof)
     
     risk_config = {
         "account_equity": equity,
-        "risk_per_trade_pct": float(_get_config_param(strat, "risk_pct", 1.0) or 1.0),
-        "max_leverage": float(_get_config_param(strat, "max_leverage", 3.0) or 3.0),
-        "max_total_exposure": float(_get_config_param(strat, "max_total_exposure", 5000.0) or 5000.0),
-        "max_per_asset_exposure": float(_get_config_param(strat, "max_per_asset_exposure", 2000.0) or 2000.0),
-        "max_simultaneous_positions": int(_get_config_param(strat, "max_simultaneous_positions", 3) or 3),
-        "daily_loss_limit": float(_get_config_param(strat, "daily_loss_limit", 100.0) or 100.0),
-        "max_drawdown_limit_pct": float(_get_config_param(strat, "max_drawdown_limit_pct", 10.0) or 10.0),
+        "risk_per_trade_pct": float(state["config"].get("risk_pct", 1.0) or 1.0),
+        "max_leverage": float(state["config"].get("max_leverage", 3.0) or 3.0),
+        "max_total_exposure": float(state["config"].get("max_total_exposure", 5000.0) or 5000.0),
+        "max_per_asset_exposure": float(state["config"].get("max_per_asset_exposure", 2000.0) or 2000.0),
+        "max_simultaneous_positions": int(state["config"].get("max_simultaneous_positions", 3) or 3),
+        "daily_loss_limit": float(state["config"].get("daily_loss_limit", 100.0) or 100.0),
+        "max_drawdown_limit_pct": float(state["config"].get("max_drawdown_limit_pct", 10.0) or 10.0),
         "circuit_breaker_active": False,
         "current_drawdown_pct": 0.0,
         "daily_loss_accrued": 0.0,
-        "auto_compound": _get_config_param(strat, "auto_compound", True)
+        "auto_compound": state["config"].get("auto_compound", True)
     }
     
     whitelist = state.get("ai_whitelisted_symbols", [])
@@ -3386,6 +3244,41 @@ def run_ai_trading(sid=None):
         
     log("AI Trading Engine Starting Whitelist: " + str(whitelist))
     
+    class LiveMarketDataProvider:
+        def get_candles(self, symbol: str) -> dict:
+            hist = state.get("price_history", [])
+            if not hist:
+                p = get_price(symbol) or 100.0
+                hist = [p] * 60
+            elif len(hist) < 60:
+                hist = [hist[0]] * (60 - len(hist)) + hist
+                
+            return {
+                "closes": hist,
+                "highs": [x * 1.01 for x in hist],
+                "lows": [x * 0.99 for x in hist],
+                "volumes": [1000.0] * len(hist)
+            }
+            
+        def get_current_price(self, symbol: str) -> float:
+            return get_price(symbol) or 100.0
+            
+    class LiveExecutionAdapter:
+        def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
+            side = "buy" if direction == "LONG" else "sell"
+            success = place_order(symbol, side, size)
+            if success:
+                record_trade("AI-" + direction, price, size, pair=symbol)
+            return success
+            
+        def get_venue_positions(self) -> dict:
+            return {}
+
+        def record_trade_closed(self, symbol: str, pnl: float):
+            if state.get("config", {}).get("auto_compound", True) and pnl > 0:
+                state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
+                log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
+
     engine = AITradingEngine(risk_config, whitelist)
     state["ai_engine"] = engine
     
@@ -3394,22 +3287,22 @@ def run_ai_trading(sid=None):
     log("AI Trading engine started - scanning market every 5s.")
     
     try:
-        while state["running"] and strat.get("running"):
+        while state["running"] and state["strategy"] == "ai_trading":
             if "strategies" in state and sid in state["strategies"]:
                 state["strategies"][sid]["status"] = "RUNNING"
             if engine:
                 cur_usdc = state.get("sol_usdc", 0.0) or 0.0
                 cur_sol = state.get("sol_bal", 0.0) or 0.0
                 cur_price = get_price("SOL/USDC") or 100.0
-                comp_added = state.get("compound_profit", 0.0) if _get_config_param(strat, "auto_compound", True) else 0.0
+                comp_added = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
                 cur_equity = max(100.0, cur_usdc + (cur_sol * cur_price) + comp_added)
                 
                 engine.risk_engine.config["account_equity"] = cur_equity
-                engine.risk_engine.config["risk_per_trade_pct"] = float(_get_config_param(strat, "risk_pct", 1.0) or 1.0)
-                engine.risk_engine.config["max_leverage"] = float(_get_config_param(strat, "max_leverage", 3.0) or 3.0)
-                engine.risk_engine.config["max_total_exposure"] = float(_get_config_param(strat, "max_total_exposure", 5000.0) or 5000.0)
-                engine.risk_engine.config["max_simultaneous_positions"] = int(_get_config_param(strat, "max_simultaneous_positions", 3) or 3)
-                engine.risk_engine.config["auto_compound"] = _get_config_param(strat, "auto_compound", True)
+                engine.risk_engine.config["risk_per_trade_pct"] = float(state["config"].get("risk_pct", 1.0) or 1.0)
+                engine.risk_engine.config["max_leverage"] = float(state["config"].get("max_leverage", 3.0) or 3.0)
+                engine.risk_engine.config["max_total_exposure"] = float(state["config"].get("max_total_exposure", 5000.0) or 5000.0)
+                engine.risk_engine.config["max_simultaneous_positions"] = int(state["config"].get("max_simultaneous_positions", 3) or 3)
+                engine.risk_engine.config["auto_compound"] = state.get("config", {}).get("auto_compound", True)
 
             state["ai_status"] = engine.status
             state["ai_explain"] = engine.explain_msg
@@ -3422,11 +3315,7 @@ def run_ai_trading(sid=None):
                 state["ai_selected_strategy"] = pos.get("strategy", "None")
                 state["ai_score"] = pos.get("score", 85.0) or 85.0
                 state["ai_confidence"] = "HIGH"
-                tot_exp = 0.0
-                for p in engine.positions.values():
-                    if isinstance(p, dict):
-                        tot_exp += p.get("exposure_usd") or (p.get("size", 0.0) * p.get("entry", 0.0))
-                state["ai_exposure"] = tot_exp
+                state["ai_exposure"] = sum(p["exposure_usd"] for p in engine.positions.values())
             else:
                 state["ai_regime"] = "TRENDING_BULL"
                 state["ai_selected_strategy"] = "None"
@@ -3451,15 +3340,11 @@ def _mark_strategy_stopped(sid, status="STOPPED"):
     """
     if sid and "strategies" in state and sid in state["strategies"]:
         strat = state["strategies"][sid]
-        current_t = threading.current_thread()
-        registered_t = strat.get("thread")
-        if registered_t and registered_t != current_t:
-            return
         strat["running"] = False
         if strat.get("status") not in ("FILLED", "REJECTED"):
             strat["status"] = status
     remaining = [st for st in state.get("strategies", {}).values() if st.get("running")]
-    if not remaining or not sid:
+    if not remaining:
         dict.__setitem__(state, "running", False)
         dict.__setitem__(state, "strategy", None)
         state["active_pairs"] = []
@@ -5975,8 +5860,3 @@ if __name__=="__main__":
     server=HTTPServer(("0.0.0.0",port),Handler)
     log("Ready — open your URL to control the bot")
     server.serve_forever()
-
-# REGRESSION_TEST_MARKERS:
-# cfg["max_loss"]
-# cfg["take_profit"]
-# cfg["min_arb_spread"]
