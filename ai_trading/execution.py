@@ -74,7 +74,8 @@ class AITradingEngine:
             regime_info = detect_market_regime(highs, lows, closes, volumes)
             
             # 4. Score signal
-            signal = generate_signals_and_score(symbol, "Solana", highs, lows, closes, volumes, regime_info)
+            enable_perps = self.risk_engine.config.get("enable_perps", False)
+            signal = generate_signals_and_score(symbol, "Solana", highs, lows, closes, volumes, regime_info, enable_perps=enable_perps)
             
             if signal.is_tradeable():
                 self.log_event(f"High score signal detected: {symbol} {signal.direction} score={signal.signal_score:.1f}")
@@ -102,6 +103,8 @@ class AITradingEngine:
                             "stop": sized_signal.stop,
                             "take_profit": sized_signal.take_profit,
                             "size": sized_signal.position_size,
+                            "exposure_usd": sized_signal.position_size * sized_signal.entry,
+                            "score": sized_signal.signal_score,
                             "leverage": sized_signal.recommended_leverage,
                             "strategy": sized_signal.strategy,
                             "regime": sized_signal.regime,
@@ -175,7 +178,7 @@ class AITradingEngine:
             else:
                 self.log_event(f"Failed to execute exit trade for {symbol}!")
 
-    def start(self, market_data_provider: Any, execution_adapter: Any, interval_sec: float = 5.0):
+    def start(self, market_data_provider: Any, execution_adapter: Any, interval_sec: float = 5.0, thread_name: str = None):
         """Start the background execution thread loop."""
         if self.running:
             return
@@ -189,7 +192,7 @@ class AITradingEngine:
                     self.log_event(f"Unhandled exception in scanning loop: {e}")
                 time.sleep(interval_sec)
                 
-        self.thread = threading.Thread(target=run_loop, daemon=True)
+        self.thread = threading.Thread(target=run_loop, daemon=True, name=thread_name)
         self.thread.start()
         self.log_event("AI Trading background engine started successfully.")
 
