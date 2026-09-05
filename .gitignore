@@ -11,3 +11,7 @@ customers.db
 .license_cache
 trial.json
 paper_mode.json
+
+# runtime artifacts
+trade_history.log
+*.log

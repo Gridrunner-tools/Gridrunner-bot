@@ -1,9 +1,10 @@
 import unittest
 import time
+import json
 from ai_trading.signal import Signal
 from ai_trading.strategies import generate_signals_and_score
 from ai_trading.execution import AITradingEngine
-from main import state, LiveMarketDataProvider, LiveExecutionAdapter, run_ai_trading
+from main import state, LiveMarketDataProvider, LiveExecutionAdapter, run_ai_trading, run_grid
 
 class TestAITradingFixes(unittest.TestCase):
     def setUp(self):
@@ -159,6 +160,73 @@ class TestAITradingFixes(unittest.TestCase):
         success = adapter.execute_swap("SOL/USDC", "SHORT", 1.0, 100.0)
         self.assertFalse(success)
 
+    def test_grid_loop_liveness_authoritative_condition(self):
+        """Owner requirement: the grid loop exit must be driven ONLY by the
+        authoritative condition state['running'] and state['strategy']=='grid'.
+        A per-strategy bookkeeping dict must NEVER be the loop's kill switch
+        (a missing/cleared entry would default to False and idle the loop after
+        a sell - the regression the owner saw last time)."""
+        import inspect
+        src = inspect.getsource(run_grid)
+        self.assertIn('while state["running"] and state["strategy"]=="grid"', src,
+                      "grid loop must exit only on the authoritative running/strategy condition")
+        self.assertNotIn('.get(sid, {}).get("running", False)', src,
+                         "per-strategy bookkeeping must NEVER be the grid loop's kill switch")
+        self.assertNotIn('state["strategies"].get(', src,
+                         "grid loop must not depend on the strategies bookkeeping dict")
+    def test_grid_loop_survives_last_position_sell(self):
+        """Owner requirement: selling the LAST position must NOT stop the grid loop.
+        After a completed sell empties `filled`, the loop's exit predicate must
+        still evaluate True (running remains True, strategy remains 'grid')."""
+        state["running"] = True
+        state["strategy"] = "grid"
+        state["grid_pairs"] = {
+            "BTC/USDC": {
+                "grids": [70000.0, 71000.0, 72000.0, 73000.0, 74000.0],
+                "mid_idx": 2,
+                "filled": {2: {"price": 72000.0, "amount": 0.01}},
+                "levels": 4,
+                "spread": 0.01,
+                "trailing_high": 0.0,
+                "trailing_sell_active": False,
+                "trailing_low": 0.0,
+                "trailing_buy_active": False,
+                "dip_occurred": False,
+            }
+        }
+        # Exactly what run_grid does after a successful sell of the last position:
+        # it removes the filled entry and the matching position, then continues.
+        del state["grid_pairs"]["BTC/USDC"]["filled"][2]
+        state["positions"] = []
+        self.assertTrue(state["running"], "running must stay True after selling the last position")
+        self.assertEqual(state["strategy"], "grid", "strategy must stay 'grid' after selling the last position")
+        self.assertTrue(state["running"] and state["strategy"] == "grid",
+                        "grid loop must remain alive after selling the last position")
+    def test_grid_loop_survives_state_serialization_roundtrip(self):
+        """Owner requirement: state dict -> JSON -> dict round-trip must NOT kill
+        the grid loop. After a full serialization round-trip the loop's exit
+        predicate must still evaluate True."""
+        state["running"] = True
+        state["strategy"] = "grid"
+        state["grid_pairs"] = {
+            "BTC/USDC": {
+                "grids": [70000.0, 71000.0, 72000.0, 73000.0, 74000.0],
+                "mid_idx": 2,
+                "filled": {},
+                "levels": 4,
+                "spread": 0.01,
+                "trailing_high": 0.0,
+                "trailing_sell_active": False,
+                "trailing_low": 0.0,
+                "trailing_buy_active": False,
+                "dip_occurred": False,
+            }
+        }
+        roundtripped = json.loads(json.dumps(state))
+        self.assertTrue(roundtripped["running"], "running must survive serialization round-trip")
+        self.assertEqual(roundtripped["strategy"], "grid", "strategy must survive serialization round-trip")
+        self.assertTrue(roundtripped["running"] and roundtripped["strategy"] == "grid",
+                        "grid loop must remain alive after state serialization round-trip")
 def test_ai_trading_fixes_all():
     suite = unittest.TestLoader().loadTestsFromTestCase(TestAITradingFixes)
     res = unittest.TextTestRunner(verbosity=0).run(suite)
