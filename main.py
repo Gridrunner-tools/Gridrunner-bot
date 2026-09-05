@@ -382,7 +382,7 @@ state = ThreadSafeState({
     "win_rate":      0,
     "avg_profit":    0.0,
     "trades_count":  0,
-    
+
     "best_trade":    None,
     "trades_list":   [],
     # Per-pair completed-trade metrics used by dashboard summary cards.
@@ -2136,10 +2136,10 @@ def place_order(pair, side, amount, grid_idx=None):
         return False
     _last_order_key = order_key
     _last_order_time = now
-    
+
     # Visible ORDER_ATTEMPT logging
     log(f"[ORDER_ATTEMPT] {side.upper()} {pair} amount={amount}", "WARN")
-    
+
     success = False
     if state["mode"] == "dex":
         chain = state["chain"]
@@ -2180,12 +2180,12 @@ def place_order(pair, side, amount, grid_idx=None):
                 success = dex_swap(chain, to_t, from_t, amount * price, price, target_symbol=token)
     else:
         success = bool(cex_place_order(pair, side, amount))
-        
+
     if success:
         log(f"[ORDER_FILLED] {side.upper()} {pair} amount={amount}", "INFO")
     else:
         log(f"ORDER FAILED: swap execution returned failure for {side.upper()} {pair} {amount}", "WARN")
-        
+
     return success
 
 def log_trade_to_file(entry):
@@ -2524,7 +2524,9 @@ def _execute_base_buy_if_needed(pair, gs, price):
                 _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
                 gs["seeded"] = True
 
-def run_grid():
+def run_grid(sid=None):
+    if sid is None:
+        sid = f"grid_{state.get('pair', 'SOL/USDC')}"
     pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
         state["active_pairs"].append(pair)
@@ -2774,7 +2776,7 @@ def run_grid():
                         # Level crossed on the way down: price <= grids[gap_i] < last_price
                         if price <= grids[gap_i] < last_price:
                             crossed_levels.append(gap_i)
-                    
+
                     if len(crossed_levels) > 1:
                         # Drop-through detected!
                         if not drop_through_active:
@@ -2797,11 +2799,11 @@ def run_grid():
                         for lvl in crossed_levels:
                             if lvl not in drop_through_levels:
                                 drop_through_levels.append(lvl)
-                
+
                 # 2. Check for confirmed upward tick after the low to recover and buy
                 elif price > last_price and drop_through_active:
                     log(f"[{pair}] Confirmed upward tick: price rose from last price ${last_price:.2f} (low was ${drop_through_low:.2f}) to ${price:.2f}. Triggering 'all buy at the bottom' recovery!", "WARN")
-                    
+
                     # Fill ALL tracked drop_through_levels at/near the bottom (current price)
                     drop_through_levels.sort()
                     for gap_i in list(drop_through_levels):
@@ -2812,14 +2814,14 @@ def run_grid():
                         if current_bal < size:
                             log(f"[{pair}] Safety rail: Insufficient balance to place order for level {gap_i} during recovery (balance: ${current_bal:.2f}, level size: ${size:.2f}). Skipping.", "WARN")
                             continue
-                        
+
                         gap_amt = round(size / price, 6)
                         if place_order(pair, "buy", gap_amt, grid_idx=gap_i):
                             filled[gap_i] = {"price": price, "amount": gap_amt}
                             state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                             record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
                             log(f"[{pair}] GAP-FILL-RECOVERY BUY level {gap_i} @ ${price:.2f}", "WARN")
-                    
+
                     # Reset drop-through state
                     drop_through_active = False
                     drop_through_levels = []
@@ -2830,20 +2832,20 @@ def run_grid():
                 for gap_i in range(mid_idx + 1):
                     if gap_i in filled:
                         continue
-                    
+
                     # Downward gap-fill: price fell below level
                     _DISABLED_downward_gap = (last_price is not None) and (price <= grids[gap_i] < last_price)
-                    
+
                     # Upward gap-fill: price rose above/through level
                     is_upward_gap = (last_price is not None) and (last_price < grids[gap_i] <= price)
-                    
+
                     if is_upward_gap:
                         # Check balance safety rail
                         current_bal = get_balance()
                         if current_bal < size:
                             log(f"[{pair}] Safety rail: Insufficient balance to place order for level {gap_i} (balance: ${current_bal:.2f}, level size: ${size:.2f}). Skipping.", "WARN")
                             continue
-                        
+
                         gap_amt = round(size / price, 6)
                         if place_order(pair, "buy", gap_amt, grid_idx=gap_i):
                             filled[gap_i] = {"price": price, "amount": gap_amt}
@@ -3209,20 +3211,79 @@ def run_limit_order():
             return
         time.sleep(5)
 
-def run_ai_trading():
+class LiveMarketDataProvider:
+    def get_candles(self, symbol: str) -> dict:
+        raw_hist = state.get("price_history_pairs", {}).get(symbol, [])
+        if not raw_hist:
+            if state.get("pair") == symbol:
+                raw_hist = state.get("price_history", [])
+        
+        hist = [p["value"] for p in raw_hist if isinstance(p, dict) and "value" in p]
+        
+        if not hist:
+            p = get_price(symbol) or 100.0
+            hist = [p] * 60
+        elif len(hist) < 60:
+            hist = [hist[0]] * (60 - len(hist)) + hist
+            
+        return {
+            "closes": hist,
+            "highs": [x * 1.01 for x in hist],
+            "lows": [x * 0.99 for x in hist],
+            "volumes": [1000.0] * len(hist)
+        }
+        
+    def get_current_price(self, symbol: str) -> float:
+        return get_price(symbol) or 100.0
+        
+class LiveExecutionAdapter:
+    def __init__(self, engine_ref=None):
+        self.engine_ref = engine_ref
+
+    def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
+        side = "buy" if direction == "LONG" else "sell"
+        
+        if side == "sell":
+            if not self.engine_ref:
+                log("AI Trading: execute_swap 'sell' rejected — no engine reference available.", "WARN")
+                return False
+            if symbol not in self.engine_ref.positions:
+                log(f"AI Trading: phantom/naked sell blocked for {symbol} — no active open position found in engine.", "WARN")
+                return False
+            pos = self.engine_ref.positions[symbol]
+            if pos.get("direction") != "LONG":
+                log(f"AI Trading: phantom/naked sell blocked for {symbol} — active position is not LONG (found {pos.get('direction')}).", "WARN")
+                return False
+
+        success = place_order(symbol, side, size)
+        if success:
+            record_trade("AI-" + direction, price, size, pair=symbol)
+        return success
+        
+    def get_venue_positions(self) -> dict:
+        return {}
+
+    def record_trade_closed(self, symbol: str, pnl: float):
+        if state.get("config", {}).get("auto_compound", True) and pnl > 0:
+            state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
+            log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
+
+def run_ai_trading(sid=None):
+    if sid is None:
+        sid = threading.current_thread().name
     """
     Continuous Multi-Symbol, Multi-Position AI Trading Strategy Loop.
     Integrates the AITradingEngine into the bot's background strategy runtime.
     """
     from ai_trading import AITradingEngine
-    
+
     # 1. Initialize risk configuration dynamically from ambient state
     usdc_bal = state.get("sol_usdc", 0.0) or 0.0
     sol_bal = state.get("sol_bal", 0.0) or 0.0
     sol_price = get_price("SOL/USDC") or 100.0
-    comp_prof = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
+    comp_prof = (state.get("compound_profit") or 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
     equity = max(100.0, usdc_bal + (sol_bal * sol_price) + comp_prof)
-    
+
     risk_config = {
         "account_equity": equity,
         "risk_per_trade_pct": float(state["config"].get("risk_pct", 1.0) or 1.0),
@@ -3235,57 +3296,24 @@ def run_ai_trading():
         "circuit_breaker_active": False,
         "current_drawdown_pct": 0.0,
         "daily_loss_accrued": 0.0,
-        "auto_compound": state["config"].get("auto_compound", True)
+        "auto_compound": state["config"].get("auto_compound", True),
+        "enable_perps": state.get("config", {}).get("enable_perps", False)
     }
-    
+
     whitelist = state.get("ai_whitelisted_symbols", [])
     if not whitelist:
         whitelist = [state.get("pair", "SOL/USDC")]
-        
+
     log("AI Trading Engine Starting Whitelist: " + str(whitelist))
-    
-    class LiveMarketDataProvider:
-        def get_candles(self, symbol: str) -> dict:
-            hist = state.get("price_history", [])
-            if not hist:
-                p = get_price(symbol) or 100.0
-                hist = [p] * 60
-            elif len(hist) < 60:
-                hist = [hist[0]] * (60 - len(hist)) + hist
-                
-            return {
-                "closes": hist,
-                "highs": [x * 1.01 for x in hist],
-                "lows": [x * 0.99 for x in hist],
-                "volumes": [1000.0] * len(hist)
-            }
-            
-        def get_current_price(self, symbol: str) -> float:
-            return get_price(symbol) or 100.0
-            
-    class LiveExecutionAdapter:
-        def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
-            side = "buy" if direction == "LONG" else "sell"
-            success = place_order(symbol, side, size)
-            if success:
-                record_trade("AI-" + direction, price, size, pair=symbol)
-            return success
-            
-        def get_venue_positions(self) -> dict:
-            return {}
 
-        def record_trade_closed(self, symbol: str, pnl: float):
-            if state.get("config", {}).get("auto_compound", True) and pnl > 0:
-                state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
-                log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
-
+    adapter = LiveExecutionAdapter()
     engine = AITradingEngine(risk_config, whitelist)
+    adapter.engine_ref = engine
     state["ai_engine"] = engine
     
-    engine.start(LiveMarketDataProvider(), LiveExecutionAdapter(), interval_sec=5.0)
-    sid = threading.current_thread().name
+    engine.start(LiveMarketDataProvider(), adapter, interval_sec=5.0, thread_name=sid)
     log("AI Trading engine started - scanning market every 5s.")
-    
+
     try:
         while state["running"] and state["strategy"] == "ai_trading":
             if "strategies" in state and sid in state["strategies"]:
@@ -3296,18 +3324,19 @@ def run_ai_trading():
                 cur_price = get_price("SOL/USDC") or 100.0
                 comp_added = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
                 cur_equity = max(100.0, cur_usdc + (cur_sol * cur_price) + comp_added)
-                
+
                 engine.risk_engine.config["account_equity"] = cur_equity
                 engine.risk_engine.config["risk_per_trade_pct"] = float(state["config"].get("risk_pct", 1.0) or 1.0)
                 engine.risk_engine.config["max_leverage"] = float(state["config"].get("max_leverage", 3.0) or 3.0)
                 engine.risk_engine.config["max_total_exposure"] = float(state["config"].get("max_total_exposure", 5000.0) or 5000.0)
                 engine.risk_engine.config["max_simultaneous_positions"] = int(state["config"].get("max_simultaneous_positions", 3) or 3)
                 engine.risk_engine.config["auto_compound"] = state.get("config", {}).get("auto_compound", True)
+                engine.risk_engine.config["enable_perps"] = state.get("config", {}).get("enable_perps", False)
 
             state["ai_status"] = engine.status
             state["ai_explain"] = engine.explain_msg
             state["ai_positions"] = list(engine.positions.keys())
-            
+
             if engine.positions:
                 p_symbol = list(engine.positions.keys())[0]
                 pos = engine.positions[p_symbol]
@@ -3315,14 +3344,14 @@ def run_ai_trading():
                 state["ai_selected_strategy"] = pos.get("strategy", "None")
                 state["ai_score"] = pos.get("score", 85.0) or 85.0
                 state["ai_confidence"] = "HIGH"
-                state["ai_exposure"] = sum(p["exposure_usd"] for p in engine.positions.values())
+                state["ai_exposure"] = sum((p.get("exposure_usd") or (p.get("size", 0.0) * p.get("entry", 0.0))) for p in engine.positions.values() if isinstance(p, dict))
             else:
                 state["ai_regime"] = "TRENDING_BULL"
                 state["ai_selected_strategy"] = "None"
                 state["ai_score"] = 0.0
                 state["ai_confidence"] = "—"
                 state["ai_exposure"] = 0.0
-                
+
             time.sleep(2)
     finally:
         engine.stop()
@@ -3403,7 +3432,7 @@ def stop_all():
 def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     if "strategies" not in state:
         state["strategies"] = {}
-        
+
     sid = f"{strategy}_{pair}"
     state["strategy"] = strategy
     state["pair"] = pair
@@ -3413,11 +3442,11 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
     if exchange: state["exchange"] = exchange
     if chain: state["chain"] = chain
     else: state["chain"] = "solana"
-    
+
     strategy_config = order if order else {}
     if "paper_trading" not in strategy_config:
         strategy_config["paper_trading"] = state.get("paper_trading", True)
-        
+
     state["strategies"][sid] = {
         "sid": sid,
         "type": strategy,
@@ -3430,15 +3459,15 @@ def start_bot(strategy, pair, mode, exchange=None, chain=None, order=None):
         "log_tail": [],
         "started_at": int(time.time()),
     }
-    
+
     seed_history(pair)
-    
+
     target_fn = STRATEGIES.get(strategy, run_dca)
     safe_fn = _safe_strategy_runner(target_fn)
     t = threading.Thread(target=safe_fn, args=(sid,), name=sid, daemon=True)
     state["strategies"][sid]["thread"] = t
     t.start()
-    
+
     chain_str = f" / {chain.upper()}" if (mode == "dex" and chain) else ""
     log(f"Started {strategy.upper()} on {pair} via {mode.upper()}{chain_str} (sid: {sid})")
 
@@ -3749,7 +3778,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
       </div>
       <div id="grid-details-body"></div>
-    
+
     <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct">AI Trading Live Status</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;font-size:13px">
@@ -4634,9 +4663,9 @@ function updateStrategiesList(d) {
     else if (s.status === "FILLED") statusColor = "var(--accent)";
     else if (s.status === "REJECTED") statusColor = "var(--red)";
     else if (s.status === "STOPPED") statusColor = "var(--dim)";
-    
+
     var statusBadge = '<span style="color:' + statusColor + ';font-size:11px;font-weight:700;background:' + statusColor + '11;padding:2px 6px;border-radius:4px;border:1px solid ' + statusColor + '22">' + (s.status || "RUNNING") + '</span>';
-    
+
     var paramsText = '';
     if (s.type === "grid") {
       paramsText = "Risk: " + (s.config.risk_pct || 2) + "%, Max Pos: $" + (s.config.max_pos || 500);
@@ -4973,12 +5002,12 @@ function refresh() {
         var isBuyZone = i <= midIdx;
         var isFilled = filled[i] != null;
         var isCur = (i < gl.length - 1 && curPrice >= gl[i] && curPrice < gl[i+1]) || (i === gl.length - 1 && curPrice >= gl[i]);
-        
+
         var zone = "SELL";
         var zoneColor = "#ff6b6b";
         var bgColor = "#ff6b6b08";
         var borderColor = "#ff6b6b44";
-        
+
         if (isBuyZone) {
           if (isMid) {
             zone = "MID (BUY)";
@@ -4999,7 +5028,7 @@ function refresh() {
         }
         if (isCur) { zone = "●"; zoneColor = "#3399ff"; bgColor = "#3399ff10"; borderColor = "#3399ff"; }
         if (isFilled) { zoneColor = "#00ff9d"; bgColor = "#00ff9d15"; borderColor = "#00ff9d"; }
-        
+
         var gapVal = i > 0 ? (gl[i] - gl[i-1]) : 0;
         var gapStr = "—";
         var gapColor = "var(--dim)";
@@ -5009,7 +5038,7 @@ function refresh() {
           gapColor = isSellGap ? "#ff6b6b" : "#00ff9d";
           gapStr = "$" + gapVal.toFixed(2) + multiplier;
         }
-        
+
         var dist = curPrice > 0 ? (gl[i] - curPrice) : 0;
         var distStr = dist > 0 ? "+$" + dist.toFixed(0) : dist < 0 ? "-$" + Math.abs(dist).toFixed(0) : "—";
         var status = isFilled ? "✅ $" + filled[i].price.toFixed(0) : isCur ? "← Current" : isBuyZone ? "Buy Zone" : "Waiting";
@@ -5214,7 +5243,7 @@ class Handler(BaseHTTPRequestHandler):
                 SOL_TOKENS[custom_symbol] = custom_mint; TOKEN_DECIMALS.setdefault(custom_symbol, 6)
             start_strategy = params.get("strategy",["dca"])[0]
             pair_param = params.get("pair",[cfg["pair"]])[0]
-            
+
             order_cfg = {}
             if start_strategy == "ai_trading":
                 state["config"]["risk_pct"] = float(params.get("risk_pct", [1.0])[0])
@@ -5227,10 +5256,10 @@ class Handler(BaseHTTPRequestHandler):
                     state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]
                 else:
                     state["ai_whitelisted_symbols"] = [pair_param]
-                    
+
                 ai_mode = params.get("ai_mode", ["paper"])[0]
                 ai_paper = (ai_mode != "live")
-                
+
                 if not ai_paper:
                     has_keys = False
                     chain_choice = params.get("chain", ["solana"])[0]
@@ -5243,7 +5272,7 @@ class Handler(BaseHTTPRequestHandler):
                     if not has_keys:
                         self.respond(400, "application/json", json.dumps({"error": "Cannot start in LIVE mode: Wallet/API keys are not configured."}).encode())
                         return
-                        
+
                 order_cfg = {
                     "paper_trading": ai_paper,
                     "risk_pct": float(state["config"].get("risk_pct", 1.0)),
@@ -5285,7 +5314,7 @@ class Handler(BaseHTTPRequestHandler):
             if "strategies" in state and sid in state["strategies"] and state["strategies"][sid].get("running"):
                 self.respond(400, "application/json", json.dumps({"error": "Strategy already running on this pair"}).encode())
                 return
-                
+
             mode_param = params.get("mode", ["dex"])[0]
             chain_param = params.get("chain", ["solana"])[0]
             exchange_param = params.get("exchange", [cfg["exchange"]])[0]
@@ -5820,7 +5849,7 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200,"application/json",json.dumps(result).encode())
         else:
             self.respond(404,"text/plain",b"Not found")
-    
+
     def respond(self,code,ctype,body,extra_headers=None):
         self.send_response(code)
         origin = self.headers.get("Origin")

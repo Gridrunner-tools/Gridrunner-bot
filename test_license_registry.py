@@ -13,7 +13,11 @@ from unittest.mock import patch
 
 # main.py only needs requests for its optional trial-time lookup. Stub it so these
 # offline tests do not install or use any integration dependency.
-sys.modules.setdefault("requests", types.ModuleType("requests"))
+try:
+    import requests
+except ImportError:
+    import types
+    sys.modules["requests"] = types.ModuleType("requests")
 
 import license_registry
 import main

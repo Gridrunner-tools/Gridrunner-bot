@@ -62,7 +62,8 @@ def generate_signals_and_score(
     closes: List[float], 
     volumes: List[float],
     regime_info: Dict[str, Any],
-    min_rr_ratio: float = 1.2
+    min_rr_ratio: float = 1.2,
+    enable_perps: bool = False
 ) -> Signal:
     """
     Analyze market data and generate a standardized Signal with weighted scoring.
@@ -168,11 +169,11 @@ def generate_signals_and_score(
     # 2. Falling Knife protection for LONGs
     is_knife, knife_warns = evaluate_falling_knife(closes, highs, lows, volumes)
     
-    if regime == "TRENDING_BULL" or regime == "HIGH_VOLATILITY" and long_score > short_score:
+    if (regime == "TRENDING_BULL" or regime == "HIGH_VOLATILITY") and long_score > short_score:
         direction = "LONG"
         strategy = "Trend Following"
         score = long_score
-    elif regime == "TRENDING_BEAR" or regime == "HIGH_VOLATILITY" and short_score > long_score:
+    elif (regime == "TRENDING_BEAR" or regime == "HIGH_VOLATILITY") and short_score > long_score:
         direction = "SHORT"
         strategy = "Trend Following"
         score = short_score
@@ -191,6 +192,9 @@ def generate_signals_and_score(
             strategy = "Adaptive Grid"
             score = max(long_score, short_score)
             
+    if direction == "SHORT" and not enable_perps:
+        return create_no_trade_signal(symbol, venue, regime, "spot is long-only — SHORT requires perps")
+        
     # Apply Falling Knife filter
     if direction == "LONG" and is_knife:
         warnings.extend(knife_warns)

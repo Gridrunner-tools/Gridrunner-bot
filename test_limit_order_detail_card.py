@@ -133,10 +133,13 @@ def test_pr100_replay_markers_still_present():
 
 def test_server_and_trading_core_unchanged():
     # Core server/strategy definitions must still be present and intact.
+    # (run_grid may gain an optional sid param, but its authoritative loop
+    # condition must remain untouched.)
     assert 'def run_limit_order():' in SOURCE
     assert 'def start_bot(' in SOURCE
     assert 'def do_GET(self):' in SOURCE
-    assert 'def run_grid():' in SOURCE
+    assert 'def run_grid(' in SOURCE
+    assert 'while state["running"] and state["strategy"]=="grid"' in SOURCE
     assert 'def place_order(' in SOURCE
     assert 'def validate_limit_order(' in SOURCE
 
