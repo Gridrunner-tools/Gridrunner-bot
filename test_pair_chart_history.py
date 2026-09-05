@@ -150,8 +150,11 @@ def test_multi_pair_card_rendering_path_is_untouched():
 def test_no_trading_logic_changed():
     # The diff scope is the dashboard single-pair path + one endpoint: no
     # trading/order/execution/license/webhook/DB code should be touched.
+    # (run_grid's signature is allowed to gain an optional sid param, but its
+    # authoritative loop condition must remain untouched.)
     assert 'def place_order(' in SOURCE
-    assert 'def run_grid():' in SOURCE
+    assert 'while state["running"] and state["strategy"]=="grid"' in SOURCE
+    assert 'def run_grid(' in SOURCE
     assert 'def run_limit_order():' in SOURCE
     assert 'def run_dca():' in SOURCE
 
