@@ -1,4 +1,5 @@
 import unittest
+import unittest.mock
 import time
 import json
 from ai_trading.signal import Signal
@@ -227,6 +228,51 @@ class TestAITradingFixes(unittest.TestCase):
         self.assertEqual(roundtripped["strategy"], "grid", "strategy must survive serialization round-trip")
         self.assertTrue(roundtripped["running"] and roundtripped["strategy"] == "grid",
                         "grid loop must remain alive after state serialization round-trip")
+    def test_range_score_tie_returns_no_trade_not_long(self):
+        """Regression: in RANGE regime with long_score == short_score (no clean
+        directional edge), generate_signals_and_score must return NO_TRADE, NOT
+        LONG. The old fallback `direction = LONG if long_score >= short_score`
+        defaulted to LONG on a tie; since spot is long-only, an ambiguous RANGE
+        condition forced an immediate long entry."""
+        with unittest.mock.patch('ai_trading.strategies.ema', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.vwap', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.rsi', return_value=[40.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.momentum', return_value=[-5.0] * 100):
+            # Scoring with these mocks / data:
+            #   HTF: price(100) > ema(90)                  -> long +20
+            #   VWAP: price(100) > vwap(90)                -> long +10
+            #   Momentum: RSI(40) < 45, mom(-5) < 0        -> short +15
+            #   Breakout: price(100) <= support(100)*1.005 -> short +15
+            #   EMA stack, volume, volatility: flat        -> 0
+            # long_score == short_score == 30 -> exact tie.
+            regime_info = {"regime": "RANGE"}
+            closes = [100.0] * 100
+            highs = [101.0] * 100
+            lows = [100.0] * 100
+            volumes = [1000.0] * 100
+            signal = generate_signals_and_score(
+                "SOL/USDC", "Solana", highs, lows, closes, volumes, regime_info
+            )
+        self.assertEqual(signal.direction, "NO_TRADE")
+        self.assertEqual(signal.reasons[0], "RANGE no clear directional edge")
+    def test_range_clear_long_edge_still_trades(self):
+        """Control: a genuine LONG edge inside RANGE regime must still produce
+        LONG (we only suppress ties, not valid adaptive-grid longs)."""
+        with unittest.mock.patch('ai_trading.strategies.ema', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.vwap', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.rsi', return_value=[60.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.momentum', return_value=[5.0] * 100):
+            # price(100) > ema(90) -> long +20; price > vwap(90) -> long +10;
+            # RSI(60) > 55 and momentum(5) > 0 -> long +15. No short-side inputs.
+            regime_info = {"regime": "RANGE"}
+            closes = [100.0] * 100
+            highs = [101.0] * 100
+            lows = [99.0] * 100
+            volumes = [1000.0] * 100
+            signal = generate_signals_and_score(
+                "SOL/USDC", "Solana", highs, lows, closes, volumes, regime_info
+            )
+        self.assertEqual(signal.direction, "LONG")
 def test_ai_trading_fixes_all():
     suite = unittest.TestLoader().loadTestsFromTestCase(TestAITradingFixes)
     res = unittest.TextTestRunner(verbosity=0).run(suite)
