@@ -435,55 +435,6 @@ def _state_payload():
             else:
                 clean[sid] = strat
         data["strategies"] = clean
-    # AI trade markers: expose a small, JSON-safe list of AI entries+exits so
-    # the dashboard's AI chart can draw BUY/SELL markers aligned to its 60s
-    # candle grid. Open engine positions carry real unix entry timestamps;
-    # realized trades (state["trades"] tagged strategy=="ai_trading", side
-    # "AI-LONG"/"AI-SHORT") only store "HH:MM:SS" clock strings, so convert to
-    # today-unix. Always a list — empty means "no AI trades, render nothing".
-    ai_trades = []
-    engine = state.get("ai_engine")
-    ai_sid = ""
-    if isinstance(data.get("strategies"), dict):
-        for _sid, _strat in data["strategies"].items():
-            if isinstance(_strat, dict) and _strat.get("type") == "ai_trading" and _strat.get("running"):
-                ai_sid = _sid
-                break
-    if engine is not None:
-        _positions = getattr(engine, "positions", None)
-        if isinstance(_positions, dict):
-            for _sym, _pos in _positions.items():
-                if isinstance(_pos, dict) and _pos.get("entry"):
-                    ai_trades.append({
-                        "time": _pos.get("timestamp") or time.time(),
-                        "price": _pos.get("entry"),
-                        "side": "buy" if str(_pos.get("direction", "")).upper() == "LONG" else "sell",
-                        "pair": _sym,
-                        "strategy": "ai_trading",
-                        "sid": ai_sid,
-                        "state": "open",
-                    })
-    _today = time.strftime("%Y-%m-%d")
-    for _tr in state.get("trades", [])[-100:]:
-        if str(_tr.get("strategy", "")) != "ai_trading":
-            continue
-        _raw = str(_tr.get("side", "")).upper()
-        _side = "buy" if ("LONG" in _raw or "BUY" in _raw) else "sell"
-        try:
-            _unix = time.mktime(time.strptime(_today + " " + str(_tr.get("time", "")), "%Y-%m-%d %H:%M:%S"))
-        except Exception:
-            _unix = time.time()
-        ai_trades.append({
-            "time": _unix,
-            "price": _tr.get("price") or 0.0,
-            "side": _side,
-            "pair": _tr.get("pair") or state.get("pair", ""),
-            "strategy": "ai_trading",
-            "sid": _tr.get("sid") or ai_sid,
-            "state": "closed",
-        })
-    ai_trades.sort(key=lambda _t: _t.get("time") or 0)
-    data["ai_trades"] = ai_trades[-40:]
     return data
 
 def send_telegram(msg):
@@ -3744,8 +3695,6 @@ h1{font-size:22px;font-weight:900;color:var(--text)}
 .theme-btn:hover{border-color:var(--accent)}
 #chart-container{height:350px;flex:1;min-width:0;border-radius:10px;background:var(--card);border:1px solid var(--border);overflow:hidden;position:relative}
 #chart-container iframe{border-radius:10px}
-#ai-chart-container{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative;box-sizing:border-box}
-[id^="xspanel-chart-"]{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative;box-sizing:border-box}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
 .stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
 .sl{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
@@ -3829,22 +3778,19 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   </div>
 
   <div id="charts-container" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));justify-content:end;align-items:start;gap:16px;width:100%;margin-bottom:16px;box-sizing:border-box"></div>
-  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start;width:100%" id="single-chart-row">
-    <div id="grid-panel" style="min-width:0;display:flex;flex-direction:column;gap:16px">
-      <div id="chart-container" style="width:100%;min-width:0">
-        <div id="chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
-      </div>
-      <div class="card" id="grid-details-card" style="width:100%;box-sizing:border-box;height:400px;overflow-y:auto">
+  <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
+    <div id="chart-container" style="flex:1;min-width:0">
+      <div id="chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
+    </div>
+    <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct" style="display:flex;align-items:center;gap:8px">
         Grid Details
         <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
       </div>
       <div id="grid-details-body"></div>
-      </div>
     </div>
-    <div id="ai-panel" style="display:none;min-width:0;flex-direction:column;gap:16px">
-      <div id="ai-chart-container" style="display:none;width:100%;min-width:0;height:350px"></div>
-      <div class="card" id="ai-trading-status-card" style="display:none;width:100%;box-sizing:border-box;height:400px;overflow-y:auto">
+
+    <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct">AI Trading Live Status</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;font-size:13px">
         <div style="display:flex;justify-content:space-between"><strong>Engine State:</strong> <span id="ai-engine-status" style="font-weight:700">analyzing</span></div>
@@ -3864,9 +3810,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         </div>
       </div>
     </div>
-    </div>
   </div>
-  <div id="extra-strategy-panels" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start;width:100%;margin-bottom:16px"></div>
 
   <div class="summary-cards" id="summary-cards">
     <div class="summary-card"><div class="label">Win Rate</div><div class="value" id="sm-winrate">0%</div></div>
@@ -4147,206 +4091,6 @@ function updateChartTheme(isDarkMode) {
   });
 }
 
-var aiChart = null;
-var aiCandleSeries = null;
-function updateAiChart(data, pair, markers) {
-  var el = document.getElementById("ai-chart-container");
-  if (!el) return;
-  var mkHist = (markers || []).slice();
-  if (!aiChart) {
-    var hist = (data || []).slice();
-    // Defer creation until the panel is laid out (same pattern as multi-pair cards).
-    setTimeout(function() {
-      try {
-        aiChart = LightweightCharts.createChart(el, {
-          width: el.clientWidth || 380,
-          height: 350,
-          layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
-          grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
-          timeScale: { borderColor: "#1a1a1a", timeVisible: true, secondsVisible: false, barSpacing: 3, minBarSpacing: 3, rightOffset: 20 },
-          rightPriceScale: { borderColor: "#1a1a1a" },
-        });
-        aiCandleSeries = aiChart.addSeries(LightweightCharts.CandlestickSeries, {
-          upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
-          wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
-        });
-        if (hist.length >= 2) {
-          var candles = aggregateCandles(hist, 60);
-          aiCandleSeries.setData(candles);
-          applyChartMarkers(aiCandleSeries, mkHist, candles);
-          aiChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
-          var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
-          aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
-        }
-      } catch(e) { console.log("AI chart init error:", e); }
-    }, 50);
-    return;
-  }
-  if (!aiChart || !aiCandleSeries) return;
-  try {
-    var candles = aggregateCandles(data, 60);
-    aiCandleSeries.setData(candles);
-    applyChartMarkers(aiCandleSeries, mkHist, candles);
-    aiChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
-    var visibleBars = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
-    aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length});
-  } catch(e) { console.log("AI chart update error:", e); }
-}
-// ── Per-strategy annotation helpers (shared by AI + extra panels) ──
-function buildStrategyMarkers(trades, stratType, pair) {
-  var out = [];
-  (trades || []).forEach(function(t) {
-    if (!t || t.strategy !== stratType) return;
-    if (pair && t.pair && t.pair !== pair) return;
-    var raw = String(t.side || t.action || "").toLowerCase();
-    var isBuy = raw.indexOf("buy") >= 0 || raw.indexOf("long") >= 0;
-    var mkTime = Math.floor(Number(t.time || 0) / 60) * 60;
-    // t.time is unix seconds for ai_trades; clock strings ("HH:MM:SS") or
-    // missing times become NaN and are dropped (no marker for them).
-    if (!(mkTime > 0) || !(Number(t.price) > 0)) return;
-    out.push({ time: mkTime, price: Number(t.price), isBuy: isBuy });
-  });
-  return out;
-}
-function applyStrategyLimitLine(panel, limitPrice) {
-  if (!panel || !panel._spChart || !panel._spSeries) return;
-  try {
-    if (panel._spLimitLine) { panel._spChart.removePriceLine(panel._spLimitLine); panel._spLimitLine = null; }
-    if (limitPrice > 0) {
-      panel._spLimitLine = panel._spSeries.createPriceLine({
-        price: limitPrice,
-        color: "#ffd43b",
-        lineWidth: 1,
-        lineStyle: LightweightCharts.LineStyle.Dashed,
-        axisLabelVisible: true,
-        title: "LIMIT"
-      });
-    }
-  } catch(e) { console.log("Limit line error:", e); }
-}
-function applyChartMarkers(series, markers, candles) {
-  if (!series) return;
-  var times = {}; candles.forEach(function(c) { times[c.time] = true; });
-  var placed = [];
-  markers.forEach(function(m) {
-    if (!m || !times[m.time] || !(m.price > 0)) return;
-    placed.push({
-      time: m.time,
-      position: m.isBuy ? "belowBar" : "aboveBar",
-      color: m.isBuy ? "#00ff9d" : "#ff6b6b",
-      shape: m.isBuy ? "arrowUp" : "arrowDown",
-      text: m.isBuy ? "BUY" : "SELL"
-    });
-  });
-  try { series.setMarkers(placed); } catch(e) { console.log("Markers error:", e); }
-}
-function renderExtraStrategyPanels(d) {
-  var wrap = document.getElementById("extra-strategy-panels");
-  if (!wrap) return;
-  if (!d.strategies) { wrap.style.display = "none"; return; }
-  var seen = {};
-  var count = 0;
-  Object.keys(d.strategies).forEach(function(sid) {
-    var st = d.strategies[sid];
-    if (!st || !st.running) return;
-    if (st.type === "grid" || st.type === "ai_trading") return; // own panels row 1
-    seen[sid] = true; count++;
-    var safe = sid.replace(/[^a-zA-Z0-9]/g, "_");
-    var panel = document.getElementById("xspanel-" + safe);
-    var stPair = st.pair || d.pair || "SOL/USDC";
-    if (!panel) {
-      panel = document.createElement("div");
-      panel.id = "xspanel-" + safe;
-      panel.style.cssText = "min-width:0;display:flex;flex-direction:column;gap:16px;";
-      panel.innerHTML =
-        '<div id="xspanel-chart-' + safe + '" style="width:100%;min-width:0;height:250px"></div>' +
-        '<div class="card" id="xspanel-details-' + safe + '" style="width:100%;box-sizing:border-box;padding:12px;font-size:12px"></div>';
-      wrap.appendChild(panel);
-    }
-    // Details card
-    var det = document.getElementById("xspanel-details-" + safe);
-    if (det) {
-      var mode = st.paper_trading ? "PAPER" : "LIVE";
-      var paramsText = "Risk: " + (st.config && st.config.risk_pct != null ? st.config.risk_pct : "-") + "%";
-      if (st.type === "limit_buy" || st.type === "limit_sell") {
-        paramsText = "Amount: $" + ((st.config && st.config.limit_amount_usdc) || 0) + " @ $" + ((st.config && st.config.limit_price) || 0);
-      }
-      var logs = (st.log_tail || []).slice(-2);
-      var logHtml = logs.length ? logs.map(function(l) {
-        return '<div style="font-family:monospace;font-size:10px;color:var(--text2)">' + String(l).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</div>';
-      }).join("") : "";
-      det.innerHTML =
-        '<div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:8px">' + String(st.type).toUpperCase() +
-        ' <span style="font-weight:400;color:var(--text2)">' + stPair + '</span>' +
-        ' <span style="color:#00ff9d;font-size:11px;background:#00ff9d11;padding:2px 6px;border-radius:4px;border:1px solid #00ff9d22">' + (st.status || "RUNNING") + '</span>' +
-        ' <span style="color:var(--yellow);font-size:11px">' + mode + '</span></div>' +
-        '<div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>' + logHtml +
-        `<button class="btn" onclick="stopStrategy('${sid}')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px;margin-top:8px">&#9209; Stop</button>`;
-    }
-    // Chart: candles + strategy-tagged markers
-    var ph = (d.price_history_pairs && d.price_history_pairs[stPair]) ? d.price_history_pairs[stPair] : ((stPair === d.pair) ? d.price_history : []);
-    if (ph && ph.length >= 2) {
-      var lp = (st.type === "limit_buy" || st.type === "limit_sell") ? Number(st.config && st.config.limit_price) || 0 : 0;
-      updateStrategyPanelChart(panel, safe, ph, d.trades_list, st.type, stPair, lp);
-    }
-  });
-  // Drop panels for strategies that stopped
-  var remove = [];
-  wrap.querySelectorAll('[id^="xspanel-"]').forEach(function(node) {
-    if (node.id.indexOf("xspanel-chart-") === 0 || node.id.indexOf("xspanel-details-") === 0) return;
-    var sidKey = node.id.replace("xspanel-", "").replace(/[^a-zA-Z0-9]/g, "_");
-    if (!seen[node.id.replace("xspanel-", "")] && !seen[sidKey]) remove.push(node);
-  });
-  remove.forEach(function(n) { n.remove(); });
-  wrap.style.display = count ? "grid" : "none";
-}
-function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair, limitPrice) {
-  var el = document.getElementById("xspanel-chart-" + safe);
-  if (!el) return;
-  var myMarkers = buildStrategyMarkers(trades, stratType, pair);
-  var lPrice = Number(limitPrice || 0);
-  if (!panel._spChart) {
-    var ph = (hist || []).slice();
-    var mk = myMarkers.slice();
-    var lp0 = lPrice;
-    setTimeout(function() {
-      try {
-        var w = el.clientWidth || 380;
-        panel._spChart = LightweightCharts.createChart(el, {
-          width: w, height: 250,
-          layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
-          grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
-          timeScale: { borderColor: "#1a1a1a", timeVisible: true, secondsVisible: false, barSpacing: 3, minBarSpacing: 3, rightOffset: 20 },
-          rightPriceScale: { borderColor: "#1a1a1a" },
-        });
-        panel._spSeries = panel._spChart.addSeries(LightweightCharts.CandlestickSeries, {
-          upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
-          wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
-        });
-        if (ph.length >= 2) {
-          var candles = aggregateCandles(ph, 60);
-          panel._spSeries.setData(candles);
-          applyChartMarkers(panel._spSeries, mk, candles);
-          applyStrategyLimitLine(panel, lp0);
-          panel._spChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
-          var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
-          panel._spChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
-        }
-      } catch(e) { console.log("Panel chart init error:", e); }
-    }, 50);
-    return;
-  }
-  if (!panel._spChart || !panel._spSeries) return;
-  try {
-    var candles = aggregateCandles(hist, 60);
-    panel._spSeries.setData(candles);
-    applyChartMarkers(panel._spSeries, myMarkers, candles);
-    applyStrategyLimitLine(panel, lPrice);
-    panel._spChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
-    var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
-    panel._spChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
-  } catch(e) { console.log("Panel chart update error:", e); }
-}
 function updateChart(data, gridLevels, gridBuyZone, pair) {
   if (!chart || !candleSeries) return;
   // Remove old grid lines (do this first, regardless of data)
@@ -4612,7 +4356,6 @@ function selectStrat(s) {
   // so the panel is visible during configuration; do NOT hide it on other
   // selections: starting a grid must not make a running AI status card vanish.
   if (s=="ai_trading") document.getElementById("ai-trading-status-card").style.display = "block";
-  if (s=="ai_trading") { var _aiPanelSel = document.getElementById("ai-panel"); if (_aiPanelSel) _aiPanelSel.style.display = "flex"; }
   updateBtn();
 }
 
@@ -4992,7 +4735,6 @@ function refresh() {
     // off "grid" and the running grid's card would show its idle state.
     var gridRunning = false;
     var gridStrategyPair = null;
-    var aiStrategyPair = null;
     if (d.strategies) {
       Object.keys(d.strategies).forEach(function(k) {
         var st = d.strategies[k];
@@ -5000,15 +4742,10 @@ function refresh() {
           gridRunning = true;
           if (!gridStrategyPair) gridStrategyPair = st.pair;
         }
-        if (st && st.type === "ai_trading" && st.running && !aiStrategyPair) aiStrategyPair = st.pair;
       });
     }
     var aiStatusCard = document.getElementById("ai-trading-status-card");
     if (aiStatusCard) aiStatusCard.style.display = (aiRunning || sel.strat === "ai_trading") ? "block" : "none";
-    var aiPanel = document.getElementById("ai-panel");
-    if (aiPanel) aiPanel.style.display = (aiRunning || sel.strat === "ai_trading") ? "flex" : "none";
-    var aiChartEl = document.getElementById("ai-chart-container");
-    if (aiChartEl) aiChartEl.style.display = aiRunning ? "block" : "none";
     if (aiRunning) {
       document.getElementById("ai-engine-status").textContent = d.ai_status || "analyzing";
       document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
@@ -5038,15 +4775,6 @@ function refresh() {
           aiPosEl.textContent = "No open AI positions";
         }
       }
-      // AI panel own chart: render from the running AI strategy's pair history
-      var aiChartPair = aiStrategyPair || d.pair || "SOL/USDC";
-      var aiChartHist = (d.price_history_pairs && d.price_history_pairs[aiChartPair]) ? d.price_history_pairs[aiChartPair] : ((aiChartPair === d.pair) ? d.price_history : []);
-      var aiMarkers = buildStrategyMarkers(d.ai_trades || d.trades_list, "ai_trading", aiChartPair);
-      if (aiChartHist && aiChartHist.length >= 2) {
-        updateAiChart(aiChartHist, aiChartPair, aiMarkers);
-      }
-      // Generic panels for any other running strategies (limit/dca/etc.)
-      renderExtraStrategyPanels(d);
     }
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
@@ -5065,7 +4793,7 @@ function refresh() {
       window._wasMulti = true;
     } else {
       window._wasMulti = false;
-      if (singleRow) singleRow.style.display = "grid";
+      if (singleRow) singleRow.style.display = "flex";
       if (chartsWrap) chartsWrap.style.display = "none";
       if (!on && chartsWrap) {
         chartsWrap.querySelectorAll('[id^="mpcard-"]').forEach(function(card) { card.remove(); });
