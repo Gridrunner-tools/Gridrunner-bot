@@ -3815,6 +3815,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
     </div>
     </div>
   </div>
+  <div id="extra-strategy-panels" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px;align-items:start;width:100%;margin-bottom:16px"></div>
 
   <div class="summary-cards" id="summary-cards">
     <div class="summary-card"><div class="label">Win Rate</div><div class="value" id="sm-winrate">0%</div></div>
@@ -4097,9 +4098,10 @@ function updateChartTheme(isDarkMode) {
 
 var aiChart = null;
 var aiCandleSeries = null;
-function updateAiChart(data, pair) {
+function updateAiChart(data, pair, markers) {
   var el = document.getElementById("ai-chart-container");
   if (!el) return;
+  var mkHist = (markers || []).slice();
   if (!aiChart) {
     var hist = (data || []).slice();
     // Defer creation until the panel is laid out (same pattern as multi-pair cards).
@@ -4120,6 +4122,7 @@ function updateAiChart(data, pair) {
         if (hist.length >= 2) {
           var candles = aggregateCandles(hist, 60);
           aiCandleSeries.setData(candles);
+          applyChartMarkers(aiCandleSeries, mkHist, candles);
           aiChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
           var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
           aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
@@ -4132,10 +4135,144 @@ function updateAiChart(data, pair) {
   try {
     var candles = aggregateCandles(data, 60);
     aiCandleSeries.setData(candles);
+    applyChartMarkers(aiCandleSeries, mkHist, candles);
     aiChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
     var visibleBars = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
     aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length});
   } catch(e) { console.log("AI chart update error:", e); }
+}
+// ── Per-strategy annotation helpers (shared by AI + extra panels) ──
+function buildStrategyMarkers(trades, stratType, pair) {
+  var out = [];
+  (trades || []).forEach(function(t) {
+    if (!t || t.strategy !== stratType) return;
+    if (pair && t.pair && t.pair !== pair) return;
+    var isBuy = (t.action || "").toLowerCase() === "buy";
+    out.push({
+      time: Math.floor(Number(t.time || 0) / 60) * 60,
+      price: Number(t.price || 0),
+      isBuy: isBuy
+    });
+  });
+  return out;
+}
+function applyChartMarkers(series, markers, candles) {
+  if (!series) return;
+  var times = {}; candles.forEach(function(c) { times[c.time] = true; });
+  var placed = [];
+  markers.forEach(function(m) {
+    if (!m || !times[m.time] || !(m.price > 0)) return;
+    placed.push({
+      time: m.time,
+      position: m.isBuy ? "belowBar" : "aboveBar",
+      color: m.isBuy ? "#00ff9d" : "#ff6b6b",
+      shape: m.isBuy ? "arrowUp" : "arrowDown",
+      text: m.isBuy ? "BUY" : "SELL"
+    });
+  });
+  try { series.setMarkers(placed); } catch(e) { console.log("Markers error:", e); }
+}
+function renderExtraStrategyPanels(d) {
+  var wrap = document.getElementById("extra-strategy-panels");
+  if (!wrap) return;
+  if (!d.strategies) { wrap.style.display = "none"; return; }
+  var seen = {};
+  var count = 0;
+  Object.keys(d.strategies).forEach(function(sid) {
+    var st = d.strategies[sid];
+    if (!st || !st.running) return;
+    if (st.type === "grid" || st.type === "ai_trading") return; // own panels row 1
+    seen[sid] = true; count++;
+    var safe = sid.replace(/[^a-zA-Z0-9]/g, "_");
+    var panel = document.getElementById("xspanel-" + safe);
+    var stPair = st.pair || d.pair || "SOL/USDC";
+    if (!panel) {
+      panel = document.createElement("div");
+      panel.id = "xspanel-" + safe;
+      panel.style.cssText = "min-width:0;display:flex;flex-direction:column;gap:16px;";
+      panel.innerHTML =
+        '<div id="xspanel-chart-' + safe + '" style="width:100%;min-width:0;height:250px"></div>' +
+        '<div class="card" id="xspanel-details-' + safe + '" style="width:100%;box-sizing:border-box;padding:12px;font-size:12px"></div>';
+      wrap.appendChild(panel);
+    }
+    // Details card
+    var det = document.getElementById("xspanel-details-" + safe);
+    if (det) {
+      var mode = st.paper_trading ? "PAPER" : "LIVE";
+      var paramsText = "Risk: " + (st.config && st.config.risk_pct != null ? st.config.risk_pct : "-") + "%";
+      if (st.type === "limit_buy" || st.type === "limit_sell") {
+        paramsText = "Amount: $" + ((st.config && st.config.limit_amount_usdc) || 0) + " @ $" + ((st.config && st.config.limit_price) || 0);
+      }
+      var logs = (st.log_tail || []).slice(-2);
+      var logHtml = logs.length ? logs.map(function(l) {
+        return '<div style="font-family:monospace;font-size:10px;color:var(--text2)">' + String(l).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;") + '</div>';
+      }).join("") : "";
+      det.innerHTML =
+        '<div style="font-weight:700;font-size:13px;display:flex;align-items:center;gap:8px">' + String(st.type).toUpperCase() +
+        ' <span style="font-weight:400;color:var(--text2)">' + stPair + '</span>' +
+        ' <span style="color:#00ff9d;font-size:11px;background:#00ff9d11;padding:2px 6px;border-radius:4px;border:1px solid #00ff9d22">' + (st.status || "RUNNING") + '</span>' +
+        ' <span style="color:var(--yellow);font-size:11px">' + mode + '</span></div>' +
+        '<div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>' + logHtml +
+        '<button class="btn" onclick="stopStrategy(\'' + sid.replace(/\\/g,'\\') + '\')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px;margin-top:8px">&#9209; Stop</button>';
+    }
+    // Chart: candles + strategy-tagged markers
+    var ph = (d.price_history_pairs && d.price_history_pairs[stPair]) ? d.price_history_pairs[stPair] : ((stPair === d.pair) ? d.price_history : []);
+    if (ph && ph.length >= 2) {
+      updateStrategyPanelChart(panel, safe, ph, d.trades_list, st.type, stPair);
+    }
+  });
+  // Drop panels for strategies that stopped
+  var remove = [];
+  wrap.querySelectorAll('[id^="xspanel-"]').forEach(function(node) {
+    if (node.id.indexOf("xspanel-chart-") === 0 || node.id.indexOf("xspanel-details-") === 0) return;
+    var sidKey = node.id.replace("xspanel-", "").replace(/[^a-zA-Z0-9]/g, "_");
+    if (!seen[node.id.replace("xspanel-", "")] && !seen[sidKey]) remove.push(node);
+  });
+  remove.forEach(function(n) { n.remove(); });
+  wrap.style.display = count ? "grid" : "none";
+}
+function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair) {
+  var el = document.getElementById("xspanel-chart-" + safe);
+  if (!el) return;
+  var myMarkers = buildStrategyMarkers(trades, stratType, pair);
+  if (!panel._spChart) {
+    var ph = (hist || []).slice();
+    var mk = myMarkers.slice();
+    setTimeout(function() {
+      try {
+        var w = el.clientWidth || 380;
+        panel._spChart = LightweightCharts.createChart(el, {
+          width: w, height: 250,
+          layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+          grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+          timeScale: { borderColor: "#1a1a1a", timeVisible: true, secondsVisible: false, barSpacing: 3, minBarSpacing: 3, rightOffset: 20 },
+          rightPriceScale: { borderColor: "#1a1a1a" },
+        });
+        panel._spSeries = panel._spChart.addSeries(LightweightCharts.CandlestickSeries, {
+          upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+          wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
+        });
+        if (ph.length >= 2) {
+          var candles = aggregateCandles(ph, 60);
+          panel._spSeries.setData(candles);
+          applyChartMarkers(panel._spSeries, mk, candles);
+          panel._spChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
+          var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
+          panel._spChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
+        }
+      } catch(e) { console.log("Panel chart init error:", e); }
+    }, 50);
+    return;
+  }
+  if (!panel._spChart || !panel._spSeries) return;
+  try {
+    var candles = aggregateCandles(hist, 60);
+    panel._spSeries.setData(candles);
+    applyChartMarkers(panel._spSeries, myMarkers, candles);
+    panel._spChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
+    var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
+    panel._spChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
+  } catch(e) { console.log("Panel chart update error:", e); }
 }
 function updateChart(data, gridLevels, gridBuyZone, pair) {
   if (!chart || !candleSeries) return;
@@ -4831,9 +4968,12 @@ function refresh() {
       // AI panel own chart: render from the running AI strategy's pair history
       var aiChartPair = aiStrategyPair || d.pair || "SOL/USDC";
       var aiChartHist = (d.price_history_pairs && d.price_history_pairs[aiChartPair]) ? d.price_history_pairs[aiChartPair] : ((aiChartPair === d.pair) ? d.price_history : []);
+      var aiMarkers = buildStrategyMarkers(d.trades_list, "ai_trading", aiChartPair);
       if (aiChartHist && aiChartHist.length >= 2) {
-        updateAiChart(aiChartHist, aiChartPair);
+        updateAiChart(aiChartHist, aiChartPair, aiMarkers);
       }
+      // Generic panels for any other running strategies (limit/dca/etc.)
+      renderExtraStrategyPanels(d);
     }
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";

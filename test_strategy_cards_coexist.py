@@ -103,13 +103,47 @@ def test_ai_chart_fed_from_running_ai_pair():
     assert 'if (st && st.type === "ai_trading" && st.running && !aiStrategyPair) aiStrategyPair = st.pair;' in refresh
     assert "var aiChartPair = aiStrategyPair || d.pair || \"SOL/USDC\";" in refresh
     assert "(d.price_history_pairs && d.price_history_pairs[aiChartPair])" in refresh
-    assert "updateAiChart(aiChartHist, aiChartPair);" in refresh
+    assert "updateAiChart(aiChartHist, aiChartPair, aiMarkers);" in refresh
+    assert 'var aiMarkers = buildStrategyMarkers(d.trades_list, "ai_trading", aiChartPair);' in refresh
 def test_updateAiChart_renders_into_ai_chart_container():
-    assert "function updateAiChart(data, pair) {" in SOURCE
+    assert "function updateAiChart(data, pair, markers) {" in SOURCE
+    assert "applyChartMarkers(aiCandleSeries, mkHist, candles)" in SOURCE
     assert 'document.getElementById("ai-chart-container")' in SOURCE
     assert "LightweightCharts.createChart(el, {" in SOURCE
     assert "aggregateCandles(hist, 60)" in SOURCE
     assert "aiCandleSeries.setData(candles)" in SOURCE
+def test_ai_chart_shows_ai_trade_markers():
+    """The AI chart renders AI-tagged buy/sell markers (strategy==ai_trading,
+    matching pair), snapped to the 60s candle grid."""
+    assert "function buildStrategyMarkers(trades, stratType, pair) {" in SOURCE
+    assert 'if (!t || t.strategy !== stratType) return;' in SOURCE
+    assert 'var isBuy = (t.action || "").toLowerCase() === "buy";' in SOURCE
+    assert 'time: Math.floor(Number(t.time || 0) / 60) * 60,' in SOURCE
+    assert "function applyChartMarkers(series, markers, candles) {" in SOURCE
+    assert 'position: m.isBuy ? "belowBar" : "aboveBar",' in SOURCE
+    assert 'shape: m.isBuy ? "arrowUp" : "arrowDown",' in SOURCE
+    assert 'series.setMarkers(placed)' in SOURCE
+    # Called from the AI chart feed with the AI pair and AI-tagged trades
+    assert "updateAiChart(aiChartHist, aiChartPair, aiMarkers);" in SOURCE
+
+def test_extra_strategy_panels_below_panel_grid():
+    """Non-grid/non-AI running strategies (limit_buy, limit_sell, dca, ...)
+    render their own panels below the grid+AI row in the same style: own chart
+    container + own details card, with strategy-tagged trade markers."""
+    assert 'id="extra-strategy-panels"' in SOURCE
+    assert 'id="extra-strategy-panels" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:16px' in SOURCE
+    # Extra panels come AFTER the grid+AI row, BEFORE summary cards
+    assert SOURCE.index('id="extra-strategy-panels"') < SOURCE.index('id="summary-cards"')
+    assert SOURCE.index('id="ai-trading-status-card"') < SOURCE.index('id="extra-strategy-panels"')
+    assert "function renderExtraStrategyPanels(d) {" in SOURCE
+    assert 'if (st.type === "grid" || st.type === "ai_trading") return; // own panels row 1' in SOURCE
+    assert 'panel.id = "xspanel-" + safe;' in SOURCE
+    assert '<div id="xspanel-chart-' + "' + safe + '" + '" style="width:100%;min-width:0;height:250px"></div>' in SOURCE
+    assert "function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair) {" in SOURCE
+    assert 'var myMarkers = buildStrategyMarkers(trades, stratType, pair);' in SOURCE
+    assert "wrap.style.display = count ? \"grid\" : \"none\";" in SOURCE
+    assert "LightweightCharts.createChart(el, {" in SOURCE
+
 def test_selectStrat_still_surfaces_ai_panel():
     fn = _slice("function selectStrat(s) {", "function selectPair(p) {")
     assert 'document.getElementById("ai-trading-status-card").style.display = "block"' in fn
