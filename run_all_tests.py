@@ -50,6 +50,7 @@ run('test_state_serialization')
 run('test_ai_card_persists_with_grid')
 run('test_strategy_cards_coexist')
 run('test_token_registry')
+run('test_marker_behavior')
 if failed:
     print(f"\n{len(failed)} FAILURE(S)"); sys.exit(1)
 print("\nALL SUITES PASS")
