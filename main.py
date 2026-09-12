@@ -3745,6 +3745,7 @@ h1{font-size:22px;font-weight:900;color:var(--text)}
 #chart-container{height:350px;flex:1;min-width:0;border-radius:10px;background:var(--card);border:1px solid var(--border);overflow:hidden;position:relative}
 #chart-container iframe{border-radius:10px}
 #ai-chart-container{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative;box-sizing:border-box}
+[id^="xspanel-chart-"]{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative;box-sizing:border-box}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
 .stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
 .sl{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
