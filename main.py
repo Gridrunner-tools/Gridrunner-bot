@@ -3788,6 +3788,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
       </div>
       <div id="grid-details-body"></div>
+    </div>
 
     <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct">AI Trading Live Status</div>
@@ -3796,16 +3797,18 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div style="display:flex;justify-content:space-between"><strong>Market Regime:</strong> <span id="ai-regime-status">—</span></div>
         <div style="display:flex;justify-content:space-between"><strong>Signal Score:</strong> <span id="ai-score-status">—</span></div>
         <div style="display:flex;justify-content:space-between"><strong>Confidence:</strong> <span id="ai-confidence-status">—</span></div>
-        <div style="display:flex;justify-content:space-between"><strong>Selected Strategy:</strong> <span id="ai-selected-strategy">—</span></div>
+        <div style="display:flex;justify-content:space-between"><strong>AI Strategy:</strong> <span id="ai-selected-strategy">AI Trading</span></div>
         <div style="display:flex;justify-content:space-between"><strong>Portfolio Exposure:</strong> <span id="ai-exposure-status">$0.00</span></div>
         <div style="display:flex;justify-content:space-between"><strong>Risk Status:</strong> <span id="ai-risk-status" style="color:var(--accent)">PASS</span></div>
         <div style="border-top:1px solid var(--border);padding-top:8px">
           <strong>Decision Logic:</strong>
           <div id="ai-decision-explain" style="font-size:11px;color:var(--text2);margin-top:4px;white-space:pre-wrap">Analyzing markets...</div>
         </div>
+        <div style="border-top:1px solid var(--border);padding-top:8px">
+          <strong>Open Positions:</strong>
+          <div id="ai-positions-body" style="font-size:11px;color:var(--text2);margin-top:4px">No open AI positions</div>
+        </div>
       </div>
-    </div>
-
     </div>
   </div>
 
@@ -4748,9 +4751,30 @@ function refresh() {
       document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
       document.getElementById("ai-score-status").textContent = d.ai_score ? d.ai_score.toFixed(1) : "—";
       document.getElementById("ai-confidence-status").textContent = d.ai_confidence || "—";
-      document.getElementById("ai-selected-strategy").textContent = d.ai_selected_strategy || "None";
+      // Product name only; internal sub-strategy stays in state["ai_selected_strategy"] for logs.
+      document.getElementById("ai-selected-strategy").textContent = "AI Trading";
       document.getElementById("ai-exposure-status").textContent = d.ai_exposure ? "$" + d.ai_exposure.toFixed(2) : "$0.00";
       document.getElementById("ai-decision-explain").textContent = d.ai_explain || "Analyzing markets...";
+      var aiPosEl = document.getElementById("ai-positions-body");
+      if (aiPosEl) {
+        var aiPosList = d.ai_positions || [];
+        if (aiPosList.length) {
+          var aiPosHtml = "";
+          aiPosList.forEach(function(p) {
+            if (typeof p === "object" && p !== null) {
+              var pSym = p.symbol || "?";
+              var pDir = p.direction || "LONG";
+              var pPnl = p.pnl || 0;
+              aiPosHtml += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="color:var(--accent);font-weight:600">' + pSym + '</span><span style="font-weight:700;color:' + (pPnl >= 0 ? "#00ff9d" : "#ff6b6b") + '">' + pDir + (pPnl ? ' $' + pPnl.toFixed(2) : '') + '</span></div>';
+            } else {
+              aiPosHtml += '<div style="display:flex;justify-content:space-between;margin-bottom:4px"><span style="color:var(--accent);font-weight:600">' + p + '</span><span style="color:var(--dim)">open</span></div>';
+            }
+          });
+          aiPosEl.innerHTML = aiPosHtml;
+        } else {
+          aiPosEl.textContent = "No open AI positions";
+        }
+      }
     }
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";

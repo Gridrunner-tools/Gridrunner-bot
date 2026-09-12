@@ -188,7 +188,13 @@ def generate_signals_and_score(
             strategy = "Mean Reversion"
             score = short_score + 10
         else:
-            direction = "LONG" if long_score >= short_score else "SHORT"
+            # No forced-direction fallback on a tie: when regime is RANGE and
+            # the long/short scores are exactly equal (no clean directional
+            # edge), stay flat. Spot is long-only, so defaulting to LONG on a
+            # tie forced an immediate long entry on ambiguous RANGE conditions.
+            if long_score == short_score:
+                return create_no_trade_signal(symbol, venue, regime, "RANGE no clear directional edge")
+            direction = "LONG" if long_score > short_score else "SHORT"
             strategy = "Adaptive Grid"
             score = max(long_score, short_score)
             
