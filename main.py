@@ -4281,7 +4281,7 @@ function renderExtraStrategyPanels(d) {
         ' <span style="color:#00ff9d;font-size:11px;background:#00ff9d11;padding:2px 6px;border-radius:4px;border:1px solid #00ff9d22">' + (st.status || "RUNNING") + '</span>' +
         ' <span style="color:var(--yellow);font-size:11px">' + mode + '</span></div>' +
         '<div style="color:var(--dim);font-size:11px;margin-top:4px">' + paramsText + '</div>' + logHtml +
-        '<button class="btn" onclick="stopStrategy(\\'' + sid.replace(/\\\\/g,'\\\\') + '\\')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px;margin-top:8px">&#9209; Stop</button>';
+        `<button class="btn" onclick="stopStrategy('${sid}')" style="color:var(--red);border-color:var(--red)44;font-size:11px;padding:6px 12px;margin-top:8px">&#9209; Stop</button>`;
     }
     // Chart: candles + strategy-tagged markers
     var ph = (d.price_history_pairs && d.price_history_pairs[stPair]) ? d.price_history_pairs[stPair] : ((stPair === d.pair) ? d.price_history : []);
