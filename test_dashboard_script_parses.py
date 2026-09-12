@@ -137,6 +137,8 @@ def test_dashboard_ai_row_below_grid_with_own_chart():
     assert html.count('id="ai-chart-container"') == 1
     js = _served_dashboard_js()
     for needle in (
+        'var w = document.getElementById("chart-container").clientWidth;',
+        "if (w > 0) chart.applyOptions({width: w});",
         "var aiChart = null;",
         "function initAIChart()",
         "function updateAIChart(data, pair)",

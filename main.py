@@ -5247,8 +5247,8 @@ function refresh() {
 
 window.addEventListener("resize", function() {
   if (chart) {
-    var w = document.getElementById("chart-container").clientWidth || 600;
-    chart.applyOptions({width: w});
+    var w = document.getElementById("chart-container").clientWidth;
+    if (w > 0) chart.applyOptions({width: w});
   }
   if (aiChart) {
     var aw = document.getElementById("ai-chart-container").clientWidth;
