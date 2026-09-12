@@ -26,10 +26,15 @@ def test_trailing_sell_trigger_is_not_zone_gated():
     assert "if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):" in SRC
     # It must appear OUTSIDE the 'if not is_buy_zone:' guard. Verify the line is
     # not indented at the sell-zone body level (i.e. not nested under the guard).
+    # Indent 24 == the run_grid loop-body level after the resilience
+    # try/except wrapper (added 2026-09-12: transient per-cycle errors must not
+    # kill the grid loop). Relative level inside the loop body is unchanged
+    # from the pre-wrapper indent of 20 (both are the same nest depth below the
+    # `for pair` loop, outside any zone guard).
     for line in SRC.splitlines():
         if "if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):" in line:
             indent = len(line) - len(line.lstrip())
-            assert indent == 20, f"sell trigger must be at run_grid body level (indent 20), got {indent}"
+            assert indent == 24, f"sell trigger must be at run_grid body level (indent 24), got {indent}"
             break
 
 
