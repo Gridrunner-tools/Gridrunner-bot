@@ -34,7 +34,13 @@ def test_config_bounds_reject_non_finite_values():
     # Ensure the runtime path uses finite and explicit bounds checks.
     handler = SOURCE[SOURCE.index('if path == "/config":'):SOURCE.index('elif path == "/trade_log":')]
     assert 'math.isfinite(val)' in handler
-    assert '"partial_sell_pct": (1, 99)' in handler
+    assert '"partial_sell_pct": (1, 100)' in handler
+    # Task: default partial sell is now full-position sell (100), and 100 is
+    # accepted by the /config bounds (was (1, 99) which rejected 100).
+    assert 'configNumber("cfg-partial", 100)' in SOURCE
+    assert 'd.config.partial_sell_pct || 100' in SOURCE
+    assert 'os.environ.get("PARTIAL_SELL_PCT", "100")' in SOURCE
+    assert '"partial_sell_pct": cfg.get("partial_sell_pct",100)' in SOURCE
 
 
 if __name__ == "__main__":

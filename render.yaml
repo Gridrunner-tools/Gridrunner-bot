@@ -30,7 +30,7 @@ services:
       - key: AUTO_COMPOUND
         value: "true"
       - key: PARTIAL_SELL_PCT
-        value: "50"
+        value: "100"
       - key: MAX_POSITION_USD
         value: "500"
       - key: MAX_DAILY_LOSS_USD

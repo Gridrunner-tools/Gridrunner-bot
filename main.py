@@ -20,7 +20,7 @@ def _normalize_partial_sell_pct(value):
     try:
         return max(1, min(100, float(value)))
     except (TypeError, ValueError):
-        return 50.0
+        return 100.0
 TOKEN_DECIMALS = {"USDC": 6, "USDT": 6, "SOL": 9, "BTC": 8, "ETH": 8, "JUP": 6, "BONK": 5, "WIF": 6, "SPCX": 6}
 
 
@@ -227,7 +227,7 @@ cfg = {
     # var or a manual dashboard toggle (which persists in paper_mode.json).
     "paper_trading":   (_env_paper_mode() if _env_paper_mode() is not None else True),
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
-    "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
+    "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "100")),
     "grid_level_count":  max(2, min(int(os.environ.get("GRID_LEVELS", "5")), 100)),
 }
 
@@ -388,7 +388,7 @@ state = ThreadSafeState({
     # Per-pair completed-trade metrics used by dashboard summary cards.
     "pair_stats":    {},
     "positions_list": [],
-    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
+    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",100), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True)},
     "last_trade":    None,
     "price_history": [],
     "price_history_pairs": {},
@@ -2711,10 +2711,10 @@ def run_grid(sid=None):
                                         state["grid_trailing_active"] = False
                                         state["grid_trailing_high"] = 0.0
                                         break
-                                    partial_pct = cfg.get("partial_sell_pct", 50)
+                                    partial_pct = cfg.get("partial_sell_pct", 100)
                                     # Check if this position still has a partial remainder
                                     partial_key = str(buy_idx)
-                                    is_partial_sell = cfg.get("partial_sell_pct", 50) < 100
+                                    is_partial_sell = cfg.get("partial_sell_pct", 100) < 100
                                     sell_amt = amt
                                     # ── Partial sell logic ──
                                     if is_partial_sell and partial_key not in state.get("partial_positions", {}):
@@ -3918,7 +3918,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
       <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
       <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.5" min="0.1" max="10" step="0.1"/></div>
-      <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="50" min="0" max="100" step="5"/></div>
+      <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="100" min="0" max="100" step="5"/></div>
       <div class="config-field"><label>Grid Spread (%)</label><input type="number" id="cfg-spread" value="5" min="1" max="30" step="0.5"/></div>
       <div class="config-field"><label>Auto-Compound</label><select id="cfg-compound"><option value="true">On</option><option value="false">Off</option></select></div>
     </div>
@@ -4326,7 +4326,7 @@ function saveConfig() {
     min_arb_spread: configNumber("cfg-arbspread", 1.5),
     grid_stop_loss_pct: configNumber("cfg-stoploss", 8),
     trailing_pct: configNumber("cfg-trailing", 0.5),
-    partial_sell_pct: configNumber("cfg-partial", 50),
+    partial_sell_pct: configNumber("cfg-partial", 100),
     base_spread: configNumber("cfg-spread", 5) / 100,
     auto_compound: document.getElementById("cfg-compound").value === "true"
   };
@@ -5121,7 +5121,7 @@ function refresh() {
       document.getElementById("cfg-arbspread").value = d.config.min_arb_spread ?? 1.5;
       document.getElementById("cfg-stoploss").value = d.config.grid_stop_loss_pct || 8;
       document.getElementById("cfg-trailing").value = d.config.trailing_pct || 0.5;
-      document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
+      document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 100;
       document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
       document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
     }
@@ -5719,7 +5719,7 @@ class Handler(BaseHTTPRequestHandler):
                     elif key in float_keys:
                         try:
                             val = float(data[key])
-                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "grid_stop_loss_pct": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 99), "base_spread": (0, 1)}
+                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "grid_stop_loss_pct": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 100), "base_spread": (0, 1)}
                             lo, hi = bounds[key]
                             if not math.isfinite(val) or not lo <= val <= hi:
                                 raise ValueError("out of bounds")
