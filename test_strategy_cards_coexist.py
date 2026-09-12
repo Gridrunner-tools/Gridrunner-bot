@@ -104,7 +104,7 @@ def test_ai_chart_fed_from_running_ai_pair():
     assert "var aiChartPair = aiStrategyPair || d.pair || \"SOL/USDC\";" in refresh
     assert "(d.price_history_pairs && d.price_history_pairs[aiChartPair])" in refresh
     assert "updateAiChart(aiChartHist, aiChartPair, aiMarkers);" in refresh
-    assert 'var aiMarkers = buildStrategyMarkers(d.trades_list, "ai_trading", aiChartPair);' in refresh
+    assert 'var aiMarkers = buildStrategyMarkers(d.ai_trades || d.trades_list, "ai_trading", aiChartPair);' in refresh
 def test_updateAiChart_renders_into_ai_chart_container():
     assert "function updateAiChart(data, pair, markers) {" in SOURCE
     assert "applyChartMarkers(aiCandleSeries, mkHist, candles)" in SOURCE
@@ -117,8 +117,9 @@ def test_ai_chart_shows_ai_trade_markers():
     matching pair), snapped to the 60s candle grid."""
     assert "function buildStrategyMarkers(trades, stratType, pair) {" in SOURCE
     assert 'if (!t || t.strategy !== stratType) return;' in SOURCE
-    assert 'var isBuy = (t.action || "").toLowerCase() === "buy";' in SOURCE
-    assert 'time: Math.floor(Number(t.time || 0) / 60) * 60,' in SOURCE
+    assert 'var raw = String(t.side || t.action || "").toLowerCase();' in SOURCE
+    assert 'var isBuy = raw.indexOf("buy") >= 0 || raw.indexOf("long") >= 0;' in SOURCE
+    assert 'var mkTime = Math.floor(Number(t.time || 0) / 60) * 60;' in SOURCE
     assert "function applyChartMarkers(series, markers, candles) {" in SOURCE
     assert 'position: m.isBuy ? "belowBar" : "aboveBar",' in SOURCE
     assert 'shape: m.isBuy ? "arrowUp" : "arrowDown",' in SOURCE
@@ -139,10 +140,43 @@ def test_extra_strategy_panels_below_panel_grid():
     assert 'if (st.type === "grid" || st.type === "ai_trading") return; // own panels row 1' in SOURCE
     assert 'panel.id = "xspanel-" + safe;' in SOURCE
     assert '<div id="xspanel-chart-' + "' + safe + '" + '" style="width:100%;min-width:0;height:250px"></div>' in SOURCE
-    assert "function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair) {" in SOURCE
+    assert "function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair, limitPrice) {" in SOURCE
     assert 'var myMarkers = buildStrategyMarkers(trades, stratType, pair);' in SOURCE
     assert "wrap.style.display = count ? \"grid\" : \"none\";" in SOURCE
     assert "LightweightCharts.createChart(el, {" in SOURCE
+
+def test_state_payload_exposes_ai_trades_field():
+    """_state_payload exposes a json-safe ai_trades list (unix time/price/side,
+    strategy+pair tags) built from engine.positions (open) + strategy-tagged
+    trades (realized). Never None — empty list means no AI trades."""
+    assert 'ai_trades = []' in SOURCE or "state.get(\"ai_engine\")" in SOURCE
+    assert 'data["ai_trades"] = ai_trades[-40:]' in SOURCE
+    assert '"strategy": "ai_trading"' in SOURCE
+    assert '_tr.get("strategy", "")' in SOURCE
+    assert '"LONG" in _raw or "BUY" in _raw' in SOURCE
+
+def test_build_strategy_markers_generalized_side_time():
+    """Markers accept unix-second times (ai_trades) and drop non-numeric
+    (clock-string) times instead of emitting NaN markers."""
+    assert "function buildStrategyMarkers(trades, stratType, pair) {" in SOURCE
+    assert 'var raw = String(t.side || t.action || "").toLowerCase();' in SOURCE
+    assert 'var isBuy = raw.indexOf("buy") >= 0 || raw.indexOf("long") >= 0;' in SOURCE
+    assert 'var mkTime = Math.floor(Number(t.time || 0) / 60) * 60;' in SOURCE
+    assert "if (!(mkTime > 0) || !(Number(t.price) > 0)) return;" in SOURCE
+
+def test_extra_panels_limit_price_line():
+    """Limit_buy/limit_sell extra panels draw a dashed LIMIT price line and
+    pass the limit price from the running strategy's config."""
+    assert "function applyStrategyLimitLine(panel, limitPrice) {" in SOURCE
+    assert "panel._spSeries.createPriceLine({" in SOURCE
+    assert 'title: "LIMIT"' in SOURCE
+    assert 'lineStyle: LightweightCharts.LineStyle.Dashed' in SOURCE
+    assert 'var lp = (st.type === "limit_buy" || st.type === "limit_sell") ? Number(st.config && st.config.limit_price) || 0 : 0;' in SOURCE
+    assert "updateStrategyPanelChart(panel, safe, ph, d.trades_list, st.type, stPair, lp);" in SOURCE
+
+def test_ai_chart_container_has_card_chrome():
+    """#ai-chart-container carries the same card chrome as #chart-container."""
+    assert '#ai-chart-container{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative;box-sizing:border-box}' in SOURCE
 
 def test_selectStrat_still_surfaces_ai_panel():
     fn = _slice("function selectStrat(s) {", "function selectPair(p) {")

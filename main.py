@@ -435,6 +435,55 @@ def _state_payload():
             else:
                 clean[sid] = strat
         data["strategies"] = clean
+    # AI trade markers: expose a small, JSON-safe list of AI entries+exits so
+    # the dashboard's AI chart can draw BUY/SELL markers aligned to its 60s
+    # candle grid. Open engine positions carry real unix entry timestamps;
+    # realized trades (state["trades"] tagged strategy=="ai_trading", side
+    # "AI-LONG"/"AI-SHORT") only store "HH:MM:SS" clock strings, so convert to
+    # today-unix. Always a list — empty means "no AI trades, render nothing".
+    ai_trades = []
+    engine = state.get("ai_engine")
+    ai_sid = ""
+    if isinstance(data.get("strategies"), dict):
+        for _sid, _strat in data["strategies"].items():
+            if isinstance(_strat, dict) and _strat.get("type") == "ai_trading" and _strat.get("running"):
+                ai_sid = _sid
+                break
+    if engine is not None:
+        _positions = getattr(engine, "positions", None)
+        if isinstance(_positions, dict):
+            for _sym, _pos in _positions.items():
+                if isinstance(_pos, dict) and _pos.get("entry"):
+                    ai_trades.append({
+                        "time": _pos.get("timestamp") or time.time(),
+                        "price": _pos.get("entry"),
+                        "side": "buy" if str(_pos.get("direction", "")).upper() == "LONG" else "sell",
+                        "pair": _sym,
+                        "strategy": "ai_trading",
+                        "sid": ai_sid,
+                        "state": "open",
+                    })
+    _today = time.strftime("%Y-%m-%d")
+    for _tr in state.get("trades", [])[-100:]:
+        if str(_tr.get("strategy", "")) != "ai_trading":
+            continue
+        _raw = str(_tr.get("side", "")).upper()
+        _side = "buy" if ("LONG" in _raw or "BUY" in _raw) else "sell"
+        try:
+            _unix = time.mktime(time.strptime(_today + " " + str(_tr.get("time", "")), "%Y-%m-%d %H:%M:%S"))
+        except Exception:
+            _unix = time.time()
+        ai_trades.append({
+            "time": _unix,
+            "price": _tr.get("price") or 0.0,
+            "side": _side,
+            "pair": _tr.get("pair") or state.get("pair", ""),
+            "strategy": "ai_trading",
+            "sid": _tr.get("sid") or ai_sid,
+            "state": "closed",
+        })
+    ai_trades.sort(key=lambda _t: _t.get("time") or 0)
+    data["ai_trades"] = ai_trades[-40:]
     return data
 
 def send_telegram(msg):
@@ -3695,6 +3744,7 @@ h1{font-size:22px;font-weight:900;color:var(--text)}
 .theme-btn:hover{border-color:var(--accent)}
 #chart-container{height:350px;flex:1;min-width:0;border-radius:10px;background:var(--card);border:1px solid var(--border);overflow:hidden;position:relative}
 #chart-container iframe{border-radius:10px}
+#ai-chart-container{background:var(--card);border:1px solid var(--border);border-radius:10px;overflow:hidden;position:relative;box-sizing:border-box}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
 .stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
 .sl{font-size:10px;font-weight:700;letter-spacing:2px;color:var(--dim);text-transform:uppercase;margin-bottom:6px}
@@ -4147,14 +4197,31 @@ function buildStrategyMarkers(trades, stratType, pair) {
   (trades || []).forEach(function(t) {
     if (!t || t.strategy !== stratType) return;
     if (pair && t.pair && t.pair !== pair) return;
-    var isBuy = (t.action || "").toLowerCase() === "buy";
-    out.push({
-      time: Math.floor(Number(t.time || 0) / 60) * 60,
-      price: Number(t.price || 0),
-      isBuy: isBuy
-    });
+    var raw = String(t.side || t.action || "").toLowerCase();
+    var isBuy = raw.indexOf("buy") >= 0 || raw.indexOf("long") >= 0;
+    var mkTime = Math.floor(Number(t.time || 0) / 60) * 60;
+    // t.time is unix seconds for ai_trades; clock strings ("HH:MM:SS") or
+    // missing times become NaN and are dropped (no marker for them).
+    if (!(mkTime > 0) || !(Number(t.price) > 0)) return;
+    out.push({ time: mkTime, price: Number(t.price), isBuy: isBuy });
   });
   return out;
+}
+function applyStrategyLimitLine(panel, limitPrice) {
+  if (!panel || !panel._spChart || !panel._spSeries) return;
+  try {
+    if (panel._spLimitLine) { panel._spChart.removePriceLine(panel._spLimitLine); panel._spLimitLine = null; }
+    if (limitPrice > 0) {
+      panel._spLimitLine = panel._spSeries.createPriceLine({
+        price: limitPrice,
+        color: "#ffd43b",
+        lineWidth: 1,
+        lineStyle: LightweightCharts.LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "LIMIT"
+      });
+    }
+  } catch(e) { console.log("Limit line error:", e); }
 }
 function applyChartMarkers(series, markers, candles) {
   if (!series) return;
@@ -4218,7 +4285,8 @@ function renderExtraStrategyPanels(d) {
     // Chart: candles + strategy-tagged markers
     var ph = (d.price_history_pairs && d.price_history_pairs[stPair]) ? d.price_history_pairs[stPair] : ((stPair === d.pair) ? d.price_history : []);
     if (ph && ph.length >= 2) {
-      updateStrategyPanelChart(panel, safe, ph, d.trades_list, st.type, stPair);
+      var lp = (st.type === "limit_buy" || st.type === "limit_sell") ? Number(st.config && st.config.limit_price) || 0 : 0;
+      updateStrategyPanelChart(panel, safe, ph, d.trades_list, st.type, stPair, lp);
     }
   });
   // Drop panels for strategies that stopped
@@ -4231,13 +4299,15 @@ function renderExtraStrategyPanels(d) {
   remove.forEach(function(n) { n.remove(); });
   wrap.style.display = count ? "grid" : "none";
 }
-function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair) {
+function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair, limitPrice) {
   var el = document.getElementById("xspanel-chart-" + safe);
   if (!el) return;
   var myMarkers = buildStrategyMarkers(trades, stratType, pair);
+  var lPrice = Number(limitPrice || 0);
   if (!panel._spChart) {
     var ph = (hist || []).slice();
     var mk = myMarkers.slice();
+    var lp0 = lPrice;
     setTimeout(function() {
       try {
         var w = el.clientWidth || 380;
@@ -4256,6 +4326,7 @@ function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair) {
           var candles = aggregateCandles(ph, 60);
           panel._spSeries.setData(candles);
           applyChartMarkers(panel._spSeries, mk, candles);
+          applyStrategyLimitLine(panel, lp0);
           panel._spChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
           var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
           panel._spChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
@@ -4269,6 +4340,7 @@ function updateStrategyPanelChart(panel, safe, hist, trades, stratType, pair) {
     var candles = aggregateCandles(hist, 60);
     panel._spSeries.setData(candles);
     applyChartMarkers(panel._spSeries, myMarkers, candles);
+    applyStrategyLimitLine(panel, lPrice);
     panel._spChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
     var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
     panel._spChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
@@ -4968,7 +5040,7 @@ function refresh() {
       // AI panel own chart: render from the running AI strategy's pair history
       var aiChartPair = aiStrategyPair || d.pair || "SOL/USDC";
       var aiChartHist = (d.price_history_pairs && d.price_history_pairs[aiChartPair]) ? d.price_history_pairs[aiChartPair] : ((aiChartPair === d.pair) ? d.price_history : []);
-      var aiMarkers = buildStrategyMarkers(d.trades_list, "ai_trading", aiChartPair);
+      var aiMarkers = buildStrategyMarkers(d.ai_trades || d.trades_list, "ai_trading", aiChartPair);
       if (aiChartHist && aiChartHist.length >= 2) {
         updateAiChart(aiChartHist, aiChartPair, aiMarkers);
       }
