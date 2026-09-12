@@ -69,3 +69,24 @@ def test_dashboard_script_has_init_and_manual_sell_wiring():
         "function manualSell(",
     ):
         assert needle in js, "dashboard script is missing %r" % needle
+
+def test_dashboard_seeds_chart_on_load_and_strips_credential_url():
+    """Regression: page-load seed for the active pair + boot URL-credential strip.
+
+    Root cause found 2026-09-12: a dashboard URL that embeds credentials
+    (http://user:pass@host — shared links/bookmarks) makes every relative
+    fetch() throw a SecurityError ("URL that includes credentials"), so the
+    first refresh() dies silently: price stays '—', the chart is never seeded
+    and renders EMPTY. Fix = strip userinfo once at boot via history.replaceState
+    so refresh/seeding run, plus an explicit seedHistoryOnLoad() timed call so a
+    stopped bot's selected pair gets chart data on page load.
+    """
+    js = _served_dashboard_js()
+    for needle in (
+        'apiFetch("/chart_history?pair=" + encodeURIComponent(pair))',
+        "function seedHistoryOnLoad(pair)",
+        "seedHistoryOnLoad((selEl2 && selEl2.value) ? selEl2.value : \"SOL/USDC\")",
+        "window._cleanBase",
+        "url = new URL(url, window._cleanBase);",
+    ):
+        assert needle in js, "dashboard script is missing seed/URL-strip wiring %r" % needle

@@ -5407,12 +5407,47 @@ window.addEventListener("resize", function() {
   }
 });
 
+// Boot: shared links/bookmarks like http://user:pass@host keep userinfo in
+// the document base URL, which makes EVERY relative fetch() throw a
+// SecurityError ("URL that includes credentials") - refresh dies silently,
+// price stays "--" and the chart never seeds -> empty chart. Compute a clean
+// base once; apiFetch resolves against it, and tidy the address bar too.
+try {
+  var bootUrl = location.href;
+  var bootScheme = bootUrl.indexOf("://");
+  var bootAt = bootUrl.indexOf("@");
+  window._cleanBase = bootUrl;
+  if (bootScheme > 0 && bootAt > bootScheme + 3) {
+    window._cleanBase = bootUrl.slice(0, bootScheme + 3) + bootUrl.slice(bootAt + 1);
+    history.replaceState(null, "", window._cleanBase);
+  }
+} catch (e) {}
+if (!window._cleanBase) window._cleanBase = location.href;
+function seedHistoryOnLoad(pair) {
+  // Seed the active pair's chart history on page load (stopped bot: the
+  // selected pair may never have been sampled, so its chart stays empty
+  // until a user interaction). Server seeds + stores into price_history_pairs;
+  // the 3s refresh then renders it. Shares fetchPairChartHistory's cooldown.
+  if (!pair) return;
+  if (!window._pairChartFetches) window._pairChartFetches = {};
+  var nowTs = Date.now();
+  if (nowTs - (window._pairChartFetches[pair] || 0) < 15000) return;
+  window._pairChartFetches[pair] = nowTs;
+  apiFetch("/chart_history?pair=" + encodeURIComponent(pair)).catch(function() {});
+}
 setInterval(refresh, 3000);
 refresh();
 initChart();
+setTimeout(function(){ try { var selEl2 = document.getElementById("pair-select"); seedHistoryOnLoad((selEl2 && selEl2.value) ? selEl2.value : "SOL/USDC"); } catch (e) {} }, 600);
+
   function apiFetch(url, opts) {
     opts = opts || {};
     opts.credentials = "same-origin";
+    // Relative fetches against a credentialed base URL throw SecurityError;
+    // resolve against the clean base computed at boot instead.
+    if (window._cleanBase && typeof url === "string" && url.indexOf("://") === -1) {
+      url = new URL(url, window._cleanBase);
+    }
     return fetch(url, opts);
   }
   document.querySelectorAll("#config-card input, #config-card select").forEach(function(el) {
