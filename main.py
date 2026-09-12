@@ -3694,6 +3694,7 @@ h1{font-size:22px;font-weight:900;color:var(--text)}
 .theme-btn{background:var(--card);border:1px solid var(--border);border-radius:8px;padding:8px 12px;cursor:pointer;font-size:13px;color:var(--text);transition:all .15s}
 .theme-btn:hover{border-color:var(--accent)}
 #chart-container{height:350px;flex:1;min-width:0;border-radius:10px;background:var(--card);border:1px solid var(--border);overflow:hidden;position:relative}
+#ai-chart-container{height:350px;flex:1;min-width:320px;border-radius:10px;background:var(--card);border:1px solid var(--border);overflow:hidden;position:relative}
 #chart-container iframe{border-radius:10px}
 .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:20px}
 .stat{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:16px}
@@ -3790,7 +3791,12 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <div id="grid-details-body"></div>
     </div>
 
-    <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
+  </div>
+  <div style="display:none;gap:16px;align-items:stretch;margin-top:16px" id="ai-chart-row">
+    <div id="ai-chart-container" style="flex:1;min-width:320px">
+      <div id="ai-chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
+    </div>
+    <div class="card" id="ai-trading-status-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
       <div class="ct">AI Trading Live Status</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;font-size:13px">
         <div style="display:flex;justify-content:space-between"><strong>Engine State:</strong> <span id="ai-engine-status" style="font-weight:700">analyzing</span></div>
@@ -4011,6 +4017,8 @@ function toggleTheme() {
 var chart = null;
 var candleSeries = null;
 var gridLines = [];
+var aiChart = null;
+var aiCandleSeries = null;
 
 function aggregateCandles(data, intervalSec) {
   var candles = [], current = null;
@@ -4199,6 +4207,70 @@ function fetchPairChartHistory(pair, levels, buyZone) {
     updateChart([], levels, buyZone, pair);
   });
 }
+function initAIChart() {
+  try {
+    var container = document.getElementById("ai-chart-container");
+    if (!container) return;
+    aiChart = LightweightCharts.createChart(container, {
+      width: container.clientWidth || 600,
+      height: 350,
+      layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+      grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+      crosshair: { vertLine: {color: "#444", labelBackgroundColor: "#111"}, horzLine: {color: "#444", labelBackgroundColor: "#111"} },
+      timeScale: { borderColor: "#1a1a1a", timeVisible: true, secondsVisible: false, barSpacing: 3, minBarSpacing: 3, rightOffset: 20 },
+      rightPriceScale: { borderColor: "#1a1a1a" },
+    });
+    aiCandleSeries = aiChart.addSeries(LightweightCharts.CandlestickSeries, {
+      upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+      wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 4, minMove: 0.0001},
+    });
+  } catch(e) { console.log("AI Chart init error:", e); }
+}
+function updateAIChart(data, pair) {
+  if (!aiChart || !aiCandleSeries) return;
+  if (!data || data.length < 2) {
+    try { if (aiCandleSeries) aiCandleSeries.setData([]); } catch(e) {}
+    showAIChartPlaceholder(pair || "", true);
+    return;
+  }
+  showAIChartPlaceholder(pair || "", false);
+  // Same 60s candle aggregation as the grid chart, from the AI pair's history.
+  var candles = aggregateCandles(data, 60);
+  aiCandleSeries.setData(candles);
+  try { aiChart.timeScale().applyOptions({barSpacing: 3, minBarSpacing: 3, rightOffset: 0}); } catch(e) {}
+  var visibleBars = Math.max(1, Math.ceil((document.getElementById("ai-chart-container").clientWidth || 600) / 3));
+  aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length});
+}
+function showAIChartPlaceholder(pair, show) {
+  var el = document.getElementById("ai-chart-placeholder");
+  if (!el) return;
+  if (show) {
+    el.textContent = "No price data for " + pair + " yet — fetching…";
+    el.style.display = "flex";
+  } else {
+    el.style.display = "none";
+  }
+}
+function fetchAIChartHistory(pair) {
+  // Seeds + fetches the AI strategy's own pair history via /chart_history. The
+  // server stores it into state.price_history_pairs, so the 3s /state refresh
+  // then serves it directly. Cooldown mirrors fetchPairChartHistory.
+  if (!pair) return;
+  if (!window._pairChartFetches) window._pairChartFetches = {};
+  var nowTs = Date.now();
+  var last = window._pairChartFetches[pair] || 0;
+  if (nowTs - last < 15000) return;
+  window._pairChartFetches[pair] = nowTs;
+  apiFetch("/chart_history?pair=" + encodeURIComponent(pair)).then(function(r) { return r.json(); }).then(function(d) {
+    if (d && d.history && d.history.length >= 2) {
+      updateAIChart(d.history, pair);
+    } else {
+      updateAIChart([], pair);
+    }
+  }).catch(function() {
+    updateAIChart([], pair);
+  });
+}
 function showToast(msg, type) {
   var c = document.getElementById("toast-container");
   var t = document.createElement("div");
@@ -4355,7 +4427,16 @@ function selectStrat(s) {
   // (refresh() owns show/hide). Only show it here when AI Trading is selected
   // so the panel is visible during configuration; do NOT hide it on other
   // selections: starting a grid must not make a running AI status card vanish.
-  if (s=="ai_trading") document.getElementById("ai-trading-status-card").style.display = "block";
+  // The AI live-status card + its own chart live in a dedicated row below
+  // the grid row (refresh() owns show/hide). Show the row when AI Trading
+  // is selected so the panel is visible during configuration; do NOT hide
+  // it on other selections: starting a grid must not make a running AI
+  // status card vanish.
+  var aiRowEl = document.getElementById("ai-chart-row");
+  if (aiRowEl) {
+    aiRowEl.style.display = (s=="ai_trading") ? "flex" : "none";
+    if (s=="ai_trading" && !aiChart) { try { initAIChart(); } catch(e) {} }
+  }
   updateBtn();
 }
 
@@ -4744,8 +4825,14 @@ function refresh() {
         }
       });
     }
-    var aiStatusCard = document.getElementById("ai-trading-status-card");
-    if (aiStatusCard) aiStatusCard.style.display = (aiRunning || sel.strat === "ai_trading") ? "block" : "none";
+    // The AI status card + its own chart live in a dedicated row below the
+    // grid row (grid row untouched — the AI card can never squeeze the main
+    // chart again). Show/hide the whole row; lazy-init the AI chart once.
+    var aiChartRow = document.getElementById("ai-chart-row");
+    if (aiChartRow) {
+      aiChartRow.style.display = (aiRunning || sel.strat === "ai_trading") ? "flex" : "none";
+      if ((aiRunning || sel.strat === "ai_trading") && !aiChart) { try { initAIChart(); } catch(e) {} }
+    }
     if (aiRunning) {
       document.getElementById("ai-engine-status").textContent = d.ai_status || "analyzing";
       document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
@@ -4755,6 +4842,36 @@ function refresh() {
       document.getElementById("ai-selected-strategy").textContent = "AI Trading";
       document.getElementById("ai-exposure-status").textContent = d.ai_exposure ? "$" + d.ai_exposure.toFixed(2) : "$0.00";
       document.getElementById("ai-decision-explain").textContent = d.ai_explain || "Analyzing markets...";
+      // AI strategy's own chart, fed from the AI pair's own history. The
+      // pair comes from the per-strategy registry (entry type "ai_trading") —
+      // never reuse the grid chart's pair. If the pair has no history yet,
+      // ask /chart_history (server seeds + stores it into price_history_pairs)
+      // exactly like the grid chart does.
+      var aiPair = null;
+      if (d.strategies) {
+        Object.keys(d.strategies).forEach(function(k) {
+          var st = d.strategies[k];
+          if (st && st.type === "ai_trading" && st.running) aiPair = st.pair;
+        });
+      }
+      if (!aiPair && d.active_pairs && d.active_pairs.length) aiPair = d.active_pairs[0];
+      if (!aiPair) aiPair = d.pair || "SOL/USDC";
+      var aiPairHistory = d.price_history_pairs && d.price_history_pairs[aiPair] ? d.price_history_pairs[aiPair] : [];
+      var aiChartHistory = (aiPairHistory && aiPairHistory.length >= 2) ? aiPairHistory : ((aiPair === d.pair) ? d.price_history : []);
+      if (aiChartHistory && aiChartHistory.length >= 2) {
+        updateAIChart(aiChartHistory, aiPair);
+      } else {
+        updateAIChart([], aiPair);
+        fetchAIChartHistory(aiPair);
+      }
+      // Re-measure the now-visible AI chart container (reading clientWidth
+      // forces layout, so this returns the real width right after flex show).
+      try {
+        if (aiChart) {
+          var aiCon = document.getElementById("ai-chart-container");
+          if (aiCon) { var aiW = aiCon.clientWidth; if (aiW > 0) aiChart.applyOptions({width: aiW}); }
+        }
+      } catch(e) {}
       var aiPosEl = document.getElementById("ai-positions-body");
       if (aiPosEl) {
         var aiPosList = d.ai_positions || [];
@@ -5132,6 +5249,10 @@ window.addEventListener("resize", function() {
   if (chart) {
     var w = document.getElementById("chart-container").clientWidth || 600;
     chart.applyOptions({width: w});
+  }
+  if (aiChart) {
+    var aw = document.getElementById("ai-chart-container").clientWidth;
+    if (aw > 0) aiChart.applyOptions({width: aw});
   }
 });
 

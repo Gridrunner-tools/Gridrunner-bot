@@ -90,3 +90,60 @@ def test_dashboard_seeds_chart_on_load_and_strips_credential_url():
         "url = new URL(url, window._cleanBase);",
     ):
         assert needle in js, "dashboard script is missing seed/URL-strip wiring %r" % needle
+
+
+def _served_dashboard_html():
+    """Return the full DASHBOARD HTML/JS string exactly as served."""
+    m = re.search(r"DASHBOARD = ('''|\"\"\")(.*?)\1", MAIN_PY, re.S)
+    assert m, "DASHBOARD template not found in main.py"
+    literal = m.group(1) + m.group(2) + m.group(1)
+    return ast.literal_eval(literal)
+
+
+def test_dashboard_ai_row_below_grid_with_own_chart():
+    """Regression: grid + AI concurrently must keep BOTH charts visible.
+    Owner's target layout (2026-09-12): one row per running strategy, stacked
+    top-to-bottom. Grid row stays EXACTLY as it is ([grid chart | grid details
+    card]); the AI strategy renders the same way UNDER it as its own row
+    ([AI chart | AI status card]).
+    Root cause of the original bug: #ai-trading-status-card was a THIRD flex
+    child of #single-chart-row (flex-shrink:0, 420px) alongside the grid
+    details card, leaving the grid chart (flex:1; min-width:0) only residual
+    width when AI ran — chart collapsed to 0/88px and vanished. The fix moves
+    the AI card OUT of the grid row into its own #ai-chart-row with its own
+    chart container fed from the AI pair's own history (/chart_history).
+    """
+    html = _served_dashboard_html()
+    # Superseded cards-column approach must be gone entirely.
+    assert 'id="cards-column"' not in html, "cards-column approach must be gone"
+    # DOM order: grid row [chart-container, grid-details-card] -> ai-chart-row
+    # [ai-chart-container, ai-trading-status-card], all siblings.
+    i_row = html.index('id="single-chart-row"')
+    i_cc = html.index('id="chart-container"')
+    i_gd = html.index('id="grid-details-card"')
+    i_airow = html.index('id="ai-chart-row"')
+    i_aicc = html.index('id="ai-chart-container"')
+    i_ai = html.index('id="ai-trading-status-card"')
+    assert i_row < i_cc < i_gd < i_airow < i_aicc < i_ai, (
+        "expected: grid row [chart | grid card] then AI row [ai chart | ai card]"
+    )
+    # Grid row untouched: chart keeps flex:1;min-width:0, card keeps 420px fixed.
+    assert "flex:1;min-width:0" in html[i_cc:i_cc + 60]
+    assert "width:420px;flex-shrink:0" in html[i_gd:i_gd + 120]
+    # AI chart container carries its own 320px floor so it can never collapse.
+    assert "flex:1;min-width:320px" in html[i_aicc:i_aicc + 60]
+    # The AI card is no longer nested inside the grid card / grid row.
+    assert html.count('id="ai-chart-row"') == 1
+    assert html.count('id="ai-chart-container"') == 1
+    js = _served_dashboard_js()
+    for needle in (
+        "var aiChart = null;",
+        "function initAIChart()",
+        "function updateAIChart(data, pair)",
+        "function fetchAIChartHistory(pair)",
+        'aiChartRow.style.display = (aiRunning || sel.strat === "ai_trading") ? "flex" : "none"',
+        "st.type === \"ai_trading\" && st.running",
+        '"/chart_history?pair=" + encodeURIComponent(pair)',
+        "if (aw > 0) aiChart.applyOptions({width: aw});",
+    ):
+        assert needle in js, "dashboard script is missing AI-row wiring %r" % needle
