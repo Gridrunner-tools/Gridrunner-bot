@@ -3778,19 +3778,22 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
   </div>
 
   <div id="charts-container" style="display:none;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));justify-content:end;align-items:start;gap:16px;width:100%;margin-bottom:16px;box-sizing:border-box"></div>
-  <div style="display:flex;gap:16px;align-items:stretch" id="single-chart-row">
-    <div id="chart-container" style="flex:1;min-width:0">
-      <div id="chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
-    </div>
-    <div class="card" id="grid-details-card" style="width:420px;flex-shrink:0;height:400px;overflow-y:auto">
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px;align-items:start;width:100%" id="single-chart-row">
+    <div id="grid-panel" style="min-width:0;display:flex;flex-direction:column;gap:16px">
+      <div id="chart-container" style="width:100%;min-width:0">
+        <div id="chart-placeholder" style="display:none;position:absolute;inset:0;align-items:center;justify-content:center;color:var(--dim);font-size:13px;pointer-events:none;z-index:5"></div>
+      </div>
+      <div class="card" id="grid-details-card" style="width:100%;box-sizing:border-box;height:400px;overflow-y:auto">
       <div class="ct" style="display:flex;align-items:center;gap:8px">
         Grid Details
         <span id="gdt-status" style="font-size:11px;font-weight:400;color:var(--dim)"></span>
       </div>
       <div id="grid-details-body"></div>
+      </div>
     </div>
-
-    <div class="card" id="ai-trading-status-card" style="display:none;width:420px;flex-shrink:0;height:400px;overflow-y:auto">
+    <div id="ai-panel" style="display:none;min-width:0;flex-direction:column;gap:16px">
+      <div id="ai-chart-container" style="display:none;width:100%;min-width:0;height:350px"></div>
+      <div class="card" id="ai-trading-status-card" style="display:none;width:100%;box-sizing:border-box;height:400px;overflow-y:auto">
       <div class="ct">AI Trading Live Status</div>
       <div style="display:flex;flex-direction:column;gap:10px;margin-top:12px;font-size:13px">
         <div style="display:flex;justify-content:space-between"><strong>Engine State:</strong> <span id="ai-engine-status" style="font-weight:700">analyzing</span></div>
@@ -3809,6 +3812,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
           <div id="ai-positions-body" style="font-size:11px;color:var(--text2);margin-top:4px">No open AI positions</div>
         </div>
       </div>
+    </div>
     </div>
   </div>
 
@@ -4091,6 +4095,48 @@ function updateChartTheme(isDarkMode) {
   });
 }
 
+var aiChart = null;
+var aiCandleSeries = null;
+function updateAiChart(data, pair) {
+  var el = document.getElementById("ai-chart-container");
+  if (!el) return;
+  if (!aiChart) {
+    var hist = (data || []).slice();
+    // Defer creation until the panel is laid out (same pattern as multi-pair cards).
+    setTimeout(function() {
+      try {
+        aiChart = LightweightCharts.createChart(el, {
+          width: el.clientWidth || 380,
+          height: 350,
+          layout: { background: {type: "solid", color: "transparent"}, textColor: "#888" },
+          grid: { vertLines: {color: "#1a1a1a"}, horzLines: {color: "#1a1a1a"} },
+          timeScale: { borderColor: "#1a1a1a", timeVisible: true, secondsVisible: false, barSpacing: 3, minBarSpacing: 3, rightOffset: 20 },
+          rightPriceScale: { borderColor: "#1a1a1a" },
+        });
+        aiCandleSeries = aiChart.addSeries(LightweightCharts.CandlestickSeries, {
+          upColor: "#00ff9d", downColor: "#ff6b6b", borderUpColor: "#00ff9d", borderDownColor: "#ff6b6b",
+          wickUpColor: "#00ff9d", wickDownColor: "#ff6b6b", priceFormat: {type: "price", precision: 6, minMove: 0.000001}
+        });
+        if (hist.length >= 2) {
+          var candles = aggregateCandles(hist, 60);
+          aiCandleSeries.setData(candles);
+          aiChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
+          var vb = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
+          aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - vb), to: candles.length});
+        }
+      } catch(e) { console.log("AI chart init error:", e); }
+    }, 50);
+    return;
+  }
+  if (!aiChart || !aiCandleSeries) return;
+  try {
+    var candles = aggregateCandles(data, 60);
+    aiCandleSeries.setData(candles);
+    aiChart.timeScale().applyOptions({ barSpacing: 3, minBarSpacing: 3, rightOffset: 0 });
+    var visibleBars = Math.max(1, Math.ceil((el.clientWidth || 600) / 3));
+    aiChart.timeScale().setVisibleLogicalRange({from: Math.max(0, candles.length - visibleBars), to: candles.length});
+  } catch(e) { console.log("AI chart update error:", e); }
+}
 function updateChart(data, gridLevels, gridBuyZone, pair) {
   if (!chart || !candleSeries) return;
   // Remove old grid lines (do this first, regardless of data)
@@ -4356,6 +4402,7 @@ function selectStrat(s) {
   // so the panel is visible during configuration; do NOT hide it on other
   // selections: starting a grid must not make a running AI status card vanish.
   if (s=="ai_trading") document.getElementById("ai-trading-status-card").style.display = "block";
+  if (s=="ai_trading") { var _aiPanelSel = document.getElementById("ai-panel"); if (_aiPanelSel) _aiPanelSel.style.display = "flex"; }
   updateBtn();
 }
 
@@ -4735,6 +4782,7 @@ function refresh() {
     // off "grid" and the running grid's card would show its idle state.
     var gridRunning = false;
     var gridStrategyPair = null;
+    var aiStrategyPair = null;
     if (d.strategies) {
       Object.keys(d.strategies).forEach(function(k) {
         var st = d.strategies[k];
@@ -4742,10 +4790,15 @@ function refresh() {
           gridRunning = true;
           if (!gridStrategyPair) gridStrategyPair = st.pair;
         }
+        if (st && st.type === "ai_trading" && st.running && !aiStrategyPair) aiStrategyPair = st.pair;
       });
     }
     var aiStatusCard = document.getElementById("ai-trading-status-card");
     if (aiStatusCard) aiStatusCard.style.display = (aiRunning || sel.strat === "ai_trading") ? "block" : "none";
+    var aiPanel = document.getElementById("ai-panel");
+    if (aiPanel) aiPanel.style.display = (aiRunning || sel.strat === "ai_trading") ? "flex" : "none";
+    var aiChartEl = document.getElementById("ai-chart-container");
+    if (aiChartEl) aiChartEl.style.display = aiRunning ? "block" : "none";
     if (aiRunning) {
       document.getElementById("ai-engine-status").textContent = d.ai_status || "analyzing";
       document.getElementById("ai-regime-status").textContent = d.ai_regime || "TRENDING_BULL";
@@ -4775,6 +4828,12 @@ function refresh() {
           aiPosEl.textContent = "No open AI positions";
         }
       }
+      // AI panel own chart: render from the running AI strategy's pair history
+      var aiChartPair = aiStrategyPair || d.pair || "SOL/USDC";
+      var aiChartHist = (d.price_history_pairs && d.price_history_pairs[aiChartPair]) ? d.price_history_pairs[aiChartPair] : ((aiChartPair === d.pair) ? d.price_history : []);
+      if (aiChartHist && aiChartHist.length >= 2) {
+        updateAiChart(aiChartHist, aiChartPair);
+      }
     }
     document.getElementById("dot").className = "dot" + (on ? " on" : "");
     document.getElementById("status-text").textContent = on ? "Running — " + (d.strategy || "").toUpperCase() + " on " + (activePairs.length ? activePairs.join(", ") : d.pair) + " (" + (d.mode || "").toUpperCase() + ")" : "Stopped";
@@ -4793,7 +4852,7 @@ function refresh() {
       window._wasMulti = true;
     } else {
       window._wasMulti = false;
-      if (singleRow) singleRow.style.display = "flex";
+      if (singleRow) singleRow.style.display = "grid";
       if (chartsWrap) chartsWrap.style.display = "none";
       if (!on && chartsWrap) {
         chartsWrap.querySelectorAll('[id^="mpcard-"]').forEach(function(card) { card.remove(); });
