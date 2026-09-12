@@ -4,7 +4,8 @@ import json
 from ai_trading.signal import Signal
 from ai_trading.strategies import generate_signals_and_score
 from ai_trading.execution import AITradingEngine
-from main import state, LiveMarketDataProvider, LiveExecutionAdapter, run_ai_trading, run_grid
+import unittest.mock
+from main import state, LiveMarketDataProvider, LiveExecutionAdapter, run_ai_trading, run_grid, place_order
 
 class TestAITradingFixes(unittest.TestCase):
     def setUp(self):
@@ -227,6 +228,49 @@ class TestAITradingFixes(unittest.TestCase):
         self.assertEqual(roundtripped["strategy"], "grid", "strategy must survive serialization round-trip")
         self.assertTrue(roundtripped["running"] and roundtripped["strategy"] == "grid",
                         "grid loop must remain alive after state serialization round-trip")
+    def test_grid_loop_error_is_caught_inside_loop(self):
+        """Owner requirement (live-money bug): a transient per-cycle error in
+        run_grid (swap/network/state race) must NOT propagate out of the loop
+        and mark the bot stopped. The loop body must be wrapped in try/except
+        (log + continue), and the authoritative condition
+        state['running'] and state['strategy']=='grid' must remain the only
+        loop stopper alongside the intentional drawdown/daily-loss returns."""
+        import inspect
+        src = inspect.getsource(run_grid)
+        self.assertIn('while state["running"] and state["strategy"]=="grid"', src,
+                      "authoritative grid loop condition must be preserved")
+        self.assertIn('except Exception as e:', src,
+                      "run_grid loop body must catch per-cycle exceptions")
+        self.assertIn('Grid cycle error (continuing)', src,
+                      "caught grid cycle errors must be logged with a continue intent")
+        self.assertIn('time.sleep(5)', src,
+                      "loop must back off briefly then continue after a cycle error")
+    def test_place_order_returns_false_on_swap_error(self):
+        """Owner requirement: place_order must NEVER raise on a swap/network
+        error - it returns False so the caller (grid loop) treats it as an
+        unfilled order and keeps running with open positions intact."""
+        with unittest.mock.patch.object(main_module := __import__("main"), "get_price", return_value=100.0), \
+             unittest.mock.patch.object(main_module, "authorize_trade", return_value=(True, "")), \
+             unittest.mock.patch.object(main_module, "jupiter_swap", side_effect=RuntimeError("jupiter down")):
+            state["mode"] = "dex"
+            state["chain"] = "solana"
+            res = place_order("SOL/USDC", "buy", 0.5)
+        self.assertFalse(res, "place_order must return False when the swap raises")
+    def test_place_order_error_is_logged_not_raised(self):
+        """Same guarantee, asserted through the call boundary: a swap exception
+        must never escape place_order regardless of pair/amount."""
+        def boom(*a, **k):
+            raise ConnectionError("network timeout")
+        with unittest.mock.patch.object(__import__("main"), "get_price", return_value=100.0), \
+             unittest.mock.patch.object(__import__("main"), "authorize_trade", return_value=(True, "")), \
+             unittest.mock.patch.object(__import__("main"), "jupiter_swap", side_effect=boom):
+            state["mode"] = "dex"
+            state["chain"] = "solana"
+            try:
+                res = place_order("BTC/USDC", "buy", 0.01)
+            except Exception as ex:
+                self.fail("place_order raised {0!r} - it must return False instead".format(ex))
+        self.assertFalse(res)
 def test_ai_trading_fixes_all():
     suite = unittest.TestLoader().loadTestsFromTestCase(TestAITradingFixes)
     res = unittest.TextTestRunner(verbosity=0).run(suite)
