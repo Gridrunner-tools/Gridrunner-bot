@@ -430,6 +430,303 @@ class TestAITradingContinuousLoop(unittest.TestCase):
         self.assertTrue(adapter.executed)
         self.assertEqual(adapter.compounded_pnl, 20.0) # size 2 * (110.0 - 100.0) = 20.0
 
+    def test_stop_loss_disabled_by_default_holds_below_entry(self):
+        # Owner requirement: stop-loss (sell-below-entry) is OFF by default.
+        # A LONG position trading below its stop must NOT be exited — the bot
+        # holds through dips (only profit-taking exits + dip-buys apply).
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0
+            # NOTE: no stop_loss_enabled key -> must default to OFF
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time()
+        }
+        prov.closes[-1] = 94.0  # below stop -> would be a Stop Loss Hit if enabled
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "must NOT sell below entry with stop-loss OFF (default)")
+        self.assertIn("SOL/USDC", engine.positions, "position must be held through the dip")
+
+    def test_stop_loss_enabled_restores_below_entry_exit(self):
+        # ON restores the historic stop-loss behavior: price <= stop exits.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0,
+            "stop_loss_enabled": True
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time()
+        }
+        prov.closes[-1] = 94.0  # below stop, stop-loss enabled -> exit
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "stop-loss must exit when enabled")
+        self.assertNotIn("SOL/USDC", engine.positions, "position must be closed on stop loss")
+
+    def test_stop_loss_off_still_takes_profit(self):
+        # OFF must not suppress profit-taking exits.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time()
+        }
+        prov.closes[-1] = 111.0  # above take profit
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "take-profit exit must still fire with stop-loss OFF")
+        self.assertEqual(engine.status, "analyzing")  # loop continues after exit
+        self.assertNotIn("SOL/USDC", engine.positions, "position must be closed on take profit")
+
+    def test_stop_loss_off_short_holds_adverse_move(self):
+        # Symmetric guard for SHORT legs (only relevant when perps enabled):
+        # with stop-loss OFF the engine must not cover a short at a loss.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "SHORT",
+            "entry": 100.0, "stop": 105.0, "take_profit": 90.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Mean Reversion",
+            "regime": "RANGE", "timestamp": time.time()
+        }
+        prov.closes[-1] = 106.0  # above stop => adverse; must hold with stop-loss OFF
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "must NOT cover a SHORT at a loss with stop-loss OFF")
+        self.assertIn("SOL/USDC", engine.positions, "SHORT must be held through the adverse move")
+
+    def test_trailing_stop_off_keeps_fixed_take_profit(self):
+        # trailing_stop_enabled OFF (default): fixed take-profit still fires.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0,
+            "stop_loss_enabled": False
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time(),
+            "trailing_stop": 2.0, "trailing_stop_level": 100.0
+        }
+        prov.closes[-1] = 112.0  # above fixed TP
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "fixed take-profit must fire when trailing is OFF")
+        self.assertNotIn("SOL/USDC", engine.positions)
+
+    def test_trailing_stop_on_ratchets_and_locks_profit(self):
+        # trailing ON: level ratchets up as price climbs, then exit on cross.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0,
+            "trailing_stop_enabled": True
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time(),
+            "trailing_stop": 2.0, "trailing_stop_level": 100.0
+        }
+        prov.closes[-1] = 105.0  # climb -> level ratchets to max(100, 105-2)=103
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "no exit while price above trailing level")
+        self.assertIn("SOL/USDC", engine.positions)
+        self.assertAlmostEqual(engine.positions["SOL/USDC"]["trailing_stop_level"], 103.0)
+        prov.closes[-1] = 102.0  # dip below the ratcheted level 103 -> exit
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "must exit when price crosses trailing level")
+        self.assertNotIn("SOL/USDC", engine.positions)
+        self.assertTrue(any("Trailing Stop Hit" in e for e in engine.execution_logs), engine.execution_logs)
+
+    def test_trailing_stop_on_floored_at_entry_never_sells_below(self):
+        # Floor at entry: with trailing ON the level never drops below entry,
+        # so a dip exits at break-even (level=entry), never at a loss.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0,
+            "trailing_stop_enabled": True,
+            "stop_loss_enabled": False
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time(),
+            "trailing_stop": 2.0, "trailing_stop_level": 100.0
+        }
+        prov.closes[-1] = 94.0  # deep dip (also below hard stop, which is OFF)
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        level = engine.execution_logs  # exit fired via trailing at floor = entry
+        self.assertNotIn("SOL/USDC", engine.positions)
+        # P&L used (level - entry) with level floored at entry -> 0, never negative
+        self.assertTrue(any("Trailing Stop Hit" in e for e in level), level)
+
+    def test_trailing_stop_short_ratchets_direction(self):
+        # SHORT: level ratchets DOWN (min with curr+dist), ceiling at entry.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0,
+            "trailing_stop_enabled": True
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "SHORT",
+            "entry": 100.0, "stop": 105.0, "take_profit": 90.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Mean Reversion",
+            "regime": "RANGE", "timestamp": time.time(),
+            "trailing_stop": 2.0, "trailing_stop_level": 100.0
+        }
+        prov.closes[-1] = 95.0  # drop -> level = min(100, 95+2) = 97
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed)
+        self.assertAlmostEqual(engine.positions["SOL/USDC"]["trailing_stop_level"], 97.0)
+        prov.closes[-1] = 98.0  # bounce above 97 -> cover (exit)
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "SHORT must exit when price rises back across the trailing level")
+        self.assertNotIn("SOL/USDC", engine.positions)
+        self.assertTrue(any("Trailing Stop Hit" in e for e in engine.execution_logs), engine.execution_logs)
+
+    def test_trailing_stop_evaluated_before_stop_loss(self):
+        # trailing ON + stop-loss ON: trailing (profit-taking) is checked first
+        # and its floor at entry means the gap below still exits at/above entry.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        config = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0,
+            "trailing_stop_enabled": True,
+            "stop_loss_enabled": True
+        }
+        engine = AITradingEngine(config, ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": 100.0, "stop": 95.0, "take_profit": 110.0,
+            "size": 2.0, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time(),
+            "trailing_stop": 2.0, "trailing_stop_level": 100.0
+        }
+        prov.closes[-1] = 94.0  # below stop; trailing floor at entry fires first
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        self.assertNotIn("SOL/USDC", engine.positions)
+        self.assertTrue(any("Trailing Stop Hit" in e for e in engine.execution_logs),
+                        "trailing must be evaluated before the hard stop-loss")
+
 def test_ai_trading_all():
     import unittest
     suite = unittest.TestSuite()

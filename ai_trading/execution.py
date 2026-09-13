@@ -106,6 +106,8 @@ class AITradingEngine:
                             "exposure_usd": sized_signal.position_size * sized_signal.entry,
                             "score": sized_signal.signal_score,
                             "leverage": sized_signal.recommended_leverage,
+                            "trailing_stop": float(getattr(sized_signal, "trailing_stop", 0.0) or 0.0),
+                            "trailing_stop_level": sized_signal.entry,
                             "strategy": sized_signal.strategy,
                             "regime": sized_signal.regime,
                             "timestamp": time.time()
@@ -139,21 +141,56 @@ class AITradingEngine:
         pnl = 0.0
         exit_reason = ""
         
-        if direction == "LONG":
+        # Owner-gated exits (both default OFF):
+        #  - stop_loss_enabled: OFF = never sell below entry (hold through
+        #    dips; only profit-taking exits + dip-buys). ON restores the
+        #    fixed stop-loss exit.
+        #  - trailing_stop_enabled: OFF = fixed take-profit at pos["take_profit"].
+        #    ON = trailing stop REPLACES the fixed take-profit; the trailing
+        #    level ratchets in the profit direction and is floored at entry
+        #    (LONG never below / SHORT never above), so trailing-ON can never
+        #    exit below entry. Trailing (profit-taking) is evaluated before
+        #    the hard stop-loss.
+        sl_enabled = self.risk_engine.config.get("stop_loss_enabled", False)
+        trail_enabled = self.risk_engine.config.get("trailing_stop_enabled", False)
+        if trail_enabled:
+            level = float(pos.get("trailing_stop_level", entry))
+            trail_dist = float(pos.get("trailing_stop") or 0.0)
+            if trail_dist <= 0.0:
+                trail_dist = abs(entry - stop)
+            if direction == "LONG":
+                level = max(entry, level, curr_price - trail_dist)
+                pos["trailing_stop_level"] = level
+                if curr_price <= level:
+                    is_exit = True
+                    pnl = size * (level - entry)
+                    exit_reason = "Trailing Stop Hit"
+            else:  # SHORT
+                level = min(entry, level, curr_price + trail_dist)
+                pos["trailing_stop_level"] = level
+                if curr_price >= level:
+                    is_exit = True
+                    pnl = size * (entry - level)
+                    exit_reason = "Trailing Stop Hit"
+        elif direction == "LONG":
             if curr_price >= tp:
                 is_exit = True
                 pnl = size * (tp - entry)
                 exit_reason = "Take Profit Hit"
-            elif curr_price <= stop:
-                is_exit = True
-                pnl = size * (stop - entry)
-                exit_reason = "Stop Loss Hit"
         else:  # SHORT
             if curr_price <= tp:
                 is_exit = True
                 pnl = size * (entry - tp)
                 exit_reason = "Take Profit Hit"
-            elif curr_price >= stop:
+        # Hard stop-loss stays active when enabled (evaluated after trailing /
+        # fixed TP so profit-taking takes precedence). Only reachable below
+        # entry for LONG / above entry for SHORT.
+        if not is_exit and sl_enabled:
+            if direction == "LONG" and curr_price <= stop:
+                is_exit = True
+                pnl = size * (stop - entry)
+                exit_reason = "Stop Loss Hit"
+            elif direction == "SHORT" and curr_price >= stop:
                 is_exit = True
                 pnl = size * (entry - stop)
                 exit_reason = "Stop Loss Hit"
