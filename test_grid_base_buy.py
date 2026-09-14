@@ -40,7 +40,7 @@ def test_base_buy_on_start_registers_once_and_does_not_refire():
 
     # Spy on order placements
     placed_orders = []
-    def mock_place_order(pair, side, amount, grid_idx=None):
+    def mock_place_order(pair, side, amount, grid_idx=None, paper=None):
         placed_orders.append({
             "pair": pair,
             "side": side,
@@ -156,7 +156,7 @@ def test_base_buy_telegram_alert():
 
     # Case 1: successful base buy
     placed_orders = []
-    def mock_place_order_success(pair, side, amount, grid_idx=None):
+    def mock_place_order_success(pair, side, amount, grid_idx=None, paper=None):
         placed_orders.append((side, amount, grid_idx))
         return True
 
@@ -194,7 +194,7 @@ def test_base_buy_telegram_alert():
     gs["seeded"] = False
     gs["filled"].clear()
 
-    def mock_place_order_fail(pair, side, amount, grid_idx=None):
+    def mock_place_order_fail(pair, side, amount, grid_idx=None, paper=None):
         placed_orders.append((side, amount, grid_idx))
         return False
 

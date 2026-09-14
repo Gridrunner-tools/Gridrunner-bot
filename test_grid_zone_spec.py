@@ -94,7 +94,7 @@ def test_take_profit_never_sells_below_purchase_price():
     cfg["grid_stop_loss_pct"] = 8.0
 
     placed_orders = []
-    def mock_place_order(pair, side, amount, grid_idx=None):
+    def mock_place_order(pair, side, amount, grid_idx=None, paper=None):
         placed_orders.append((side, amount, grid_idx))
         return True
 
@@ -170,7 +170,7 @@ def test_autonomous_recenter_and_reengage_on_empty_positions():
     cfg["grid_stop_loss_pct"] = 8.0
 
     placed_orders = []
-    def mock_place_order(pair, side, amount, grid_idx=None):
+    def mock_place_order(pair, side, amount, grid_idx=None, paper=None):
         placed_orders.append((side, amount, grid_idx))
         return True
 
@@ -247,7 +247,7 @@ def test_profitable_pullback_into_buy_zone_still_exits():
     cfg["partial_sell_pct"] = 100
 
     placed_orders = []
-    def mock_place_order(pair, side, amount, grid_idx=None):
+    def mock_place_order(pair, side, amount, grid_idx=None, paper=None):
         placed_orders.append((side, amount, grid_idx))
         return True
 

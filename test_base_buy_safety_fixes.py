@@ -52,12 +52,12 @@ def test_bug1_seeded_flag_only_on_success():
     }
 
     # Case A: place_order fails -> seeded should stay False
-    main.place_order = lambda pair, side, amount, grid_idx=None: False
+    main.place_order = lambda pair, side, amount, grid_idx=None, paper=None: False
     _execute_base_buy_if_needed(p, gs, 100.0)
     assert gs["seeded"] is False, "seeded flag must stay False when order placement fails"
 
     # Case B: place_order succeeds -> seeded should become True
-    main.place_order = lambda pair, side, amount, grid_idx=None: True
+    main.place_order = lambda pair, side, amount, grid_idx=None, paper=None: True
     _execute_base_buy_if_needed(p, gs, 100.0)
     assert gs["seeded"] is True, "seeded flag must become True when order placement succeeds"
 
@@ -136,7 +136,7 @@ def test_bug3_usdc_only_sizing_in_solana():
     main.get_price = lambda pair: 100.0
 
     placed_sizes = []
-    def mock_place_order(pair, side, amount, grid_idx=None):
+    def mock_place_order(pair, side, amount, grid_idx=None, paper=None):
         placed_sizes.append(amount * 100.0) # size = amount * price (100.0)
         return True
     main.place_order = mock_place_order

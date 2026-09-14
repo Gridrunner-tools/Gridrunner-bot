@@ -9,7 +9,7 @@ def test_limit_order_ui_and_routing():
  assert 'side == "buy" and price <= limit_price' in SOURCE and 'side == "sell" and price >= limit_price' in SOURCE
 def test_safe_mode_and_trade_metadata():
  assert 'Orders default to LIVE mode' in SOURCE and 'status":"confirmed"' in SOURCE
- assert 'max position' in SOURCE and 'place_order(pair, side, amount)' in SOURCE and 'explicit order confirmation required' in SOURCE
+ assert 'max position' in SOURCE and 'place_order(pair, side, amount, paper=paper)' in SOURCE and 'explicit order confirmation required' in SOURCE
 
 def test_server_side_strategy_side_and_failure_terminal_state():
  assert 'expected_side = "buy" if start_strategy == "limit_buy" else "sell"' in SOURCE
@@ -30,5 +30,9 @@ def test_deterministic_effective_trade_mode_policy():
 
 def test_execution_binds_resolved_mode_not_ambient_config():
  assert 'effective_mode = state.get("effective_mode", "live")' in SOURCE
- assert 'state["paper_trading"] = (effective_mode == "paper")' in SOURCE
+ # Per-strategy mode fix (PAPER_MODE_PER_STRATEGY_SPEC): the limit loop must
+ # NOT overwrite the global paper_trading flag anymore; it binds the resolved
+ # mode to each order instead.
+ assert 'state["paper_trading"] = (effective_mode == "paper")' not in SOURCE
+ assert 'place_order(pair, side, amount, paper=paper)' in SOURCE
  assert '"effective_mode":effective_mode' in SOURCE
