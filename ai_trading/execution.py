@@ -266,6 +266,23 @@ class AITradingEngine:
                             pos["avg_entry"] = new_avg
                             pos["lots"] = lots + 1
                             pos["exposure_usd"] = new_exposure
+                            # Spec: trailing stop is floored at the blended
+                            # avg_entry, so reset the stored level to the NEW
+                            # average on add (lets a small recovery above the
+                            # new avg exit the whole blended position).
+                            pos["trailing_stop_level"] = new_avg
+                            # Keep the risk engine's portfolio ledger in sync:
+                            # evaluate_and_size_signal sums active_positions
+                            # exposure_usd to gate NEW entries per the total
+                            # exposure cap. Without this update the add
+                            # undercounts exposure and a later entry could be
+                            # over-sized past max_total_exposure.
+                            ra = self.risk_engine.active_positions.get(symbol)
+                            if ra is not None:
+                                ra["size"] = new_size
+                                ra["exposure_usd"] = new_exposure
+                                ra["entry"] = new_avg  # blended basis
+                                ra["avg_entry"] = new_avg
                             self.log_event(
                                 f"Average-down add #{lots + 1} for {symbol}: +{add_size} @ {curr_price:.4f}, "
                                 f"avg entry ${new_avg:.4f} (lots {lots + 1}/{max_lots})"

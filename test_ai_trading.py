@@ -936,6 +936,69 @@ class TestAIAveragingDown(unittest.TestCase):
         self.assertFalse(any("Average-down add" in e for e in engine.execution_logs),
                          "trailing exit must preempt the add in the same pass")
 
+    def test_avg_down_syncs_risk_engine_active_position(self):
+        # The portfolio gate (evaluate_and_size_signal) sums
+        # risk_engine.active_positions exposure_usd to size NEW entries. An
+        # averaging-down add must update that ledger too, or total exposure
+        # undercounts and a later entry can be over-sized. Assert the risk
+        # engine's copy matches self.positions after the add.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        # Seed the risk ledger exactly as record_trade_opened does at open.
+        engine.risk_engine.active_positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG", "entry": 100.0,
+            "stop": 95.0, "take_profit": 110.0, "size": 2.0,
+            "exposure_usd": 200.0, "leverage": 1.0, "timestamp": time.time()
+        }
+        prov.closes[-1] = 98.0  # add #2: 2.0 @ 100 + 2.0 @ 98 -> 4.0 @ 99
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        pos = engine.positions["SOL/USDC"]
+        ra = engine.risk_engine.active_positions["SOL/USDC"]
+        self.assertAlmostEqual(ra["size"], pos["size"], places=4)
+        self.assertAlmostEqual(ra["exposure_usd"], pos["exposure_usd"], places=4)
+        self.assertAlmostEqual(ra["entry"], pos["avg_entry"], places=4)
+        self.assertAlmostEqual(ra["avg_entry"], pos["avg_entry"], places=4)
+        self.assertAlmostEqual(ra["exposure_usd"], 4.0 * 98.0, places=4)
+        self.assertAlmostEqual(ra["avg_entry"], 99.0, places=4)
+    def test_avg_down_entry_sizing_sees_synced_exposure(self):
+        # Consequence regression: after an add (SOL exposure 200 -> 392), a NEW
+        # entry on BTC must be sized against the updated total. With the risk
+        # ledger stale, 200+200=400 <= 500 would allow the full 2.0 lot; with
+        # the sync, 392+200=592 > 500 so the entry is capped to remaining $108.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0,
+            max_total_exposure=500.0), ["SOL/USDC", "BTC/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        engine.risk_engine.active_positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG", "entry": 100.0,
+            "stop": 95.0, "take_profit": 110.0, "size": 2.0,
+            "exposure_usd": 200.0, "leverage": 1.0, "timestamp": time.time()
+        }
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "SOL add must fill")
+        # Fresh LONG signal on BTC: 1% risk, stop distance 5 -> raw size 2.0.
+        sig = Signal(
+            symbol="BTC/USDC", venue="Solana", direction="LONG",
+            signal_score=85.0, confidence="HIGH", regime="TRENDING_BULL",
+            strategy="Trend Following", entry=100.0, stop=95.0,
+            take_profit=110.0, trailing_stop=1.5, risk_pct=1.0,
+            position_size=0.0, recommended_leverage=1.0, reward_risk=2.0
+        )
+        sized = engine.risk_engine.evaluate_and_size_signal(sig)
+        self.assertTrue(sized.is_tradeable())
+        expected = round((500.0 - 4.0 * 98.0) / 100.0, 6)  # remaining $108 @ 100
+        self.assertAlmostEqual(sized.position_size, expected, places=4)
+        self.assertLess(sized.position_size, 2.0,
+                        "stale risk ledger would allow the full 2.0 lot")
 def test_ai_trading_all():
     import unittest
     suite = unittest.TestSuite()
