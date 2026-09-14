@@ -229,6 +229,10 @@ cfg = {
     "auto_compound":   os.environ.get("AUTO_COMPOUND", "true").lower() != "false",
     "stop_loss_enabled": os.environ.get("AI_STOP_LOSS_ENABLED", "false").lower() != "false",
     "trailing_stop_enabled": os.environ.get("AI_TRAILING_STOP_ENABLED", "false").lower() != "false",
+    "avg_down_enabled": os.environ.get("AI_AVG_DOWN_ENABLED", "true").lower() != "false",
+    "avg_down_max_lots": int(os.environ.get("AI_AVG_DOWN_MAX_LOTS", "3")),
+    "avg_down_step_pct": float(os.environ.get("AI_AVG_DOWN_STEP_PCT", "2.0")),
+    "avg_down_size_multiplier": float(os.environ.get("AI_AVG_DOWN_SIZE_MULT", "1.0")),
     "partial_sell_pct":  _normalize_partial_sell_pct(os.environ.get("PARTIAL_SELL_PCT", "50")),
     "grid_level_count":  max(2, min(int(os.environ.get("GRID_LEVELS", "5")), 100)),
 }
@@ -390,7 +394,7 @@ state = ThreadSafeState({
     # Per-pair completed-trade metrics used by dashboard summary cards.
     "pair_stats":    {},
     "positions_list": [],
-    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True), "stop_loss_enabled": cfg.get("stop_loss_enabled", False), "trailing_stop_enabled": cfg.get("trailing_stop_enabled", False)},
+    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True), "stop_loss_enabled": cfg.get("stop_loss_enabled", False), "trailing_stop_enabled": cfg.get("trailing_stop_enabled", False), "avg_down_enabled": cfg.get("avg_down_enabled", True), "avg_down_max_lots": cfg.get("avg_down_max_lots", 3), "avg_down_step_pct": cfg.get("avg_down_step_pct", 2.0), "avg_down_size_multiplier": cfg.get("avg_down_size_multiplier", 1.0)},
     "last_trade":    None,
     "price_history": [],
     "price_history_pairs": {},
@@ -3311,7 +3315,11 @@ def run_ai_trading(sid=None):
         "auto_compound": state["config"].get("auto_compound", True),
         "enable_perps": state.get("config", {}).get("enable_perps", False),
         "stop_loss_enabled": state.get("config", {}).get("stop_loss_enabled", False),
-        "trailing_stop_enabled": state.get("config", {}).get("trailing_stop_enabled", False)
+        "trailing_stop_enabled": state.get("config", {}).get("trailing_stop_enabled", False),
+        "avg_down_enabled": state.get("config", {}).get("avg_down_enabled", True),
+        "avg_down_max_lots": int(state.get("config", {}).get("avg_down_max_lots", 3)),
+        "avg_down_step_pct": float(state.get("config", {}).get("avg_down_step_pct", 2.0)),
+        "avg_down_size_multiplier": float(state.get("config", {}).get("avg_down_size_multiplier", 1.0))
     }
 
     whitelist = state.get("ai_whitelisted_symbols", [])
@@ -3348,6 +3356,10 @@ def run_ai_trading(sid=None):
                 engine.risk_engine.config["enable_perps"] = state.get("config", {}).get("enable_perps", False)
                 engine.risk_engine.config["stop_loss_enabled"] = state.get("config", {}).get("stop_loss_enabled", False)
                 engine.risk_engine.config["trailing_stop_enabled"] = state.get("config", {}).get("trailing_stop_enabled", False)
+                engine.risk_engine.config["avg_down_enabled"] = state.get("config", {}).get("avg_down_enabled", True)
+                engine.risk_engine.config["avg_down_max_lots"] = int(state.get("config", {}).get("avg_down_max_lots", 3))
+                engine.risk_engine.config["avg_down_step_pct"] = float(state.get("config", {}).get("avg_down_step_pct", 2.0))
+                engine.risk_engine.config["avg_down_size_multiplier"] = float(state.get("config", {}).get("avg_down_size_multiplier", 1.0))
 
             state["ai_status"] = engine.status
             state["ai_explain"] = engine.explain_msg
@@ -3892,6 +3904,7 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
         <div class="config-field"><label>Trading Mode</label><select id="ai-trade-mode"><option value="paper" selected>📋 PAPER</option><option value="live">🔴 LIVE</option></select></div>
         <div class="config-field"><label>Stop-Loss (sell below entry)</label><label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:4px"><input type="checkbox" id="ai-stop-loss"/> Enabled</label><div style="font-size:10px;color:var(--dim)">OFF (default): hold through dips; only profit-taking exits + dip-buys.</div></div>
         <div class="config-field"><label>Trailing Stop (lock in profit)</label><label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:4px"><input type="checkbox" id="ai-trailing-stop"/> Enabled</label><div style="font-size:10px;color:var(--dim)">OFF (default): sell at fixed take-profit. ON: trailing stop replaces fixed TP; ratchets as price climbs; never exits below entry.</div></div>
+        <div class="config-field"><label>Average-Down (dip-buy)</label><label style="display:flex;align-items:center;gap:6px;font-size:12px;margin-top:4px"><input type="checkbox" id="ai-avg-down" checked/> Enabled</label><div style="font-size:10px;color:var(--dim);margin-top:4px">ON (default): buy extra lots below avg entry (spot LONG only).</div><div style="display:flex;gap:12px;margin-top:6px;font-size:11px"><label>Max lots <input type="number" id="ai-avg-down-lots" min="2" max="5" step="1" value="3" style="width:48px"/></label><label>Step % <input type="number" id="ai-avg-down-step" min="0.5" max="20" step="0.5" value="2.0" style="width:56px"/></label><label>Add size x first lot <input type="number" id="ai-avg-down-mult" min="0.1" max="2" step="0.1" value="1.0" style="width:56px"/></label></div></div>
       </div>
       <div style="margin-top:10px">
         <label style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--dim)">Whitelisted Tokens</label>
@@ -4486,6 +4499,10 @@ function startBot() {
     var ai_mode = document.getElementById("ai-trade-mode").value;
     var stopLossEn = document.getElementById("ai-stop-loss").checked;
     var trailEn = document.getElementById("ai-trailing-stop").checked;
+    var avgDownEn = document.getElementById("ai-avg-down").checked;
+    var avgDownLots = document.getElementById("ai-avg-down-lots").value;
+    var avgDownStep = document.getElementById("ai-avg-down-step").value;
+    var avgDownMult = document.getElementById("ai-avg-down-mult").value;
     var checked_symbols = [];
     var checkboxes = document.querySelectorAll("#ai-whitelist-checkboxes input[type='checkbox']:checked");
     checkboxes.forEach(function(cb) {
@@ -4494,7 +4511,7 @@ function startBot() {
     if (checked_symbols.length === 0) {
       checked_symbols.push(sel.pair);
     }
-    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&stop_loss_enabled=" + stopLossEn + "&trailing_stop_enabled=" + trailEn + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(",")) + "&ai_mode=" + ai_mode;
+    params += "&risk_pct=" + risk + "&max_leverage=" + leverage + "&max_total_exposure=" + exposure + "&max_simultaneous_positions=" + positions + "&stop_loss_enabled=" + stopLossEn + "&trailing_stop_enabled=" + trailEn + "&avg_down_enabled=" + avgDownEn + "&avg_down_max_lots=" + avgDownLots + "&avg_down_step_pct=" + avgDownStep + "&avg_down_size_multiplier=" + avgDownMult + "&ai_whitelist=" + encodeURIComponent(checked_symbols.join(",")) + "&ai_mode=" + ai_mode;
   }
   if ((sel.strat=="limit_buy" || sel.strat=="limit_sell") && document.getElementById("custom-mint").value.trim()) {
     var mint=document.getElementById("custom-mint").value.trim(), sym=document.getElementById("custom-symbol").value.trim().toUpperCase(), quote=document.getElementById("limit-quote").value;
@@ -5253,6 +5270,10 @@ function refresh() {
       document.getElementById("cfg-compound").value = d.config.auto_compound ? "true" : "false";
       document.getElementById("ai-stop-loss").checked = d.config.stop_loss_enabled ? true : false;
       document.getElementById("ai-trailing-stop").checked = d.config.trailing_stop_enabled ? true : false;
+      document.getElementById("ai-avg-down").checked = d.config.avg_down_enabled ? true : false;
+      document.getElementById("ai-avg-down-lots").value = d.config.avg_down_max_lots != null ? d.config.avg_down_max_lots : 3;
+      document.getElementById("ai-avg-down-step").value = d.config.avg_down_step_pct != null ? d.config.avg_down_step_pct : 2.0;
+      document.getElementById("ai-avg-down-mult").value = d.config.avg_down_size_multiplier != null ? d.config.avg_down_size_multiplier : 1.0;
     }
   } catch(e) { console.error("refresh error:", e); } }).catch(console.error);
 }
@@ -5455,6 +5476,10 @@ class Handler(BaseHTTPRequestHandler):
                 state["config"]["auto_compound"] = params.get("auto_compound", ["true"])[0].lower() != "false"
                 state["config"]["stop_loss_enabled"] = params.get("stop_loss_enabled", ["false"])[0].lower() != "false"
                 state["config"]["trailing_stop_enabled"] = params.get("trailing_stop_enabled", ["false"])[0].lower() != "false"
+                state["config"]["avg_down_enabled"] = params.get("avg_down_enabled", ["true"])[0].lower() != "false"
+                state["config"]["avg_down_max_lots"] = int(params.get("avg_down_max_lots", ["3"])[0])
+                state["config"]["avg_down_step_pct"] = float(params.get("avg_down_step_pct", ["2.0"])[0])
+                state["config"]["avg_down_size_multiplier"] = float(params.get("avg_down_size_multiplier", ["1.0"])[0])
                 ai_whitelist_raw = params.get("ai_whitelist", [""])[0]
                 if ai_whitelist_raw:
                     state["ai_whitelisted_symbols"] = [s.strip() for s in ai_whitelist_raw.split(",")]
@@ -5879,9 +5904,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, "application/json", json.dumps({"closed": closed, "total_value": round(total_val, 2)}).encode()); return
         if path == "/config":
             if not self._auth_or_401(): return
-            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "stop_loss_enabled", "trailing_stop_enabled"]
-            bool_keys = {"auto_compound", "stop_loss_enabled", "trailing_stop_enabled"}
-            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread"}
+            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"]
+            bool_keys = {"auto_compound", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled"}
+            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"}
             for key in config_keys:
                 if key in data and data[key] is not None:
                     if key in bool_keys:
@@ -5889,7 +5914,7 @@ class Handler(BaseHTTPRequestHandler):
                     elif key in float_keys:
                         try:
                             val = float(data[key])
-                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "grid_stop_loss_pct": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 99), "base_spread": (0, 1)}
+                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "grid_stop_loss_pct": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 99), "base_spread": (0, 1), "avg_down_max_lots": (2, 5), "avg_down_step_pct": (0.1, 20), "avg_down_size_multiplier": (0.1, 2.0)}
                             lo, hi = bounds[key]
                             if not math.isfinite(val) or not lo <= val <= hi:
                                 raise ValueError("out of bounds")
@@ -5904,7 +5929,7 @@ class Handler(BaseHTTPRequestHandler):
             # Persist every dashboard control into the live cfg used by trade loops.
             # The former handler omitted Render's max_loss/take_profit/min_arb_spread,
             # so those controls appeared to save but never affected a trade.
-            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread", "stop_loss_enabled", "trailing_stop_enabled"] if cfg.get(k) is not None}
+            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         elif path == "/trade_log":

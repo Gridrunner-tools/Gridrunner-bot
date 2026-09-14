@@ -108,6 +108,9 @@ class AITradingEngine:
                             "leverage": sized_signal.recommended_leverage,
                             "trailing_stop": float(getattr(sized_signal, "trailing_stop", 0.0) or 0.0),
                             "trailing_stop_level": sized_signal.entry,
+                            "avg_entry": sized_signal.entry,
+                            "first_lot_size": sized_signal.position_size,
+                            "lots_count": 1,
                             "strategy": sized_signal.strategy,
                             "regime": sized_signal.regime,
                             "timestamp": time.time()
@@ -136,6 +139,10 @@ class AITradingEngine:
         stop = pos["stop"]
         tp = pos["take_profit"]
         size = pos["size"]
+        # Blended average entry: equals the first entry until averaging-down
+        # adds occur; all exit P&L / floors are measured against it.
+        entry_basis = float(pos.get("avg_entry", entry))
+        lots = int(pos.get("lots_count", 1))
         
         is_exit = False
         pnl = 0.0
@@ -159,28 +166,28 @@ class AITradingEngine:
             if trail_dist <= 0.0:
                 trail_dist = abs(entry - stop)
             if direction == "LONG":
-                level = max(entry, level, curr_price - trail_dist)
+                level = max(entry_basis, level, curr_price - trail_dist)
                 pos["trailing_stop_level"] = level
                 if curr_price <= level:
                     is_exit = True
-                    pnl = size * (level - entry)
+                    pnl = size * (level - entry_basis)
                     exit_reason = "Trailing Stop Hit"
             else:  # SHORT
-                level = min(entry, level, curr_price + trail_dist)
+                level = min(entry_basis, level, curr_price + trail_dist)
                 pos["trailing_stop_level"] = level
                 if curr_price >= level:
                     is_exit = True
-                    pnl = size * (entry - level)
+                    pnl = size * (entry_basis - level)
                     exit_reason = "Trailing Stop Hit"
         elif direction == "LONG":
             if curr_price >= tp:
                 is_exit = True
-                pnl = size * (tp - entry)
+                pnl = size * (tp - entry_basis)
                 exit_reason = "Take Profit Hit"
         else:  # SHORT
             if curr_price <= tp:
                 is_exit = True
-                pnl = size * (entry - tp)
+                pnl = size * (entry_basis - tp)
                 exit_reason = "Take Profit Hit"
         # Hard stop-loss stays active when enabled (evaluated after trailing /
         # fixed TP so profit-taking takes precedence). Only reachable below
@@ -188,11 +195,11 @@ class AITradingEngine:
         if not is_exit and sl_enabled:
             if direction == "LONG" and curr_price <= stop:
                 is_exit = True
-                pnl = size * (stop - entry)
+                pnl = size * (stop - entry_basis)
                 exit_reason = "Stop Loss Hit"
             elif direction == "SHORT" and curr_price >= stop:
                 is_exit = True
-                pnl = size * (entry - stop)
+                pnl = size * (entry_basis - stop)
                 exit_reason = "Stop Loss Hit"
 
         if is_exit:
@@ -214,6 +221,62 @@ class AITradingEngine:
                 self.log_event(f"Successfully exited position on {symbol} with P&L: ${pnl:.2f} ({exit_reason})")
             else:
                 self.log_event(f"Failed to execute exit trade for {symbol}!")
+
+        # Averaging-down (dip-buy): while LONG and enabled, buy additional
+        # lots at step % below the blended average entry (spot only). Exit
+        # conditions take precedence (evaluated with the pre-add blended
+        # entry above); an add never fires in the same pass as an exit.
+        avg_down_enabled = self.risk_engine.config.get("avg_down_enabled", False)
+        if avg_down_enabled and not is_exit and direction == "LONG":
+            max_lots = int(self.risk_engine.config.get("avg_down_max_lots", 3))
+            if max_lots < 2:
+                max_lots = 2
+            if max_lots > 5:
+                max_lots = 5
+            step_pct = float(self.risk_engine.config.get("avg_down_step_pct", 2.0))
+            size_mult = float(self.risk_engine.config.get("avg_down_size_multiplier", 1.0))
+            if lots < max_lots and curr_price > 0:
+                avg_entry = float(pos.get("avg_entry", entry))
+                # Add #(lots+1) triggers at step_pct * lots % below avg entry
+                trigger = avg_entry * (1.0 - (step_pct / 100.0) * lots)
+                if curr_price <= trigger:
+                    first_lot = float(pos.get("first_lot_size", size))
+                    add_size = round(first_lot * size_mult, 6)
+                    if add_size <= 0.0:
+                        add_size = first_lot
+                    max_asset = float(self.risk_engine.config.get("max_per_asset_exposure", 2000.0))
+                    max_total = float(self.risk_engine.config.get("max_total_exposure", 5000.0))
+                    new_size = size + add_size
+                    new_exposure = new_size * curr_price
+                    other_exposure = sum(
+                        p.get("exposure_usd", p["size"] * p.get("avg_entry", p["entry"]))
+                        for s, p in self.positions.items() if s != symbol
+                    )
+                    if new_exposure <= max_asset and (other_exposure + new_exposure) <= max_total:
+                        success = execution_adapter.execute_swap(
+                            symbol=symbol,
+                            direction="LONG",
+                            size=add_size,
+                            price=curr_price
+                        )
+                        if success:
+                            old_cost = size * avg_entry
+                            new_avg = (old_cost + add_size * curr_price) / new_size
+                            pos["size"] = new_size
+                            pos["avg_entry"] = new_avg
+                            pos["lots_count"] = lots + 1
+                            pos["exposure_usd"] = new_exposure
+                            self.log_event(
+                                f"Average-down add #{lots + 1} for {symbol}: +{add_size} @ {curr_price:.4f}, "
+                                f"avg entry ${new_avg:.4f} (lots {lots + 1}/{max_lots})"
+                            )
+                        else:
+                            self.log_event(f"Execution adapter failed to fill average-down add for {symbol}.")
+                    else:
+                        self.log_event(
+                            f"Average-down add for {symbol} rejected: exposure cap "
+                            f"({new_exposure:.2f} > asset {max_asset:.0f} or total {max_total:.0f})."
+                        )
 
     def start(self, market_data_provider: Any, execution_adapter: Any, interval_sec: float = 5.0, thread_name: str = None):
         """Start the background execution thread loop."""
