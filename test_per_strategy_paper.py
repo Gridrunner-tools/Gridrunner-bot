@@ -48,6 +48,7 @@ class TestPaperKwargThreading(unittest.TestCase):
         _install_state_backup(self)
         self._mode_bak = state.get("mode")
         self._chain_bak = state.get("chain")
+        self._ex_bak = state.get("exchange")
         # Route every swap call through a recorder so we can assert the paper
         # value that reaches the execution path.
         self.calls = []
@@ -96,6 +97,11 @@ class TestPaperKwargThreading(unittest.TestCase):
             state.pop("chain", None)
         else:
             state["chain"] = self._chain_bak
+        # the cex test sets exchange=bybit; restore it so nothing leaks out
+        if getattr(self, "_ex_bak", None) is None:
+            state.pop("exchange", None)
+        else:
+            state["exchange"] = self._ex_bak
 
     def test_place_order_forwards_paper_to_all_venues(self):
         state["mode"] = "dex"
