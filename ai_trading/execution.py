@@ -110,7 +110,7 @@ class AITradingEngine:
                             "trailing_stop_level": sized_signal.entry,
                             "avg_entry": sized_signal.entry,
                             "first_lot_size": sized_signal.position_size,
-                            "lots_count": 1,
+                            "lots": 1,
                             "strategy": sized_signal.strategy,
                             "regime": sized_signal.regime,
                             "timestamp": time.time()
@@ -142,7 +142,7 @@ class AITradingEngine:
         # Blended average entry: equals the first entry until averaging-down
         # adds occur; all exit P&L / floors are measured against it.
         entry_basis = float(pos.get("avg_entry", entry))
-        lots = int(pos.get("lots_count", 1))
+        lots = int(pos.get("lots", 1))
         
         is_exit = False
         pnl = 0.0
@@ -264,7 +264,7 @@ class AITradingEngine:
                             new_avg = (old_cost + add_size * curr_price) / new_size
                             pos["size"] = new_size
                             pos["avg_entry"] = new_avg
-                            pos["lots_count"] = lots + 1
+                            pos["lots"] = lots + 1
                             pos["exposure_usd"] = new_exposure
                             self.log_event(
                                 f"Average-down add #{lots + 1} for {symbol}: +{add_size} @ {curr_price:.4f}, "

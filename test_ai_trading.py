@@ -780,7 +780,7 @@ class TestAIAveragingDown(unittest.TestCase):
             "regime": "TRENDING_BULL", "timestamp": time.time(),
             "trailing_stop": 2.0, "trailing_stop_level": entry,
             "avg_entry": avg_entry if avg_entry is not None else entry,
-            "first_lot_size": first_lot, "lots_count": lots
+            "first_lot_size": first_lot, "lots": lots
         }
 
     def test_avg_down_disabled_by_default_holds_only(self):
@@ -795,7 +795,7 @@ class TestAIAveragingDown(unittest.TestCase):
         self.assertFalse(adapter.executed, "no add/exit when avg_down is OFF")
         self.assertIn("SOL/USDC", engine.positions)
         self.assertEqual(engine.positions["SOL/USDC"]["size"], 2.0)
-        self.assertEqual(engine.positions["SOL/USDC"]["lots_count"], 1)
+        self.assertEqual(engine.positions["SOL/USDC"]["lots"], 1)
 
     def test_avg_down_adds_first_lot_at_step(self):
         # ON, step 2%: add #2 triggers at avg_entry*(1-0.02) = 98.0.
@@ -811,7 +811,7 @@ class TestAIAveragingDown(unittest.TestCase):
         pos = engine.positions["SOL/USDC"]
         self.assertEqual(pos["size"], 4.0)             # 2.0 + 2.0
         self.assertAlmostEqual(pos["avg_entry"], 99.0)  # (200 + 196) / 4
-        self.assertEqual(pos["lots_count"], 2)
+        self.assertEqual(pos["lots"], 2)
         self.assertTrue(any("Average-down add #2" in e for e in engine.execution_logs), engine.execution_logs)
 
     def test_avg_down_deeper_steps_then_caps_at_max_lots(self):
@@ -826,7 +826,7 @@ class TestAIAveragingDown(unittest.TestCase):
         prov.closes[-1] = 95.0
         engine.manage_existing_position("SOL/USDC", prov, adapter)   # 95 <= 99*0.96=95.04 -> add #3
         pos = engine.positions["SOL/USDC"]
-        self.assertEqual(pos["lots_count"], 3)
+        self.assertEqual(pos["lots"], 3)
         self.assertEqual(pos["size"], 6.0)
         self.assertAlmostEqual(pos["avg_entry"], 97.6666666667)
         adapter.executed = False
@@ -849,7 +849,7 @@ class TestAIAveragingDown(unittest.TestCase):
         self.assertFalse(adapter.executed, "add must be rejected by per-asset cap")
         pos = engine.positions["SOL/USDC"]
         self.assertEqual(pos["size"], 2.0)
-        self.assertEqual(pos["lots_count"], 1)
+        self.assertEqual(pos["lots"], 1)
         self.assertTrue(any("rejected: exposure cap" in e for e in engine.execution_logs), engine.execution_logs)
 
     def test_avg_down_rejected_by_total_exposure(self):
@@ -868,7 +868,7 @@ class TestAIAveragingDown(unittest.TestCase):
             "strategy": "Trend Following", "regime": "TRENDING_BULL",
             "timestamp": time.time(), "trailing_stop": 2.0,
             "trailing_stop_level": 100.0, "avg_entry": 100.0,
-            "first_lot_size": 2.0, "lots_count": 1, "exposure_usd": 4800.0
+            "first_lot_size": 2.0, "lots": 1, "exposure_usd": 4800.0
         }
         prov.closes[-1] = 98.0
         engine.manage_existing_position("SOL/USDC", prov, adapter)
@@ -907,7 +907,7 @@ class TestAIAveragingDown(unittest.TestCase):
         engine.manage_existing_position("SOL/USDC", prov, adapter)
         self.assertTrue(adapter.executed)
         pos = engine.positions["SOL/USDC"]
-        self.assertEqual(pos["lots_count"], 2)
+        self.assertEqual(pos["lots"], 2)
         self.assertAlmostEqual(pos["avg_entry"], 99.0)
         prov.closes[-1] = 94.0   # below hard stop -> exit whole blended position
         engine.manage_existing_position("SOL/USDC", prov, adapter)
