@@ -727,6 +727,278 @@ class TestAITradingContinuousLoop(unittest.TestCase):
         self.assertTrue(any("Trailing Stop Hit" in e for e in engine.execution_logs),
                         "trailing must be evaluated before the hard stop-loss")
 
+class TestAIAveragingDown(unittest.TestCase):
+    """Averaging-down (dip-buy): config knobs, blending, and cap enforcement."""
+
+    class MockMarketDataProvider:
+        def __init__(self, closes):
+            self.closes = list(closes)
+        def get_candles(self, symbol):
+            return {
+                "highs": [x + 2 for x in self.closes],
+                "lows": [x - 2 for x in self.closes],
+                "closes": self.closes,
+                "volumes": [100.0] * len(self.closes)
+            }
+        def get_current_price(self, symbol):
+            return self.closes[-1]
+
+    class MockExecutionAdapter:
+        def __init__(self):
+            self.executed = False
+            self.closed_pnl = None
+        def execute_swap(self, symbol, direction, size, price):
+            self.executed = True
+            return True
+        def get_venue_positions(self):
+            return {}
+        def record_trade_closed(self, symbol, pnl):
+            self.closed_pnl = pnl
+
+    def _config(self, **over):
+        cfg = {
+            "account_equity": 1000.0,
+            "risk_per_trade_pct": 1.0,
+            "max_leverage": 3.0,
+            "max_total_exposure": 5000.0,
+            "max_per_asset_exposure": 2000.0,
+            "max_simultaneous_positions": 3,
+            "daily_loss_limit": 100.0,
+            "max_drawdown_limit_pct": 10.0,
+            "circuit_breaker_active": False,
+            "current_drawdown_pct": 0.0,
+            "daily_loss_accrued": 0.0
+        }
+        cfg.update(over)
+        return cfg
+
+    def _long_pos(self, size=2.0, entry=100.0, stop=95.0, tp=110.0, lots=1, avg_entry=None, first_lot=2.0):
+        return {
+            "symbol": "SOL/USDC", "direction": "LONG",
+            "entry": entry, "stop": stop, "take_profit": tp,
+            "size": size, "leverage": 1.0, "strategy": "Trend Following",
+            "regime": "TRENDING_BULL", "timestamp": time.time(),
+            "trailing_stop": 2.0, "trailing_stop_level": entry,
+            "avg_entry": avg_entry if avg_entry is not None else entry,
+            "first_lot_size": first_lot, "lots": lots
+        }
+
+    def test_avg_down_disabled_by_default_holds_only(self):
+        # No avg_down keys in config -> master switch OFF (engine default).
+        # A dip below the would-be trigger adds nothing and exits nothing.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        prov.closes[-1] = 98.0  # <= 100 * (1 - 0.02) would trigger if enabled
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "no add/exit when avg_down is OFF")
+        self.assertIn("SOL/USDC", engine.positions)
+        self.assertEqual(engine.positions["SOL/USDC"]["size"], 2.0)
+        self.assertEqual(engine.positions["SOL/USDC"]["lots"], 1)
+
+    def test_avg_down_adds_first_lot_at_step(self):
+        # ON, step 2%: add #2 triggers at avg_entry*(1-0.02) = 98.0.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "add #2 must buy a lot at the step")
+        pos = engine.positions["SOL/USDC"]
+        self.assertEqual(pos["size"], 4.0)             # 2.0 + 2.0
+        self.assertAlmostEqual(pos["avg_entry"], 99.0)  # (200 + 196) / 4
+        self.assertEqual(pos["lots"], 2)
+        self.assertTrue(any("Average-down add #2" in e for e in engine.execution_logs), engine.execution_logs)
+
+    def test_avg_down_deeper_steps_then_caps_at_max_lots(self):
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)   # add #2 -> avg 99.0, size 4
+        prov.closes[-1] = 95.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)   # 95 <= 99*0.96=95.04 -> add #3
+        pos = engine.positions["SOL/USDC"]
+        self.assertEqual(pos["lots"], 3)
+        self.assertEqual(pos["size"], 6.0)
+        self.assertAlmostEqual(pos["avg_entry"], 97.6666666667)
+        adapter.executed = False
+        prov.closes[-1] = 93.0   # lots == max (3) -> no add, and TP/SL off -> hold
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "no add beyond avg_down_max_lots")
+        self.assertEqual(engine.positions["SOL/USDC"]["size"], 6.0)
+
+    def test_avg_down_rejected_by_per_asset_exposure(self):
+        # Add would push SOL to 4.0 * 98 = $392 > max_per_asset_exposure $350.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0,
+            max_per_asset_exposure=350.0), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "add must be rejected by per-asset cap")
+        pos = engine.positions["SOL/USDC"]
+        self.assertEqual(pos["size"], 2.0)
+        self.assertEqual(pos["lots"], 1)
+        self.assertTrue(any("rejected: exposure cap" in e for e in engine.execution_logs), engine.execution_logs)
+
+    def test_avg_down_rejected_by_total_exposure(self):
+        # Second coin (BTC) already uses $4,800 of the $5,000 portfolio cap;
+        # the SOL add would push the portfolio to $5,192 -> rejected.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0,
+            max_total_exposure=5000.0), ["SOL/USDC", "BTC/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        engine.positions["BTC/USDC"] = {
+            "symbol": "BTC/USDC", "direction": "LONG", "entry": 100.0,
+            "stop": 95.0, "take_profit": 110.0, "size": 2.0, "leverage": 1.0,
+            "strategy": "Trend Following", "regime": "TRENDING_BULL",
+            "timestamp": time.time(), "trailing_stop": 2.0,
+            "trailing_stop_level": 100.0, "avg_entry": 100.0,
+            "first_lot_size": 2.0, "lots": 1, "exposure_usd": 4800.0
+        }
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertFalse(adapter.executed, "add must be rejected by portfolio cap")
+        self.assertEqual(engine.positions["SOL/USDC"]["size"], 2.0)
+        self.assertTrue(any("rejected: exposure cap" in e for e in engine.execution_logs), engine.execution_logs)
+
+    def test_avg_down_exit_uses_blended_avg_entry(self):
+        # After two adds the position is 6.0 @ 97.6667; TP exit P&L must be
+        # measured against the blended avg entry, not the first entry.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos(
+            size=6.0, lots=3, avg_entry=586.0 / 6.0)
+        prov.closes[-1] = 110.0  # fixed TP
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "TP must fire on the blended position")
+        self.assertNotIn("SOL/USDC", engine.positions)
+        self.assertAlmostEqual(adapter.closed_pnl, 6.0 * (110.0 - 586.0 / 6.0), places=2)
+        self.assertTrue(any("Take Profit Hit" in e for e in engine.execution_logs), engine.execution_logs)
+
+    def test_avg_down_stop_loss_exit_takes_precedence_over_add(self):
+        # SL ON: add fires while above the stop; once price crosses the stop the
+        # exit fires for the WHOLE blended position instead of adding again.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0,
+            stop_loss_enabled=True), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        prov.closes[-1] = 98.0   # above stop 95 -> add #2
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        pos = engine.positions["SOL/USDC"]
+        self.assertEqual(pos["lots"], 2)
+        self.assertAlmostEqual(pos["avg_entry"], 99.0)
+        prov.closes[-1] = 94.0   # below hard stop -> exit whole blended position
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        self.assertNotIn("SOL/USDC", engine.positions)
+        self.assertAlmostEqual(adapter.closed_pnl, 4.0 * (95.0 - 99.0), places=2)
+        self.assertTrue(any("Stop Loss Hit" in e for e in engine.execution_logs), engine.execution_logs)
+        self.assertEqual(sum(1 for e in engine.execution_logs if "Average-down add" in e), 1,
+                         "the stop-loss pass must NOT add a lot")
+
+    def test_avg_down_trailing_exit_takes_precedence_over_add(self):
+        # Trailing ON floors at entry; a dip below the trigger is first an exit
+        # (Trailing Stop Hit at break-even), not an add.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0,
+            trailing_stop_enabled=True), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        self.assertNotIn("SOL/USDC", engine.positions)
+        self.assertTrue(any("Trailing Stop Hit" in e for e in engine.execution_logs), engine.execution_logs)
+        self.assertFalse(any("Average-down add" in e for e in engine.execution_logs),
+                         "trailing exit must preempt the add in the same pass")
+
+    def test_avg_down_syncs_risk_engine_active_position(self):
+        # The portfolio gate (evaluate_and_size_signal) sums
+        # risk_engine.active_positions exposure_usd to size NEW entries. An
+        # averaging-down add must update that ledger too, or total exposure
+        # undercounts and a later entry can be over-sized. Assert the risk
+        # engine's copy matches self.positions after the add.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0), ["SOL/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        # Seed the risk ledger exactly as record_trade_opened does at open.
+        engine.risk_engine.active_positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG", "entry": 100.0,
+            "stop": 95.0, "take_profit": 110.0, "size": 2.0,
+            "exposure_usd": 200.0, "leverage": 1.0, "timestamp": time.time()
+        }
+        prov.closes[-1] = 98.0  # add #2: 2.0 @ 100 + 2.0 @ 98 -> 4.0 @ 99
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed)
+        pos = engine.positions["SOL/USDC"]
+        ra = engine.risk_engine.active_positions["SOL/USDC"]
+        self.assertAlmostEqual(ra["size"], pos["size"], places=4)
+        self.assertAlmostEqual(ra["exposure_usd"], pos["exposure_usd"], places=4)
+        self.assertAlmostEqual(ra["entry"], pos["avg_entry"], places=4)
+        self.assertAlmostEqual(ra["avg_entry"], pos["avg_entry"], places=4)
+        self.assertAlmostEqual(ra["exposure_usd"], 4.0 * 98.0, places=4)
+        self.assertAlmostEqual(ra["avg_entry"], 99.0, places=4)
+    def test_avg_down_entry_sizing_sees_synced_exposure(self):
+        # Consequence regression: after an add (SOL exposure 200 -> 392), a NEW
+        # entry on BTC must be sized against the updated total. With the risk
+        # ledger stale, 200+200=400 <= 500 would allow the full 2.0 lot; with
+        # the sync, 392+200=592 > 500 so the entry is capped to remaining $108.
+        prov = self.MockMarketDataProvider([100.0])
+        adapter = self.MockExecutionAdapter()
+        engine = AITradingEngine(self._config(
+            avg_down_enabled=True, avg_down_max_lots=3,
+            avg_down_step_pct=2.0, avg_down_size_multiplier=1.0,
+            max_total_exposure=500.0), ["SOL/USDC", "BTC/USDC"])
+        engine.positions["SOL/USDC"] = self._long_pos()
+        engine.risk_engine.active_positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC", "direction": "LONG", "entry": 100.0,
+            "stop": 95.0, "take_profit": 110.0, "size": 2.0,
+            "exposure_usd": 200.0, "leverage": 1.0, "timestamp": time.time()
+        }
+        prov.closes[-1] = 98.0
+        engine.manage_existing_position("SOL/USDC", prov, adapter)
+        self.assertTrue(adapter.executed, "SOL add must fill")
+        # Fresh LONG signal on BTC: 1% risk, stop distance 5 -> raw size 2.0.
+        sig = Signal(
+            symbol="BTC/USDC", venue="Solana", direction="LONG",
+            signal_score=85.0, confidence="HIGH", regime="TRENDING_BULL",
+            strategy="Trend Following", entry=100.0, stop=95.0,
+            take_profit=110.0, trailing_stop=1.5, risk_pct=1.0,
+            position_size=0.0, recommended_leverage=1.0, reward_risk=2.0
+        )
+        sized = engine.risk_engine.evaluate_and_size_signal(sig)
+        self.assertTrue(sized.is_tradeable())
+        expected = round((500.0 - 4.0 * 98.0) / 100.0, 6)  # remaining $108 @ 100
+        self.assertAlmostEqual(sized.position_size, expected, places=4)
+        self.assertLess(sized.position_size, 2.0,
+                        "stale risk ledger would allow the full 2.0 lot")
 def test_ai_trading_all():
     import unittest
     suite = unittest.TestSuite()
@@ -737,6 +1009,7 @@ def test_ai_trading_all():
     suite.addTest(unittest.makeSuite(TestAITradingRiskEngine))
     suite.addTest(unittest.makeSuite(TestAITradingBacktestEngine))
     suite.addTest(unittest.makeSuite(TestAITradingContinuousLoop))
+    suite.addTest(unittest.makeSuite(TestAIAveragingDown))
     
     runner = unittest.TextTestRunner(verbosity=0)
     result = runner.run(suite)
@@ -751,6 +1024,7 @@ def run_tests():
     suite.addTest(unittest.makeSuite(TestAITradingRiskEngine))
     suite.addTest(unittest.makeSuite(TestAITradingBacktestEngine))
     suite.addTest(unittest.makeSuite(TestAITradingContinuousLoop))
+    suite.addTest(unittest.makeSuite(TestAIAveragingDown))
     
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
