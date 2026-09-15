@@ -2653,7 +2653,7 @@ def run_grid(sid=None):
                     grids, mid_idx, filled, previous_price, price)
                 gs["previous_price"] = price
                 bal = get_balance()
-                effective_bal = bal + (state.get("compound_profit", 0) if cfg.get("auto_compound", True) else 0)
+                effective_bal = bal + ((state.get("compound_profit", 0) or 0) if cfg.get("auto_compound", True) else 0)
                 min_order = max(5.0, float(cfg.get("min_order_usdc", 5)))  # $5 minimum per grid level
                 size = max(min_order, min(effective_bal*cfg["risk_pct"]/100, cfg["max_pos"])/levels)
                 for i,g in enumerate(grids[:-1]):
@@ -3376,7 +3376,7 @@ def run_ai_trading(sid=None):
                 cur_usdc = state.get("sol_usdc", 0.0) or 0.0
                 cur_sol = state.get("sol_bal", 0.0) or 0.0
                 cur_price = get_price("SOL/USDC") or 100.0
-                comp_added = state.get("compound_profit", 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
+                comp_added = (state.get("compound_profit", 0.0) or 0.0) if state.get("config", {}).get("auto_compound", True) else 0.0
                 cur_equity = max(100.0, cur_usdc + (cur_sol * cur_price) + comp_added)
 
                 engine.risk_engine.config["account_equity"] = cur_equity
