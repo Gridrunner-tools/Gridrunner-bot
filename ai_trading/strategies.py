@@ -3,6 +3,11 @@ from typing import List, Tuple, Dict, Any
 from ai_trading.indicators import ema, rsi, macd, atr, bollinger_bands, vwap, swing_highs_lows, momentum
 from ai_trading.signal import Signal, create_no_trade_signal, AI_MIN_SCORE
 
+# Owner spec (no forced immediate long): in RANGE regime the LONG-vs-SHORT pick
+# requires a real directional edge. A score gap smaller than this is treated as
+# "no clean directional edge" -> NO_TRADE instead of defaulting LONG/SHORT.
+RANGE_DIRECTIONAL_MARGIN = 10.0
+
 def evaluate_falling_knife(closes: List[float], highs: List[float], lows: List[float], volumes: List[float]) -> Tuple[bool, List[str]]:
     """
     Check for the classic falling-knife trap:
@@ -188,11 +193,13 @@ def generate_signals_and_score(
             strategy = "Mean Reversion"
             score = short_score + 10
         else:
-            # No forced-direction fallback on a tie: when regime is RANGE and
-            # the long/short scores are exactly equal (no clean directional
-            # edge), stay flat. Spot is long-only, so defaulting to LONG on a
-            # tie forced an immediate long entry on ambiguous RANGE conditions.
-            if long_score == short_score:
+            # No forced-direction fallback without a real edge: when regime is
+            # RANGE and the long/short scores are within RANGE_DIRECTIONAL_MARGIN
+            # of each other (no clean directional edge), stay flat. Spot is
+            # long-only, so defaulting to LONG on an ambiguous RANGE condition
+            # forced an immediate long entry. LONG must also clear the
+            # AI_MIN_SCORE floor enforced by the score-band check below.
+            if abs(long_score - short_score) < RANGE_DIRECTIONAL_MARGIN:
                 return create_no_trade_signal(symbol, venue, regime, "RANGE no clear directional edge")
             direction = "LONG" if long_score > short_score else "SHORT"
             strategy = "Adaptive Grid"
