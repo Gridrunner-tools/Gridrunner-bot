@@ -55,6 +55,8 @@ class TestPaperKwargThreading(unittest.TestCase):
         self._orig_jup = main.jupiter_swap
         self._orig_dex = main.dex_swap
         self._orig_cex = main.cex_place_order
+        self._orig_authorize = main.authorize_trade
+        self._orig_get_price = main.get_price
 
         def fake_jupiter(from_token, to_token, amount_input, price, dex=None, paper=None):
             self.calls.append(("jupiter", paper))
@@ -86,6 +88,8 @@ class TestPaperKwargThreading(unittest.TestCase):
         main.jupiter_swap = self._orig_jup
         main.dex_swap = self._orig_dex
         main.cex_place_order = self._orig_cex
+        main.authorize_trade = self._orig_authorize
+        main.get_price = self._orig_get_price
         _restore_state_backup(self)
         # restore any pre-existing mode/chain rather than leaking our values into
         # whichever test module runs after this one in the aggregate suite
