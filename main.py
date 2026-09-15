@@ -3316,6 +3316,47 @@ class LiveExecutionAdapter:
             state["compound_profit"] = state.get("compound_profit", 0.0) + pnl
             log(f"AI Trading compounded profit: +${pnl:.2f}. Total compounded profit: ${state['compound_profit']:.2f}")
 
+def _ai_positions_payload(engine):
+    """Build the dashboard AI-card positions list from the live engine state.
+
+    Returns a JSON-serializable list of per-position dicts (symbol, direction,
+    entry, size, pnl). Unrealized PnL is computed against the latest cached
+    price tick (state price_history_pairs / state price) so this adds no new
+    network calls to the trading loop. Falls back to a plain symbol string for
+    any non-dict position entry (defensive).
+    """
+    out = []
+    if engine is None:
+        return out
+    positions = getattr(engine, "positions", None) or {}
+    for sym, pos in positions.items():
+        if not isinstance(pos, dict):
+            out.append(sym)
+            continue
+        direction = pos.get("direction", "LONG")
+        entry = float(pos.get("avg_entry") or pos.get("entry") or 0.0)
+        size = float(pos.get("size") or 0.0)
+        pnl = 0.0
+        if entry > 0 and size > 0:
+            hist = state.get("price_history_pairs", {}).get(sym, [])
+            px = 0.0
+            if hist and isinstance(hist[-1], dict):
+                px = float(hist[-1].get("value") or 0.0)
+            if px <= 0 and sym == state.get("pair"):
+                px = float(state.get("price") or 0.0)
+            if px > 0:
+                sign = 1.0 if direction == "LONG" else -1.0
+                pnl = (px - entry) * size * sign
+        out.append({
+            "symbol": sym,
+            "direction": direction,
+            "entry": round(entry, 6),
+            "size": round(size, 6),
+            "pnl": round(pnl, 2),
+        })
+    return out
+
+
 def run_ai_trading(sid=None):
     if sid is None:
         sid = threading.current_thread().name
@@ -3395,7 +3436,7 @@ def run_ai_trading(sid=None):
 
             state["ai_status"] = engine.status
             state["ai_explain"] = engine.explain_msg
-            state["ai_positions"] = list(engine.positions.keys())
+            state["ai_positions"] = _ai_positions_payload(engine)
 
             if engine.positions:
                 p_symbol = list(engine.positions.keys())[0]

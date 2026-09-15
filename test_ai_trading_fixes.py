@@ -6,7 +6,7 @@ from ai_trading.signal import Signal
 from ai_trading.strategies import generate_signals_and_score
 from ai_trading.execution import AITradingEngine
 import unittest.mock
-from main import state, LiveMarketDataProvider, LiveExecutionAdapter, run_ai_trading, run_grid, place_order
+from main import state, LiveMarketDataProvider, LiveExecutionAdapter, run_ai_trading, run_grid, place_order, _ai_positions_payload
 
 class TestAITradingFixes(unittest.TestCase):
     def setUp(self):
@@ -274,6 +274,85 @@ class TestAITradingFixes(unittest.TestCase):
                 "SOL/USDC", "Solana", highs, lows, closes, volumes, regime_info
             )
         self.assertEqual(signal.direction, "LONG")
+    def test_range_edge_within_margin_returns_no_trade(self):
+        """FIX 1 (owner spec): in RANGE regime the LONG vs SHORT pick requires a
+        real edge - long_score must beat short_score by at least
+        RANGE_DIRECTIONAL_MARGIN. Widening the margin to 1000 turns a genuine
+        45-vs-0 edge into 'no clean directional edge' -> NO_TRADE, proving the
+        gate is a margin, not just an exact-tie suppression."""
+        with unittest.mock.patch('ai_trading.strategies.ema', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.vwap', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.rsi', return_value=[60.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.momentum', return_value=[5.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.RANGE_DIRECTIONAL_MARGIN', 1000.0):
+            # long: HTF +20, VWAP +10, momentum +15 = 45; short: 0 -> diff 45.
+            regime_info = {"regime": "RANGE"}
+            closes = [100.0] * 100
+            highs = [101.0] * 100
+            lows = [99.0] * 100
+            volumes = [1000.0] * 100
+            signal = generate_signals_and_score(
+                "SOL/USDC", "Solana", highs, lows, closes, volumes, regime_info
+            )
+        self.assertEqual(signal.direction, "NO_TRADE")
+        self.assertEqual(signal.reasons[0], "RANGE no clear directional edge")
+    def test_range_long_edge_must_clear_ai_min_score(self):
+        """FIX 1 (owner spec): even a LONG that clears the RANGE margin must
+        also clear the AI_MIN_SCORE floor. Raising the floor above the signal
+        score must yield NO_TRADE (score-band check), never a sub-floor LONG."""
+        with unittest.mock.patch('ai_trading.strategies.ema', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.vwap', return_value=[90.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.rsi', return_value=[60.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.momentum', return_value=[5.0] * 100), \
+             unittest.mock.patch('ai_trading.strategies.AI_MIN_SCORE', 999.0):
+            # LONG edge of 45 beats SHORT 0 by 45 > margin; floor at 999 blocks.
+            regime_info = {"regime": "RANGE"}
+            closes = [100.0] * 100
+            highs = [101.0] * 100
+            lows = [99.0] * 100
+            volumes = [1000.0] * 100
+            signal = generate_signals_and_score(
+                "SOL/USDC", "Solana", highs, lows, closes, volumes, regime_info
+            )
+        self.assertEqual(signal.direction, "NO_TRADE")
+        self.assertIn("too weak", signal.reasons[0])
+    def test_ai_positions_payload_has_per_position_pnl(self):
+        """FIX 2: the AI card positions list must be per-position dicts with
+        unrealized PnL computed from engine positions vs the latest cached tick
+        (positive when price rose for a LONG, negative when it fell)."""
+        class MockEngine:
+            def __init__(self):
+                self.positions = {
+                    "SOL/USDC": {"symbol": "SOL/USDC", "direction": "LONG",
+                                 "entry": 100.0, "avg_entry": 105.0, "size": 2.0},
+                    "BTC/USDC": {"symbol": "BTC/USDC", "direction": "LONG",
+                                 "entry": 60000.0, "size": 0.5},
+                }
+        state["price_history_pairs"] = {
+            "SOL/USDC": [{"time": 1, "value": 110.0}],
+            "BTC/USDC": [{"time": 1, "value": 55000.0}],
+        }
+        out = _ai_positions_payload(MockEngine())
+        self.assertEqual(len(out), 2)
+        by = {p["symbol"]: p for p in out}
+        self.assertEqual(by["SOL/USDC"]["direction"], "LONG")
+        self.assertEqual(by["SOL/USDC"]["entry"], 105.0)
+        self.assertEqual(by["SOL/USDC"]["pnl"], 10.0)      # (110 - 105) * 2
+        self.assertEqual(by["BTC/USDC"]["pnl"], -2500.0)   # (55000 - 60000) * 0.5
+    def test_ai_positions_payload_empty_and_defensive(self):
+        """FIX 2: empty/None engine yields [], and a non-dict position entry
+        (legacy symbol-string shape) is still served without crashing."""
+        class MockEngine:
+            def __init__(self):
+                self.positions = {"SOL/USDC": "SOL/USDC"}
+        state["price_history_pairs"] = {}
+        out = _ai_positions_payload(MockEngine())
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0], "SOL/USDC")
+        self.assertEqual(_ai_positions_payload(None), [])
+        class EmptyEngine:
+            positions = {}
+        self.assertEqual(_ai_positions_payload(EmptyEngine()), [])
     def test_grid_loop_error_is_caught_inside_loop(self):
         """Owner requirement (live-money bug): a transient per-cycle error in
         run_grid (swap/network/state race) must NOT propagate out of the loop
