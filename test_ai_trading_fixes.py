@@ -144,7 +144,7 @@ class TestAITradingFixes(unittest.TestCase):
 
         import main
         orig_place_order = main.place_order
-        main.place_order = lambda pair, side, amt: True
+        main.place_order = lambda pair, side, amt, paper=None: True
 
         try:
             success = adapter.execute_swap("SOL/USDC", "SHORT", 1.0, 100.0)

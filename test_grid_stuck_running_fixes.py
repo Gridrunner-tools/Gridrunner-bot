@@ -52,7 +52,7 @@ def test_execute_base_buy_null_guards():
     main.get_balance = lambda: None  # Check that returning None is guarded
     main.get_price = lambda pair: 100.0
     main.sol_get_balance = lambda: None
-    main.place_order = lambda pair, side, amount, grid_idx=None: False
+    main.place_order = lambda pair, side, amount, grid_idx=None, paper=None: False
 
     # Setup state with missing/null values
     state["running"] = True

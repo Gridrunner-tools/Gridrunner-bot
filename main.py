@@ -288,6 +288,24 @@ def check_capital_reservation(strategy_type, strategy_config):
                        f"(total {pool} balance: ${balance:.2f})")
     return True, None
 
+def _strategy_paper(sid=None):
+    """Resolve the paper/live flag for a strategy context.
+
+    A strategy thread's own ``config["paper_trading"]`` wins; paths with
+    no strategy context (or an unknown sid) fall back to the global flag.
+    """
+    sid = sid or threading.current_thread().name
+    return bool(state.get("strategies", {}).get(sid, {}).get("config", {}).get("paper_trading", state.get("paper_trading", True)))
+
+def _grid_paper():
+    """Resolve the paper/live flag for grid-context orders (manual trades,
+    grid webhooks, /kill). The running grid strategy's config wins; else
+    the global fallback default."""
+    for s in state.get("strategies", {}).values():
+        if s.get("type") == "grid" and s.get("running"):
+            return bool((s.get("config") or {}).get("paper_trading", True))
+    return bool(state.get("paper_trading", True))
+
 def default_strategy_paper(strategy_type):
     """Default paper flag for a strategy type.
 
@@ -441,6 +459,11 @@ def _state_payload():
             else:
                 clean[sid] = strat
         data["strategies"] = clean
+    running_strats = [s for s in clean.values() if isinstance(s, dict) and s.get("running")]
+    if running_strats:
+        last_paper = (running_strats[-1].get("config") or {}).get("paper_trading")
+        if last_paper is not None:
+            data["active_paper"] = bool(last_paper)
     return data
 
 def send_telegram(msg):
@@ -726,8 +749,8 @@ def cex_get_balance():
         log("Balance error ("+exchange+"): "+str(ex), "ERROR")
     return 0.0
 
-def cex_place_order(pair, side, amount):
-    if state.get("paper_trading", False):
+def cex_place_order(pair, side, amount, paper=None):
+    if (paper if paper is not None else state.get("paper_trading", False)):
         log("[CEX] PAPER MODE — skipping " + side + " " + pair + " " + str(amount))
         return True
     exchange = state["exchange"]
@@ -895,7 +918,7 @@ def dex_best_quote(chain, from_token, to_token, amount_wei):
         return q1, "1inch"
     return q2, "Uniswap"
 
-def dex_swap(chain, from_token, to_token, amount_usd, price, target_symbol=None):
+def dex_swap(chain, from_token, to_token, amount_usd, price, target_symbol=None, paper=None):
     try:
         amount_wei = int(amount_usd * 1e6)
         best_amount, router = dex_best_quote(chain, from_token, to_token, amount_wei)
@@ -1455,9 +1478,9 @@ def raydium_get_quote(from_mint, to_mint, amount, slippage_bps="200"):
 
 def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                           amount_input, out_human, price, side, via,
-                          lamports, raydium_quote, to_dec):
+                          lamports, raydium_quote, to_dec, paper=None):
     """Execute a Raydium swap using the quote from raydium_get_quote."""
-    if state["paper_trading"]:
+    if (paper if paper is not None else state["paper_trading"]):
         trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side+via,
                  "price":price,"amount":out_human,"router":"Raydium","chain":"solana"}
         state["trades"].append(trade)
@@ -1685,7 +1708,7 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
     except Exception as ex:
         log("Raydium swap error: "+str(ex)[:100], "WARN"); return False, 0.0
 
-def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
+def jupiter_swap(from_token, to_token, amount_input, price, dex=None, paper=None):
     """
     Execute a Solana DEX swap via Jupiter aggregator (v6 API).
     Jupiter routes through all DEXes (Raydium, Orca, Meteora, etc.) for best price.
@@ -1709,7 +1732,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
         if out_human > 0:
             log("Raydium quote: "+str(amount_input)+" "+from_token+" → "+str(round(out_human,6))+" "+to_token)
             ok, result_amt = _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
-                amount_input, out_human, price, side, via, lamports, rq, to_dec)
+                amount_input, out_human, price, side, via, lamports, rq, to_dec, paper=paper)
             if ok:
                 return True, result_amt
             log("Raydium execution failed, falling back to Jupiter...", "WARN")
@@ -1740,7 +1763,7 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None):
         log("Jupiter unavailable: "+str(e)[:80], "WARN")
         return False, 0.0
 
-    if state["paper_trading"]:
+    if (paper if paper is not None else state["paper_trading"]):
         trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side+via,
                  "price":price,"amount":out_human,"router":"Jupiter","chain":"solana"}
         state["trades"].append(trade)
@@ -2131,7 +2154,7 @@ def get_balance():
 _last_order_key = None
 _last_order_time = 0
 
-def place_order(pair, side, amount, grid_idx=None):
+def place_order(pair, side, amount, grid_idx=None, paper=None):
     global _last_order_key, _last_order_time
     order_key = f"{pair}:{side}:{amount}"
     if grid_idx is not None:
@@ -2166,11 +2189,11 @@ def place_order(pair, side, amount, grid_idx=None):
                     cost = amount * price
                     log(f"place_order BUY: amt={amount} price={price} cost={cost} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"BUY","pair":pair,"amount":amount,"price":price,"cost":cost})
                     swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
-                    result = jupiter_swap(stablecoin, token, cost, price, dex=swap_dex)
+                    result = jupiter_swap(stablecoin, token, cost, price, dex=swap_dex, paper=paper)
                 else:
                     log(f"place_order SELL: amt={amount} price={price} pair={pair}", "DEBUG"); log_trade_to_file({"event":"ORDER_ATTEMPT","time":time.strftime("%H:%M:%S"),"side":"SELL","pair":pair,"amount":amount,"price":price})
                     swap_dex = "Raydium" if token in ("SOL","BTC","ETH","USDC","USDT","JUP","BONK","WIF") else None
-                    result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex)
+                    result = jupiter_swap(token, stablecoin, amount, price, dex=swap_dex, paper=paper)
                 # jupiter_swap returns (success_bool, amount) tuple — unpack it
                 if isinstance(result, tuple):
                     success = result[0]
@@ -2182,11 +2205,11 @@ def place_order(pair, side, amount, grid_idx=None):
                 from_t = tokens.get("USDT","")
                 to_t   = tokens.get("W"+token, tokens.get(token,""))
                 if side in ("buy","buy_market"):
-                    success = dex_swap(chain, from_t, to_t, amount * price, price, target_symbol=token)
+                    success = dex_swap(chain, from_t, to_t, amount * price, price, target_symbol=token, paper=paper)
                 else:
-                    success = dex_swap(chain, to_t, from_t, amount * price, price, target_symbol=token)
+                    success = dex_swap(chain, to_t, from_t, amount * price, price, target_symbol=token, paper=paper)
         else:
-            success = bool(cex_place_order(pair, side, amount))
+            success = bool(cex_place_order(pair, side, amount, paper=paper))
 
     except Exception as e:
         log("place_order " + side.upper() + " " + pair + " " + str(amount) + " error (order NOT placed): " + repr(e), "ERROR")
@@ -2364,6 +2387,7 @@ def chart_history_for(pair):
     return []
 def run_dca():
     log("DCA started on "+state["pair"]+" ("+state["mode"].upper()+")")
+    paper = _strategy_paper()
     buy_prices = []
     while state["running"] and state["strategy"]=="dca":
         while state["paused"]: time.sleep(1)
@@ -2374,7 +2398,7 @@ def run_dca():
             size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
             if size > 1:
                 amt = round(size/price, 6)
-                if place_order(pair,"buy",amt, grid_idx=i):
+                if place_order(pair,"buy",amt, grid_idx=i, paper=paper):
                     buy_prices.append(price)
                     state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                     record_trade("DCA-BUY",price,amt, pair=pair)
@@ -2385,14 +2409,14 @@ def run_dca():
             loss = (avg-price)/avg*100
             total = sum(p["amount"] for p in state["positions"])
             if gain >= cfg["take_profit"]:
-                if place_order(pair,"sell",total):
+                if place_order(pair,"sell",total, paper=paper):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
                     record_trade("SELL",price,total,round(pnl,2), pair=pair)
                     log("DCA SELL @ $"+str(price)+" PnL: $"+str(round(pnl,2)))
                     buy_prices.clear(); state["positions"].clear()
             elif loss >= cfg["stop_loss"]:
-                if place_order(pair,"sell",total):
+                if place_order(pair,"sell",total, paper=paper):
                     pnl = (price-avg)*total
                     state["pnl"] += pnl
                     state["daily_loss"] += abs(pnl)
@@ -2403,7 +2427,7 @@ def run_dca():
                 size = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])
                 if size > 1:
                     amt = round(size/price,6)
-                    if place_order(pair,"buy",amt, grid_idx=i):
+                    if place_order(pair,"buy",amt, grid_idx=i, paper=paper):
                         buy_prices.append(price)
                         state["positions"].append({"price":price,"amount":amt,"strategy":"DCA"})
                         record_trade("DCA-BUY",price,amt, pair=pair)
@@ -2493,8 +2517,10 @@ def _grid_sell_indices(filled, grid_idx, levels):
     if grid_idx == first_sell_idx:
         return [ordered[-1]]
     return [ordered[0]]
-def _execute_base_buy_if_needed(pair, gs, price):
+def _execute_base_buy_if_needed(pair, gs, price, paper=None):
     """Execute base buy on start / re-center if not already seeded."""
+    if paper is None:
+        paper = _strategy_paper()
     if not gs.get("seeded"):
         if price <= 0:
             return
@@ -2525,7 +2551,7 @@ def _execute_base_buy_if_needed(pair, gs, price):
                 cell = gs["mid_idx"]
 
             base_amt = round(size / price, 6)
-            if place_order(pair, "buy", base_amt, grid_idx=cell):
+            if place_order(pair, "buy", base_amt, grid_idx=cell, paper=paper):
                 gs["filled"][cell] = {"price": price, "amount": base_amt}
                 state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
                 record_trade("GRID-BUY", price, base_amt, pair=pair)
@@ -2537,6 +2563,7 @@ def _execute_base_buy_if_needed(pair, gs, price):
 def run_grid(sid=None):
     if sid is None:
         sid = f"grid_{state.get('pair', 'SOL/USDC')}"
+    paper = bool(state.get("strategies", {}).get(sid, {}).get("config", {}).get("paper_trading", state.get("paper_trading", True)))
     pair = state.get("pair","SOL/USDC")
     if pair not in state["active_pairs"]:
         state["active_pairs"].append(pair)
@@ -2651,7 +2678,7 @@ def run_grid(sid=None):
                                 should_buy = moving_up
                                 if should_buy:
                                     amt = round(size*dip_mult/price,6)
-                                    if place_order(pair,"buy",amt, grid_idx=i):
+                                    if place_order(pair,"buy",amt, grid_idx=i, paper=paper):
                                         filled[i]={"price":price,"amount":amt}
                                         state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
                                         record_trade("GRID-BUY",price,amt, pair=pair)
@@ -2680,7 +2707,7 @@ def run_grid(sid=None):
                             sl_loss = (price - sl_bp) / sl_bp * 100
                             if sl_loss < -stop_pct:
                                 sl_amt = filled[sl_buy_idx]["amount"]
-                                if place_order(pair,"sell",sl_amt):
+                                if place_order(pair,"sell",sl_amt, paper=paper):
                                     sl_pnl = (price - sl_bp) * sl_amt
                                     state["pnl"] += sl_pnl
                                     record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2), pair=pair)
@@ -2741,7 +2768,7 @@ def run_grid(sid=None):
                                         sell_amt = amt  # sell everything left
                                         if partial_key in state["partial_positions"]:
                                             del state["partial_positions"][partial_key]
-                                    if place_order(pair,"sell",sell_amt):
+                                    if place_order(pair,"sell",sell_amt, paper=paper):
                                         pnl=(price-buy_price)*sell_amt
                                         state["pnl"]+=pnl
                                         state["daily_pnl"] = state.get("daily_pnl",0)+pnl
@@ -2827,7 +2854,7 @@ def run_grid(sid=None):
                                 continue
 
                             gap_amt = round(size / price, 6)
-                            if place_order(pair, "buy", gap_amt, grid_idx=gap_i):
+                            if place_order(pair, "buy", gap_amt, grid_idx=gap_i, paper=paper):
                                 filled[gap_i] = {"price": price, "amount": gap_amt}
                                 state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                                 record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
@@ -2858,7 +2885,7 @@ def run_grid(sid=None):
                                 continue
 
                             gap_amt = round(size / price, 6)
-                            if place_order(pair, "buy", gap_amt, grid_idx=gap_i):
+                            if place_order(pair, "buy", gap_amt, grid_idx=gap_i, paper=paper):
                                 filled[gap_i] = {"price": price, "amount": gap_amt}
                                 state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
                                 record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
@@ -2917,6 +2944,7 @@ def run_grid(sid=None):
             time.sleep(5)
 def run_scalp():
     log("Scalping started on "+state["pair"]+" ("+state["mode"].upper()+")")
+    paper = _strategy_paper()
     prices=[]; position=None
     while state["running"] and state["strategy"]=="scalp":
         while state["paused"]: time.sleep(1)
@@ -2930,7 +2958,7 @@ def run_scalp():
         size=min(bal*cfg["risk_pct"]/100,cfg["max_pos"])
         if position is None and price<sma*0.999 and size>1:
             amt=round(size/price,6)
-            if place_order(pair,"buy",amt, grid_idx=i):
+            if place_order(pair,"buy",amt, grid_idx=i, paper=paper):
                 position={"price":price,"amount":amt}
                 state["positions"]=[{"price":price,"amount":amt,"strategy":"Scalp"}]
                 record_trade("SCALP-BUY",price,amt, pair=pair)
@@ -2939,7 +2967,7 @@ def run_scalp():
             gain=(price-position["price"])/position["price"]*100
             loss=(position["price"]-price)/position["price"]*100
             if gain>=cfg["take_profit"]/3 or loss>=cfg["stop_loss"]/2:
-                if place_order(pair,"sell",position["amount"]):
+                if place_order(pair,"sell",position["amount"], paper=paper):
                     pnl=(price-position["price"])*position["amount"]
                     state["pnl"]+=pnl
                     if pnl<0: state["daily_loss"]+=abs(pnl)
@@ -2989,6 +3017,7 @@ def run_rsi_ema():
     pair = state["pair"]
     mode = "PAPER" if state["paper_trading"] else "LIVE"
     log("[RSI-EMA] Started on " + pair + " (" + mode + ")")
+    paper = _strategy_paper()
     rsi_period = cfg.get("rsi_period", 14)
     ema_fast = cfg.get("ema_fast", 9)
     ema_slow = cfg.get("ema_slow", 21)
@@ -3023,7 +3052,7 @@ def run_rsi_ema():
             # Buy signal
             if not has_position and rsi_now and rsi_now < rsi_oversold and crossover_up:
                 amt = round(order_size / price, 6)
-                if place_order(pair, "buy", amt):
+                if place_order(pair, "buy", amt, paper=paper):
                     state["positions"].append({"price": price, "amount": amt, "strategy": "RSI-EMA"})
                     record_trade("RSI-BUY", price, amt, pair=pair)
                     has_position = True
@@ -3059,7 +3088,7 @@ def run_rsi_ema():
                             reason = "Trailing stop " + str(round(trail_pct, 1)) + "%"
                 if sell_signal:
                     amt = state["positions"][-1]["amount"] if state["positions"] else round(order_size / entry_price, 6)
-                    if place_order(pair, "sell", amt):
+                    if place_order(pair, "sell", amt, paper=paper):
                         pnl = (price - entry_price) * amt
                         record_trade("RSI-SELL", price, amt, pnl, pair=pair)
                         log("[RSI-EMA] SELL " + pair + " @ $" + str(round(price, 2)) + " | PnL $" + str(round(pnl, 2)) + " | " + reason)
@@ -3074,6 +3103,7 @@ def run_bbands():
     pair = state["pair"]
     mode = "PAPER" if state["paper_trading"] else "LIVE"
     log("[BBANDS] Started on " + pair + " (" + mode + ")")
+    paper = _strategy_paper()
     period = cfg.get("bbands_period", 20)
     stddev = cfg.get("bbands_stddev", 2.0)
     order_size = cfg.get("order_size_usdc", 50)
@@ -3101,7 +3131,7 @@ def run_bbands():
             # Buy at lower band
             if not has_position and price <= lower_now:
                 amt = round(order_size / price, 6)
-                if place_order(pair, "buy", amt):
+                if place_order(pair, "buy", amt, paper=paper):
                     state["positions"].append({"price": price, "amount": amt, "strategy": "Bollinger"})
                     record_trade("BB-BUY", price, amt, pair=pair)
                     has_position = True
@@ -3131,7 +3161,7 @@ def run_bbands():
                         reason = "Trailing stop " + str(round(trail_pct, 1)) + "%"
                 if sell_signal:
                     amt = state["positions"][-1]["amount"] if state["positions"] else round(order_size / entry_price, 6)
-                    if place_order(pair, "sell", amt):
+                    if place_order(pair, "sell", amt, paper=paper):
                         pnl = (price - entry_price) * amt
                         record_trade("BB-SELL", price, amt, pnl, pair=pair)
                         log("[BBANDS] SELL " + pair + " @ $" + str(round(price, 2)) + " | PnL $" + str(round(pnl, 2)) + " | " + reason)
@@ -3181,8 +3211,9 @@ def run_limit_order():
     """Monitor one validated limit order; market orders execute once immediately."""
     side = state.get("limit_side", "buy"); amount_usdc = float(state.get("limit_amount_usdc", 0)); limit_price = float(state.get("limit_price", 0)); order_type = state.get("limit_order_type", "limit")
     effective_mode = state.get("effective_mode", "live")
-    # Limit execution is bound to the API-resolved mode, not ambient config.
-    state["paper_trading"] = (effective_mode == "paper")
+    # Per-strategy paper/live mode lives in this strategy's own config;
+    # the global fallback flag is never overwritten by a strategy start/loop.
+    paper = _strategy_paper()
     pair = state["pair"]
     valid, reason = validate_limit_order(amount_usdc, side, order_type, limit_price, cfg.get("max_pos"))
     if not valid:
@@ -3194,7 +3225,7 @@ def run_limit_order():
         ready = order_type == "market" or (side == "buy" and price <= limit_price) or (side == "sell" and price >= limit_price)
         if price > 0 and ready:
             amount = round(amount_usdc / price, 6)
-            if place_order(pair, side, amount):
+            if place_order(pair, side, amount, paper=paper):
                 positions = state.setdefault("limit_positions", {})
                 if side == "buy":
                     # Keep a per-pair position so the matching limit-sell can
@@ -3253,8 +3284,9 @@ class LiveMarketDataProvider:
         return get_price(symbol) or 100.0
         
 class LiveExecutionAdapter:
-    def __init__(self, engine_ref=None):
+    def __init__(self, engine_ref=None, paper=None):
         self.engine_ref = engine_ref
+        self.paper = paper
 
     def execute_swap(self, symbol: str, direction: str, size: float, price: float) -> bool:
         side = "buy" if direction == "LONG" else "sell"
@@ -3271,7 +3303,7 @@ class LiveExecutionAdapter:
                 log(f"AI Trading: phantom/naked sell blocked for {symbol} — active position is not LONG (found {pos.get('direction')}).", "WARN")
                 return False
 
-        success = place_order(symbol, side, size)
+        success = place_order(symbol, side, size, paper=self.paper)
         if success:
             record_trade("AI-" + direction, price, size, pair=symbol)
         return success
@@ -3328,7 +3360,7 @@ def run_ai_trading(sid=None):
 
     log("AI Trading Engine Starting Whitelist: " + str(whitelist))
 
-    adapter = LiveExecutionAdapter()
+    adapter = LiveExecutionAdapter(paper=bool(state.get("strategies", {}).get(sid, {}).get("config", {}).get("paper_trading", True)))
     engine = AITradingEngine(risk_config, whitelist)
     adapter.engine_ref = engine
     state["ai_engine"] = engine
@@ -4702,7 +4734,7 @@ function updateLimitOrderStatus(d) {
   var lprice = d.limit_price || 0;
   var otype = d.limit_order_type || "limit";
   var pair = d.pair || viewPair;
-  var mode = d.paper_trading ? "PAPER" : "LIVE";
+  var mode = ((d.active_paper != null) ? d.active_paper : d.paper_trading) ? "PAPER" : "LIVE";
   var html = "";
   // ARMED — the limit order is live and watching the price
   if (d.running && (d.strategy === "limit_buy" || d.strategy === "limit_sell")) {
@@ -5079,14 +5111,15 @@ function refresh() {
     }
     document.getElementById("s-balance").textContent = d.balance > 0 ? "$" + (d.balance||0).toFixed(2) : "—";
     document.getElementById("s-sol-balance").textContent = d.sol_balance > 0 ? "$" + d.sol_balance.toFixed(2) + " (USDC: $" + (d.sol_usdc||0).toFixed(2) + " USDT: $" + (d.sol_usdt||0).toFixed(2) + ")" : "—";
-    document.getElementById("s-mode").textContent = d.paper_trading ? "📋 PAPER" : "🔴 LIVE";
-    document.getElementById("s-mode").style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
+    var ap = (d.active_paper != null) ? d.active_paper : d.paper_trading;
+    document.getElementById("s-mode").textContent = ap ? "📋 PAPER" : "🔴 LIVE";
+    document.getElementById("s-mode").style.color = ap ? "var(--yellow)" : "var(--red)";
     var pb = document.getElementById("paper-btn");
     if (pb) {
-      pb.textContent = "📋 Paper: " + (d.paper_trading ? "ON" : "OFF");
-      pb.style.color = d.paper_trading ? "var(--yellow)" : "var(--red)";
-      pb.style.borderColor = d.paper_trading ? "var(--yellow)44" : "var(--red)44";
-      pb.style.background = d.paper_trading ? "var(--yellow)18" : "var(--red)18";
+      pb.textContent = "📋 Paper: " + (ap ? "ON" : "OFF");
+      pb.style.color = ap ? "var(--yellow)" : "var(--red)";
+      pb.style.borderColor = ap ? "var(--yellow)44" : "var(--red)44";
+      pb.style.background = ap ? "var(--yellow)18" : "var(--red)18";
     }
     document.getElementById("s-pnl").innerHTML = d.pnl != null ? pnlHtml(d.pnl) : "$0.00";
     document.getElementById("s-pos").textContent = d.positions != null && d.positions.length != null ? d.positions.length : 0;
@@ -5511,7 +5544,7 @@ class Handler(BaseHTTPRequestHandler):
                     "auto_compound": state["config"].get("auto_compound", True),
                     "ai_whitelist": state["ai_whitelisted_symbols"]
                 }
-                state["paper_trading"] = ai_paper
+                # Per-strategy mode: ai_paper lives in order_cfg, never the global flag.
             elif start_strategy in ("limit_buy", "limit_sell"):
                 requested_side = params.get("side", ["buy"])[0]
                 expected_side = "buy" if start_strategy == "limit_buy" else "sell"
@@ -5522,7 +5555,7 @@ class Handler(BaseHTTPRequestHandler):
                 effective_mode, mode_error = resolve_order_mode(params)
                 if mode_error:
                     self.respond(400, "application/json", json.dumps({"error":mode_error}).encode()); return
-                state["paper_trading"] = (effective_mode == "paper")
+                # Per-strategy mode: effective_mode is captured in order_cfg, never the global flag.
                 ok, reason = validate_limit_order(params.get("amount_usdc",[0])[0], params.get("side",["buy"])[0], params.get("order_type",["limit"])[0], params.get("limit_price",[0])[0], cfg.get("max_pos"))
                 if not ok:
                     self.respond(400, "application/json", json.dumps({"error": reason}).encode()); return
@@ -5537,7 +5570,7 @@ class Handler(BaseHTTPRequestHandler):
                     "risk_pct": float(state["config"].get("risk_pct", 2.0)),
                     "max_pos": float(state["config"].get("max_pos", 500.0)),
                 }
-                state["paper_trading"] = grid_paper
+                # Per-strategy mode: grid_paper lives in order_cfg (default_strategy_paper), never the global flag.
 
             sid = f"{start_strategy}_{pair_param}"
             if "strategies" in state and sid in state["strategies"] and state["strategies"][sid].get("running"):
@@ -5664,7 +5697,7 @@ class Handler(BaseHTTPRequestHandler):
                 bal = get_balance()
                 sz = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])/5
                 amt = round(sz/wprice,6)
-                if place_order(wpair,"buy",amt):
+                if place_order(wpair,"buy",amt, paper=_grid_paper()):
                     for i,g in enumerate(grids[:-1]):
                         if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
@@ -5681,7 +5714,7 @@ class Handler(BaseHTTPRequestHandler):
                     amt = filled[bi]["amount"]
                     bp = filled[bi]["price"]
                     sp = wprice if wprice > 0 else get_price(wpair)
-                    if place_order(wpair,"sell",amt):
+                    if place_order(wpair,"sell",amt, paper=_grid_paper()):
                         pnl = (sp - bp) * amt
                         state["pnl"] += pnl
                         record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)
@@ -5777,7 +5810,7 @@ class Handler(BaseHTTPRequestHandler):
                 bal = get_balance()
                 sz = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])/5
                 amt = round(sz/wprice,6)
-                if place_order(wpair,"buy",amt):
+                if place_order(wpair,"buy",amt, paper=_grid_paper()):
                     for i,g in enumerate(grids[:-1]):
                         if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
@@ -5794,7 +5827,7 @@ class Handler(BaseHTTPRequestHandler):
                     amt = filled[bi]["amount"]
                     bp = filled[bi]["price"]
                     sp = wprice if wprice > 0 else get_price(wpair)
-                    if place_order(wpair,"sell",amt):
+                    if place_order(wpair,"sell",amt, paper=_grid_paper()):
                         pnl = (sp - bp) * amt
                         state["pnl"] += pnl
                         record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)
@@ -5898,7 +5931,7 @@ class Handler(BaseHTTPRequestHandler):
             for pair in list(state.get("active_pairs", [])):
                 filled = state["grid_pairs"].get(pair, {}).get("filled", {})
                 for idx, pos in list(filled.items()):
-                    if place_order(pair, "sell", pos["amount"]):
+                    if place_order(pair, "sell", pos["amount"], paper=_grid_paper()):
                         total_val += pos["amount"] * pos.get("price", 0); closed += 1; del filled[idx]
             state["running"] = False; state["active_pairs"] = []
             self.respond(200, "application/json", json.dumps({"closed": closed, "total_value": round(total_val, 2)}).encode()); return
@@ -5956,7 +5989,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(400,"application/json",json.dumps({"error":"Cannot get price for "+pair}).encode()); return
             if side == "buy":
                 token_amt = round(usdc_amt / price, 6)
-                ok = place_order(pair, "buy", token_amt)
+                ok = place_order(pair, "buy", token_amt, paper=_grid_paper())
                 if ok:
                     record_trade("MANUAL-BUY", price, token_amt, pair=pair)
                     log("[MANUAL] BUY "+pair+" "+str(token_amt)+" @ $"+str(round(price,2)))
@@ -5965,7 +5998,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.respond(500,"application/json",json.dumps({"error":"Buy order failed"}).encode())
             else:
                 token_amt = round(usdc_amt / price, 6)
-                ok = place_order(pair, "sell", token_amt)
+                ok = place_order(pair, "sell", token_amt, paper=_grid_paper())
                 if ok:
                     received = token_amt * price
                     record_trade("MANUAL-SELL", price, token_amt, round(received - usdc_amt, 2), pair=pair)
@@ -5992,7 +6025,7 @@ class Handler(BaseHTTPRequestHandler):
                 bal = get_balance()
                 sz = min(bal*cfg["risk_pct"]/100, cfg["max_pos"])/5
                 amt = round(sz/wprice,6)
-                if place_order(wpair,"buy",amt):
+                if place_order(wpair,"buy",amt, paper=_grid_paper()):
                     for i,g in enumerate(grids[:-1]):
                         if g <= wprice < grids[i+1] and i <= mid_idx and i not in filled:
                             filled[i] = {"price":wprice,"amount":amt}
@@ -6009,7 +6042,7 @@ class Handler(BaseHTTPRequestHandler):
                     amt = filled[bi]["amount"]
                     bp = filled[bi]["price"]
                     sp = wprice if wprice > 0 else get_price(wpair)
-                    if place_order(wpair,"sell",amt):
+                    if place_order(wpair,"sell",amt, paper=_grid_paper()):
                         pnl = (sp - bp) * amt
                         state["pnl"] += pnl
                         record_trade("WEBHOOK-SELL",sp,amt,round(pnl,2), pair=wpair)

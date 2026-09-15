@@ -31,7 +31,7 @@ def _slice(start_marker, end_marker):
     return SOURCE[i:j]
 
 
-FILL_BLOCK = _slice('if place_order(pair, side, amount):',
+FILL_BLOCK = _slice('if place_order(pair, side, amount, paper=paper):',
                     'state["running"] = False; state["strategy"] = None')
 RUN = _slice('def run_limit_order():', 'STRATEGIES = {')
 
