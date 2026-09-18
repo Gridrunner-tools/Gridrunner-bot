@@ -2897,36 +2897,6 @@ def run_grid(sid=None):
                 gs["drop_through_low"] = drop_through_low
                 gs["drop_through_levels"] = drop_through_levels
 
-                # ── Daily loss limit check ──
-                now = int(time.time())
-                today_midnight = now - (now % 86400)
-                if state.get("last_midnight",0) < today_midnight:
-                    state["daily_pnl"] = 0.0
-                    state["last_midnight"] = today_midnight
-                # Track peak balance
-                usdc_bal = get_balance()
-                total_val = usdc_bal
-                for gp_name, gp_data in state.get("grid_pairs", {}).items():
-                    for idx, pos in gp_data.get("filled", {}).items():
-                        total_val += pos.get("amount", 0) * pos.get("price", 0)
-                if total_val > state.get("peak_balance", 0):
-                    state["peak_balance"] = total_val
-                # Drawdown check
-                dd_pct = cfg.get("max_drawdown_pct", 20)
-                pk = state.get("peak_balance", 0)
-                if pk > 0 and total_val < pk * (1 - dd_pct/100):
-                    log("DRAWDOWN STOP: portfolio $"+str(round(total_val,2))+" < "+str(round(pk*(1-dd_pct/100),2))+" ("+str(int(dd_pct))+"% drawdown)", "WARN")
-                    state["running"] = False
-                    state["strategy"] = None
-                    state["emergency_stop"] = True
-                    return
-                dl = cfg.get("daily_loss_limit", 200)
-                if state["daily_pnl"] < -dl:
-                    log("DAILY LOSS LIMIT: $"+"{:.2f}".format(-state["daily_pnl"])+" exceeds $"+str(dl), "WARN")
-                    state["running"] = False
-                    state["strategy"] = None
-                    state["emergency_stop"] = True
-                    return
                 # Save per-pair state back
                 gs.update({
                     "grids": grids, "mid_idx": mid_idx, "filled": filled,
