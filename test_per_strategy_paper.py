@@ -312,11 +312,12 @@ class TestNoGlobalOverwrite(unittest.TestCase):
         }
         state["paper_trading"] = True
         payload = _state_payload()
-        # Most recently started running strategy is the AI one -> header shows PAPER
-        self.assertTrue(payload.get("active_paper"))
+        # Mixed modes: LIVE grid + PAPER AI -> header must show LIVE, never PAPER
+        # (owner-reported: live grid appeared to "go to paper" after a paper AI start)
+        self.assertFalse(payload.get("active_paper"))
         # global flag untouched by the payload builder
         self.assertTrue(payload.get("paper_trading"))
-        # stop AI -> active becomes grid (LIVE)
+        # stop AI -> grid (LIVE) alone still shows LIVE
         state["strategies"]["ai_trading_BTC/USDC"]["running"] = False
         payload2 = _state_payload()
         self.assertFalse(payload2.get("active_paper"))
@@ -324,6 +325,55 @@ class TestNoGlobalOverwrite(unittest.TestCase):
         state["strategies"] = {}
         payload3 = _state_payload()
         self.assertNotIn("active_paper", payload3)
+
+    def test_state_payload_mixed_modes_order_independent(self):
+        # Same LIVE grid + PAPER AI scenario, insertion order reversed:
+        # the banner result must not depend on which strategy started last.
+        state["paper_trading"] = True
+        state["strategies"] = {
+            "ai_trading_BTC/USDC": {"type": "ai_trading", "config": {"paper_trading": True}, "running": True},
+            "grid_SOL/USDC": {"type": "grid", "config": {"paper_trading": False}, "running": True},
+        }
+        self.assertFalse(_state_payload().get("active_paper"))
+        state["strategies"] = {}
+
+    def test_state_payload_all_paper_or_all_live(self):
+        state["paper_trading"] = True
+        state["strategies"] = {
+            "grid_SOL/USDC": {"type": "grid", "config": {"paper_trading": True}, "running": True},
+            "ai_trading_BTC/USDC": {"type": "ai_trading", "config": {"paper_trading": True}, "running": True},
+        }
+        self.assertTrue(_state_payload().get("active_paper"))
+        state["strategies"] = {
+            "grid_SOL/USDC": {"type": "grid", "config": {"paper_trading": False}, "running": True},
+            "ai_trading_BTC/USDC": {"type": "ai_trading", "config": {"paper_trading": False}, "running": True},
+        }
+        self.assertFalse(_state_payload().get("active_paper"))
+        state["strategies"] = {}
+
+    def test_state_payload_none_config_falls_back_to_global(self):
+        # A running strategy without its own paper flag resolves like
+        # _strategy_paper(): fall back to the global flag.
+        state["strategies"] = {
+            "grid_SOL/USDC": {"type": "grid", "config": {}, "running": True},
+        }
+        state["paper_trading"] = True
+        self.assertTrue(_state_payload().get("active_paper"))
+        state["paper_trading"] = False
+        self.assertFalse(_state_payload().get("active_paper"))
+        state["strategies"] = {}
+        state["paper_trading"] = True
+
+    def test_state_payload_uses_all_running_not_last_started(self):
+        # Guard: the payload must derive the banner from ALL running strategies,
+        # not from the most recently started one.
+        src = io.open(Path(__file__).parent / "main.py", encoding="utf-8").read()
+        start = src.index("def _state_payload()")
+        end = src.index("def send_telegram(")
+        fn = src[start:end]
+        self.assertNotIn("running_strats[-1]", fn)
+        self.assertNotIn("last_paper", fn)
+        self.assertIn('data["active_paper"] = all(effective_papers)', fn)
 
 
 def test_per_strategy_paper_all():

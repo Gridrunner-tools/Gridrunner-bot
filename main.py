@@ -461,9 +461,19 @@ def _state_payload():
         data["strategies"] = clean
     running_strats = [s for s in clean.values() if isinstance(s, dict) and s.get("running")]
     if running_strats:
-        last_paper = (running_strats[-1].get("config") or {}).get("paper_trading")
-        if last_paper is not None:
-            data["active_paper"] = bool(last_paper)
+        # The header mode must never show PAPER while ANY running strategy is
+        # LIVE. Resolve each running strategy's effective paper flag exactly
+        # like _strategy_paper() (own config wins; None falls back to the
+        # global flag) and require ALL of them to be paper.
+        global_paper = bool(state.get("paper_trading", True))
+        effective_papers = []
+        for s in running_strats:
+            cfg = s.get("config") or {}
+            val = cfg.get("paper_trading")
+            if val is None:
+                val = global_paper
+            effective_papers.append(bool(val))
+        data["active_paper"] = all(effective_papers)
     return data
 
 def send_telegram(msg):
