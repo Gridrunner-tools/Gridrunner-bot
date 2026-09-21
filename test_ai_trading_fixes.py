@@ -46,9 +46,12 @@ class TestAITradingFixes(unittest.TestCase):
         self.assertEqual(tot_exp, 2.0 * 100.0 + 30000.0)
 
     def test_per_symbol_price_isolation(self):
-        """Verify that LiveMarketDataProvider.get_candles isolates price histories by symbol."""
+        """Verify that LiveMarketDataProvider.get_candles isolates price
+        histories by symbol: each symbol's series ends on its OWN refreshed
+        live tick (FIX 1) and never bleeds another pair's history into it."""
+        import main as main_module
         dp = LiveMarketDataProvider()
-        
+
         # Set distinct histories for SOL/USDC and BTC/USDC in price_history_pairs
         state["price_history_pairs"]["SOL/USDC"] = [
             {"time": 1, "value": 100.0},
@@ -60,14 +63,95 @@ class TestAITradingFixes(unittest.TestCase):
             {"time": 2, "value": 61000.0},
             {"time": 3, "value": 62000.0}
         ]
-        
-        # Fetch candles for each
-        sol_candles = dp.get_candles("SOL/USDC")
-        btc_candles = dp.get_candles("BTC/USDC")
-        
-        # Verify isolation
-        self.assertAlmostEqual(sol_candles["closes"][-1], 102.0)
-        self.assertAlmostEqual(btc_candles["closes"][-1], 62000.0)
+
+        # Deterministic live prices: get_candles refreshes each pair's own
+        # series with its own tick (grid-style append), preserving isolation.
+        with unittest.mock.patch.object(main_module, "get_price",
+                                        side_effect=lambda sym: 108.0 if sym == "SOL/USDC" else 65000.0):
+            sol_candles = dp.get_candles("SOL/USDC")
+            btc_candles = dp.get_candles("BTC/USDC")
+
+        # Verify isolation: each series ends on its own refreshed tick...
+        self.assertAlmostEqual(sol_candles["closes"][-1], 108.0)
+        self.assertAlmostEqual(btc_candles["closes"][-1], 65000.0)
+        # ...and never contains the other pair's values.
+        self.assertNotIn(65000.0, sol_candles["closes"])
+        self.assertNotIn(108.0, btc_candles["closes"])
+
+    def test_get_candles_appends_live_tick_for_uncovered_pair(self):
+        """FIX 1: an AI-whitelisted pair with NO grid/rsi/bbands coverage must
+        still get a fresh live tick appended on every get_candles call, so
+        signals are never computed on a stale or empty series."""
+        import main as main_module
+        dp = LiveMarketDataProvider()
+        state["price_history_pairs"] = {}  # no prior coverage at all
+
+        with unittest.mock.patch.object(main_module, "get_price", return_value=108.0):
+            bars = dp.get_candles("SOL/USDC")
+
+        series = state["price_history_pairs"]["SOL/USDC"]
+        self.assertEqual(len(series), 1)
+        self.assertAlmostEqual(series[-1]["value"], 108.0)
+        self.assertLess(abs(series[-1]["time"] - time.time()), 5)
+        # Closes end on the fresh tick and are padded to the min 60-length.
+        self.assertAlmostEqual(bars["closes"][-1], 108.0)
+        self.assertEqual(len(bars["closes"]), 60)
+
+    def test_get_candles_defensive_when_price_unavailable(self):
+        """FIX 1 defensive: when get_price returns 0/None the refresh is
+        skipped and the existing fallback is preserved (no new history key,
+        synthetic 100.0 buffer returned)."""
+        import main as main_module
+        dp = LiveMarketDataProvider()
+        state["price_history_pairs"] = {}
+
+        with unittest.mock.patch.object(main_module, "get_price", return_value=0.0):
+            bars = dp.get_candles("SOL/USDC")
+
+        self.assertNotIn("SOL/USDC", state["price_history_pairs"])
+        self.assertEqual(bars["closes"], [100.0] * 60)
+
+    def test_exit_long_trade_recorded_as_ai_sell(self):
+        """FIX 2: closing a LONG (the exit path passes direction='SHORT' to
+        trigger the sell) must be logged as AI-SELL, never AI-SHORT - spot is
+        long-only and every sell closes a long."""
+        import main as main_module
+        engine = AITradingEngine({"daily_loss_limit": 100.0}, ["SOL/USDC"])
+        adapter = LiveExecutionAdapter(engine_ref=engine)
+
+        engine.positions["SOL/USDC"] = {
+            "symbol": "SOL/USDC",
+            "direction": "LONG",
+            "entry": 100.0,
+            "size": 1.0,
+            "exposure_usd": 100.0,
+            "score": 85.0
+        }
+
+        orig_place_order = main_module.place_order
+        main_module.place_order = lambda pair, side, amt, paper=None: True
+        try:
+            success = adapter.execute_swap("SOL/USDC", "SHORT", 1.0, 105.0)
+        finally:
+            main_module.place_order = orig_place_order
+
+        self.assertTrue(success)
+        self.assertEqual(state["trades"][-1]["side"], "AI-SELL")
+
+    def test_entry_long_trade_recorded_as_ai_long(self):
+        """FIX 2 control: a fresh LONG entry is still recorded as AI-LONG
+        (only exit labels change, not entries)."""
+        import main as main_module
+        adapter = LiveExecutionAdapter()
+        orig_place_order = main_module.place_order
+        main_module.place_order = lambda pair, side, amt, paper=None: True
+        try:
+            success = adapter.execute_swap("SOL/USDC", "LONG", 1.0, 100.0)
+        finally:
+            main_module.place_order = orig_place_order
+
+        self.assertTrue(success)
+        self.assertEqual(state["trades"][-1]["side"], "AI-LONG")
 
     def test_precedence_gating_logic(self):
         """Verify that generate_signals_and_score with the fixed parentheses gates correctly."""
