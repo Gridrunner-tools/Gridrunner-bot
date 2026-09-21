@@ -3240,6 +3240,19 @@ def run_limit_order():
 
 class LiveMarketDataProvider:
     def get_candles(self, symbol: str) -> dict:
+        # Keep the symbol's price history fresh: append a live price tick on
+        # every read (mirroring run_grid) so AI-whitelisted pairs with no
+        # grid/rsi_ema/bbands coverage still build signals on current data.
+        price = get_price(symbol)
+        if price > 0:
+            if "price_history_pairs" not in state:
+                state["price_history_pairs"] = {}
+            if symbol not in state["price_history_pairs"]:
+                state["price_history_pairs"][symbol] = []
+            state["price_history_pairs"][symbol].append({"time": int(time.time()), "value": price})
+            if len(state["price_history_pairs"][symbol]) > 4320:
+                state["price_history_pairs"][symbol] = state["price_history_pairs"][symbol][-4320:]
+
         raw_hist = state.get("price_history_pairs", {}).get(symbol, [])
         if not raw_hist:
             if state.get("pair") == symbol:
@@ -3285,7 +3298,8 @@ class LiveExecutionAdapter:
 
         success = place_order(symbol, side, size, paper=self.paper)
         if success:
-            record_trade("AI-" + direction, price, size, pair=symbol)
+            label = "AI-LONG" if side == "buy" else "AI-SELL"
+            record_trade(label, price, size, pair=symbol)
         return success
         
     def get_venue_positions(self) -> dict:
