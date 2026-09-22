@@ -14,6 +14,16 @@ per operation over subprocess and parses the single JSON object on stdout.
 - A Solana keypair — a throwaway devnet keypair you generate yourself. **Never** use
   the bot's live wallet or any production secret.
 
+### SDK version (pinned)
+
+`@drift-labs/sdk` is pinned to **`2.156.0`** (the `stable` dist-tag), *not* the
+`latest` tag (`2.163.0-beta.13`). The beta tag does not decode the currently deployed
+devnet perp-market accounts — `client.subscribe()` throws
+`Cannot read properties of null (reading 'property')` from `buffer-layout`'s
+`Union.decode` (an SDK-IDL / on-chain program version mismatch). Pin stable `2.156.0`
+and `markets` resolves all 30 devnet perp markets. If devnet is later upgraded, revisit
+this pin and match the SDK to the deployed program.
+
 ## Install & build
 
 ```bash
@@ -115,6 +125,32 @@ is not executed in devnet paper.
 node dist/index.js deposit --amount 500
 # {"transaction":"<base64>","marketIndex":0,"amountUsdc":500,"userAccount":"<pubkey>"}
 ```
+
+## Devnet end-to-end flow
+
+Validated against Drift devnet (throwaway keypair; `SOL-PERP` = market index `0`):
+
+```bash
+export RPC_URL=https://api.devnet.solana.com
+export SOLANA_KEYPAIR=/path/to/devnet-key.json
+export DRIFT_ENV=devnet
+
+node dist/index.js markets                 # read-only; lists 30 markets, SOL-PERP=0
+node dist/index.js create-account          # needs ~0.03 SOL for rent + fee
+node dist/index.js deposit --amount 500    # builds (not sends) a 500 USDC deposit tx
+node dist/index.js place --market 0 --long --size 0.1 --price 150   # postOnly limit
+node dist/index.js cancel --market 0 --order-id <id>
+node dist/index.js position --market 0
+```
+
+Prerequisites for the write path:
+
+- **SOL** for rent + fees — `solana airdrop` / `requestAirdrop` against the public
+  devnet faucet. Note: the public devnet airdrop faucet is IP rate-limited and often
+  dry (`429`); use an alternate test-SOL source if so.
+- **USDC collateral** — perp orders (even postOnly) consume margin, so the Drift
+  account needs a USDC deposit before `place` will be accepted. Use the Drift devnet
+  faucet / `deposit` flow.
 
 ## Safety gate
 
