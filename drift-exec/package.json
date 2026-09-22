@@ -15,7 +15,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@drift-labs/sdk": "2.163.0-beta.13",
+    "@drift-labs/sdk": "2.156.0",
     "@solana/web3.js": "1.98.0",
     "bs58": "^6.0.0"
   },

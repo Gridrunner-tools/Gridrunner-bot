@@ -50,9 +50,11 @@ export async function shutdownClient(built: BuiltClient): Promise<void> {
 
 /** Decode a Drift perp market `name` (a borsh byte array) into a UTF-8 symbol. */
 export function decodeMarketName(name: number[]): string {
+  // Market names are stored left-aligned in a fixed-width byte array, padded
+  // with spaces (0x20) — strip trailing null bytes and spaces.
   return Buffer.from(name as unknown as Uint8Array)
     .toString('utf8')
-    .replace(/\0+$/g, '');
+    .replace(/[\u0000 ]+$/g, '');
 }
 
 export function listMarkets(client: DriftClient): Array<{ index: number; symbol: string }> {
