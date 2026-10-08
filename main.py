@@ -2527,6 +2527,88 @@ def _grid_sell_indices(filled, grid_idx, levels):
     if grid_idx == first_sell_idx:
         return [ordered[-1]]
     return [ordered[0]]
+
+def _grid_find_cell(grids, price):
+    """Index of the grid cell [grids[i], grids[i+1]) containing `price`.
+    Prices below the lowest level clamp to cell 0; prices at/above the
+    highest level clamp to the last cell; None for a degenerate grid."""
+    if not grids or len(grids) < 2:
+        return None
+    lo = float(grids[0]); hi = float(grids[-1])
+    if price < lo:
+        return 0
+    if price >= hi:
+        return len(grids) - 2
+    for i in range(len(grids) - 1):
+        if grids[i] <= price < grids[i + 1]:
+            return i
+    return len(grids) - 2  # defensive; mathematically unreachable
+
+def _grid_remap_filled(grids, filled):
+    """Remap a `filled` dict (grid-index -> {price, amount}) onto `grids` by
+    PRICE so filled positions keep their real buy price instead of a stale
+    index. Returns (new_filled, index_map) where index_map is old-index ->
+    new-cell for every position remapped. On collisions (two real buy prices
+    landing in one new cell) amounts merge with a price-weighted average
+    basis. Out-of-range prices clamp to the nearest edge cell so a position
+    is never displayed at a level whose price differs from its real buy."""
+    if not filled:
+        return {}, {}
+    new_filled = {}
+    index_map = {}
+    for old_idx, pos in filled.items():
+        if isinstance(pos, dict):
+            pos_price = float(pos.get("price") or 0)
+            pos_amt = float(pos.get("amount") or 0)
+        else:
+            pos_price = float(pos or 0); pos_amt = 0.0
+        if pos_price <= 0 or pos_amt <= 0:
+            continue
+        cell = _grid_find_cell(grids, pos_price)
+        if cell is None:
+            continue
+        index_map[old_idx] = cell
+        cur = new_filled.get(cell)
+        if cur is None:
+            new_filled[cell] = {"price": pos_price, "amount": pos_amt}
+        else:
+            cost = cur["price"] * cur["amount"] + pos_price * pos_amt
+            cur["amount"] = round(cur["amount"] + pos_amt, 9)
+            cur["price"] = round(cost / cur["amount"], 9) if cur["amount"] else cur["price"]
+    return new_filled, index_map
+
+def _grid_merge_filled(base_filled, extra):
+    """Merge `extra` (cell -> {price, amount}) into base_filled in place;
+    collisions merge amounts with a price-weighted average basis."""
+    for cell, pos in (extra or {}).items():
+        if not isinstance(pos, dict):
+            continue
+        px = float(pos.get("price") or 0)
+        amt = float(pos.get("amount") or 0)
+        if px <= 0 or amt <= 0:
+            continue
+        cur = base_filled.get(cell)
+        if cur is None:
+            base_filled[cell] = {"price": px, "amount": amt}
+        else:
+            cost = float(cur["price"]) * float(cur["amount"]) + px * amt
+            cur["amount"] = round(float(cur["amount"]) + amt, 9)
+            cur["price"] = round(cost / cur["amount"], 9) if cur["amount"] else cur["price"]
+    return base_filled
+
+def _grid_rekey_positions(positions, index_map):
+    """Re-key Grid position bookkeeping (state['positions'][*]['grid']) from
+    old grid indices to the remapped cells so sell / stop-loss removal by
+    grid index stays consistent with the remapped `filled` dict."""
+    if not index_map:
+        return
+    for p in positions or []:
+        if p.get("strategy") != "Grid":
+            continue
+        old = p.get("grid")
+        if old in index_map:
+            p["grid"] = index_map[old]
+
 def _execute_base_buy_if_needed(pair, gs, price, paper=None):
     """Execute base buy on start / re-center if not already seeded."""
     if paper is None:
@@ -2634,13 +2716,24 @@ def run_grid(sid=None):
                     if not filled:
                         log("["+pair+"] Grid re-centering: no positions at $"+str(price))
                     else:
-                        log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"])")
+                        log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
+                    # Phantom-fill fix: EVERY re-center rebuilds the whole grid
+                    # at the current price and remaps `filled` by REAL buy
+                    # price. A partially-lowered buy zone with a kept stale
+                    # sell zone would create a disjoint grid (a price gap that
+                    # strands positions in no-man's-land), so both branches use
+                    # the same monotonic rebuild.
                     if has_positions and price < grids[0]:
-                        new_grids = _make_grids(price, spread, levels)
-                        for i in range(mid_idx + 2):
-                            grids[i] = new_grids[i]
+                        grids = _make_grids(price, spread, levels)
+                        mid_idx = len(grids) // 2
+                        gs["grids"] = grids
+                        gs["mid_idx"] = mid_idx
                         trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                        log("["+pair+"] Grid buy zone lowered: "+str(grids[:mid_idx+2])+" sell zone kept: "+str(grids[mid_idx+1:]))
+                        state["partial_positions"] = {}
+                        filled, index_map = _grid_remap_filled(grids, filled)
+                        gs["filled"] = filled
+                        _grid_rekey_positions(state.get("positions", []), index_map)
+                        log("["+pair+"] Grid re-centered (downward jump, positions held): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
                     else:
                         grids = _make_grids(price, spread, levels)
                         mid_idx = len(grids) // 2
@@ -2651,11 +2744,18 @@ def run_grid(sid=None):
                         state["partial_positions"] = {}
                         gs["seeded"] = False  # Reset base buy seed guard on recenter/start
                         log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                        # Remap existing filled positions by REAL price onto the
+                        # new grid BEFORE the base-buy seed, so the seed's new
+                        # entry merges on top cleanly.
+                        remapped, index_map = _grid_remap_filled(grids, filled)
+                        _grid_rekey_positions(state.get("positions", []), index_map)
+                        gs["filled"] = {}
                         _execute_base_buy_if_needed(pair, gs, price)
+                        filled = _grid_merge_filled(remapped, gs["filled"])
+                        gs["filled"] = filled
                         # Refresh local loop variables
                         grids = gs["grids"]
                         mid_idx = gs["mid_idx"]
-                        filled = gs["filled"]
                 # Compute crossings against the final grid, after any recentering.
                 # Downward movement defers buys until a later upward tick.
                 moving_up = previous_price is None or price >= previous_price
