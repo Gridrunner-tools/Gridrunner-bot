@@ -2810,20 +2810,11 @@ def run_grid(sid=None):
                                 state["grid_trailing_active"] = trailing_sell_active
                                 state["grid_trailing_high"] = trailing_high
 
-                        # ── Stop-loss check: immediate sell if position drops too far ──
-                        stop_pct = cfg.get("grid_stop_loss_pct", 8)
-                        for sl_buy_idx in sorted(list(filled.keys())):
-                            sl_bp = filled[sl_buy_idx]["price"]
-                            sl_loss = (price - sl_bp) / sl_bp * 100
-                            if sl_loss < -stop_pct:
-                                sl_amt = filled[sl_buy_idx]["amount"]
-                                if place_order(pair,"sell",sl_amt, paper=paper):
-                                    sl_pnl = (price - sl_bp) * sl_amt
-                                    state["pnl"] += sl_pnl
-                                    record_trade("STOP-LOSS",price,sl_amt,round(sl_pnl,2), pair=pair)
-                                    log("["+pair+"] STOP-LOSS @ $"+str(round(price,2))+" (bought $"+str(round(sl_bp,2))+" loss "+str(round(abs(sl_loss),1))+"%)")
-                                    del filled[sl_buy_idx]
-                                    state["positions"]=[p for p in state["positions"] if p.get("grid")!=sl_buy_idx]
+                        # NOTE: the per-level grid stop-loss was REMOVED (owner rule,
+                        # 2026-10-25): the grid NEVER sells a position below its entry
+                        # price. Loss-taking is not configurable - the code path does not
+                        # exist. The only grid exit is the trailing take-profit below,
+                        # which is hard-guarded by `if price <= buy_price:` (HOLDING).
                         # ── Trailing take profit (fires on pullback regardless of grid zone) ──
                         # Arm / raise the trailing high while price is in the sell zone.
                         if not is_buy_zone:
