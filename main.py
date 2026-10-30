@@ -412,7 +412,7 @@ state = ThreadSafeState({
     # Per-pair completed-trade metrics used by dashboard summary cards.
     "pair_stats":    {},
     "positions_list": [],
-    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "grid_stop_loss_pct": cfg.get("grid_stop_loss_pct",5), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True), "stop_loss_enabled": cfg.get("stop_loss_enabled", False), "trailing_stop_enabled": cfg.get("trailing_stop_enabled", False), "avg_down_enabled": cfg.get("avg_down_enabled", True), "avg_down_max_lots": cfg.get("avg_down_max_lots", 3), "avg_down_step_pct": cfg.get("avg_down_step_pct", 2.0), "avg_down_size_multiplier": cfg.get("avg_down_size_multiplier", 1.0)},
+    "config":        {"risk_pct": cfg.get("risk_pct",2), "max_pos": cfg.get("max_pos",500), "trailing_pct": cfg.get("trailing_pct",0.5), "partial_sell_pct": cfg.get("partial_sell_pct",50), "base_spread": cfg.get("base_spread",0.05), "auto_compound": cfg.get("auto_compound",True), "dynamic_spread": cfg.get("dynamic_spread",True), "stop_loss_enabled": cfg.get("stop_loss_enabled", False), "trailing_stop_enabled": cfg.get("trailing_stop_enabled", False), "avg_down_enabled": cfg.get("avg_down_enabled", True), "avg_down_max_lots": cfg.get("avg_down_max_lots", 3), "avg_down_step_pct": cfg.get("avg_down_step_pct", 2.0), "avg_down_size_multiplier": cfg.get("avg_down_size_multiplier", 1.0)},
     "last_trade":    None,
     "price_history": [],
     "price_history_pairs": {},
@@ -4101,7 +4101,6 @@ td{padding:8px 0;border-bottom:1px solid var(--border);color:var(--text2)}
       <div class="config-field"><label>Take Profit (%)</label><input type="number" id="cfg-takeprofit" value="15" min="0" step="0.5"/></div>
       <div class="config-field"><label>Arbitrage Min Spread (%)</label><input type="number" id="cfg-arbspread" value="1.5" min="0" step="0.1"/></div>
       <div class="config-field"><label>Max Position ($)</label><input type="number" id="cfg-maxpos" value="500" min="0"/></div>
-      <div class="config-field"><label>Stop Loss (%)</label><input type="number" id="cfg-stoploss" value="8" min="1" max="50" step="0.5"/></div>
       <div class="config-field"><label>Trailing Sell (%)</label><input type="number" id="cfg-trailing" value="0.5" min="0.1" max="10" step="0.1"/></div>
       <div class="config-field"><label>Partial Sell (%)</label><input type="number" id="cfg-partial" value="50" min="0" max="100" step="5"/></div>
       <div class="config-field"><label>Grid Spread (%)</label><input type="number" id="cfg-spread" value="5" min="1" max="30" step="0.5"/></div>
@@ -4546,14 +4545,13 @@ function switchPair() {
 
 function applyPreset(name) {
   var presets = {
-    conservative: {risk: 1, maxpos: 250, stoploss: 6, trailing: 0.3, partial: 25, spread: 3},
-    moderate: {risk: 2, maxpos: 500, stoploss: 8, trailing: 0.5, partial: 50, spread: 5},
-    aggressive: {risk: 5, maxpos: 1000, stoploss: 12, trailing: 1.0, partial: 75, spread: 8}
+    conservative: {risk: 1, maxpos: 250, trailing: 0.3, partial: 25, spread: 3},
+    moderate: {risk: 2, maxpos: 500, trailing: 0.5, partial: 50, spread: 5},
+    aggressive: {risk: 5, maxpos: 1000, trailing: 1.0, partial: 75, spread: 8}
   };
   var p = presets[name];
   document.getElementById("cfg-risk").value = p.risk;
   document.getElementById("cfg-maxpos").value = p.maxpos;
-  document.getElementById("cfg-stoploss").value = p.stoploss;
   document.getElementById("cfg-trailing").value = p.trailing;
   document.getElementById("cfg-partial").value = p.partial;
   document.getElementById("cfg-spread").value = p.spread;
@@ -4575,7 +4573,6 @@ function saveConfig() {
     max_loss: configNumber("cfg-maxloss", 200),
     take_profit: configNumber("cfg-takeprofit", 15),
     min_arb_spread: configNumber("cfg-arbspread", 1.5),
-    grid_stop_loss_pct: configNumber("cfg-stoploss", 8),
     trailing_pct: configNumber("cfg-trailing", 0.5),
     partial_sell_pct: configNumber("cfg-partial", 50),
     base_spread: configNumber("cfg-spread", 5) / 100,
@@ -5422,7 +5419,6 @@ function refresh() {
       document.getElementById("cfg-maxloss").value = d.config.max_loss ?? 200;
       document.getElementById("cfg-takeprofit").value = d.config.take_profit ?? 15;
       document.getElementById("cfg-arbspread").value = d.config.min_arb_spread ?? 1.5;
-      document.getElementById("cfg-stoploss").value = d.config.grid_stop_loss_pct || 8;
       document.getElementById("cfg-trailing").value = d.config.trailing_pct || 0.5;
       document.getElementById("cfg-partial").value = d.config.partial_sell_pct || 50;
       document.getElementById("cfg-spread").value = ((d.config.base_spread || 0.05) * 100).toFixed(1);
@@ -6063,9 +6059,9 @@ class Handler(BaseHTTPRequestHandler):
             self.respond(200, "application/json", json.dumps({"closed": closed, "total_value": round(total_val, 2)}).encode()); return
         if path == "/config":
             if not self._auth_or_401(): return
-            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"]
+            config_keys = ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"]
             bool_keys = {"auto_compound", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled"}
-            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"}
+            float_keys = {"risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "trailing_pct", "partial_sell_pct", "base_spread", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"}
             for key in config_keys:
                 if key in data and data[key] is not None:
                     if key in bool_keys:
@@ -6073,7 +6069,7 @@ class Handler(BaseHTTPRequestHandler):
                     elif key in float_keys:
                         try:
                             val = float(data[key])
-                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "grid_stop_loss_pct": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 99), "base_spread": (0, 1), "avg_down_max_lots": (2, 5), "avg_down_step_pct": (0.1, 20), "avg_down_size_multiplier": (0.1, 2.0)}
+                            bounds = {"risk_pct": (0.01, 100), "max_pos": (0.01, 1_000_000), "max_loss": (0, 1_000_000), "take_profit": (0, 1_000), "min_arb_spread": (0, 100), "stop_loss": (0, 100), "trailing_pct": (0, 100), "partial_sell_pct": (1, 99), "base_spread": (0, 1), "avg_down_max_lots": (2, 5), "avg_down_step_pct": (0.1, 20), "avg_down_size_multiplier": (0.1, 2.0)}
                             lo, hi = bounds[key]
                             if not math.isfinite(val) or not lo <= val <= hi:
                                 raise ValueError("out of bounds")
@@ -6082,13 +6078,14 @@ class Handler(BaseHTTPRequestHandler):
                             log("Config "+key+" parse error: "+str(e), "WARN")
                     else:
                         cfg[key] = data[key]
-            # Keep the shared stop-loss control aligned for both grid and non-grid loops.
-            if "grid_stop_loss_pct" in data:
-                cfg["stop_loss"] = cfg["grid_stop_loss_pct"]
+            # The grid has no stop-loss control any more (owner rule: never sell a
+            # position at a loss), so there is nothing to align here. The shared
+            # cfg["stop_loss"] used by the non-grid loops is set directly when a client
+            # passes "stop_loss", and otherwise keeps its configured default.
             # Persist every dashboard control into the live cfg used by trade loops.
             # The former handler omitted Render's max_loss/take_profit/min_arb_spread,
             # so those controls appeared to save but never affected a trade.
-            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "grid_stop_loss_pct", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"] if cfg.get(k) is not None}
+            state["config"] = {k: cfg.get(k) for k in ["risk_pct", "max_pos", "max_loss", "take_profit", "min_arb_spread", "stop_loss", "trailing_pct", "partial_sell_pct", "base_spread", "auto_compound", "dynamic_spread", "stop_loss_enabled", "trailing_stop_enabled", "avg_down_enabled", "avg_down_max_lots", "avg_down_step_pct", "avg_down_size_multiplier"] if cfg.get(k) is not None}
             log("Config updated: "+json.dumps(data))
             self.respond(200,"application/json",json.dumps({"status":"ok","config":state["config"]}).encode())
         elif path == "/trade_log":
