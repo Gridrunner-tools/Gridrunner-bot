@@ -47,7 +47,7 @@ def test_tranche_selection_works_when_price_back_in_buy_zone():
     """Selection must use a sell-zone reference cell so a pullback into the buy
     zone still resolves a tranche (previously _grid_sell_indices returned [])."""
     assert "_sell_cell = i if (not is_buy_zone) else (mid_idx + 1)" in SRC
-    assert "_grid_sell_indices(filled, _sell_cell, levels)" in SRC
+    assert "_grid_sell_indices(filled, _sell_cell, levels, mid_idx)" in SRC
 
 
 def test_no_downward_gap_fill_buy():

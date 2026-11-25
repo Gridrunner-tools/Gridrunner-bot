@@ -25,9 +25,9 @@ def test_dashboard_contains_asymmetric_zone_labels_and_colors():
 
 
 def test_dashboard_contains_sell_side_gap_display():
-    # Verify we calculate and display the 2x sell gap in the multi-grid card
-    assert "buySpacing * 2" in SOURCE or "gl[1] - gl[0]" in SOURCE
-    assert "2× sell gap" in SOURCE
+    # Verify we calculate and display the 5x sell gap in the multi-grid card
+    assert "buySpacing * 5" in SOURCE or "gl[1] - gl[0]" in SOURCE
+    assert "5× sell gap" in SOURCE
 
     # Verify that we show the Gap column in the Grid Details card table header
     assert "grid-template-columns:80px 80px 80px 1fr 80px" in SOURCE
@@ -36,7 +36,7 @@ def test_dashboard_contains_sell_side_gap_display():
 
 def test_dashboard_contains_per_level_spacing_multiplier():
     # Verify we display the individual level spacings with multiplier (1x vs 2x)
-    assert 'multiplier = isSellGap ? " (2x)" : " (1x)"' in SOURCE or "isSellGap ? \" (2x)\" : \" (1x)\"" in SOURCE
+    assert 'multiplier = isSellGap ? " (5x)" : " (1x)"' in SOURCE or "isSellGap ? \" (5x)\" : \" (1x)\"" in SOURCE
     assert 'gapStr = "$" + gapVal.toFixed(2) + multiplier' in SOURCE
 
 

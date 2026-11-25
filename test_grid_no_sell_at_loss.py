@@ -199,8 +199,9 @@ def test_grid_holds_through_deep_drop_never_sells_at_loss():
 
 def test_grid_still_sells_above_entry_when_trailing_fires():
     """Control: the take-profit exit still works - but only above entry."""
-    # 100 entry, rise into the sell zone (>=105 on this grid), pull back >0.5%.
-    orders, logs = _drive_run_grid([100.0, 102.0, 106.0, 108.0, 107.0], cycles=5)
+    # 100 entry, rise into the sell zone (>=111 on this 5x-spacing grid), pull
+    # back >0.5%.
+    orders, logs = _drive_run_grid([100.0, 102.0, 106.0, 112.0, 114.0, 113.0], cycles=6)
     errors = [m for m, lvl in logs if "Grid cycle error" in m]
     assert not errors, "run_grid raised: %r" % errors
     sells = [o for o in orders if o[0] == "sell"]
