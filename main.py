@@ -2446,6 +2446,14 @@ def run_dca():
             log("Daily loss limit reached — pausing 1hr", "WARN"); time.sleep(3600)
         time.sleep(60)
 
+# Owner rule (2026-11-18): the sell lines sit SELL_SPACING_MULT x the buy
+# spacing on EVERY grid this bot builds - start, re-center and shift alike.
+SELL_SPACING_MULT = 5.0
+# A shifted grid only grows by adding buy levels below the price. This caps how
+# far it may grow before the lowest UNFILLED buy levels are recycled; a filled
+# position and the sell zone are never recycled.
+MAX_GRID_LEVELS = 100
+
 def _make_grids(price, spread, levels):
     mid_idx = (levels + 1) // 2
     s = price * spread * 2 / levels
@@ -2454,8 +2462,68 @@ def _make_grids(price, spread, levels):
         if i <= mid_idx:
             grids.append(round(price * (1 - spread) + i * s, 4))
         else:
-            grids.append(round(price * (1 - spread) + mid_idx * s + (i - mid_idx) * 2 * s, 4))
+            grids.append(round(price * (1 - spread) + mid_idx * s + (i - mid_idx) * SELL_SPACING_MULT * s, 4))
     return grids
+
+def _grid_buy_step(grids, price, spread, levels):
+    """Buy-side spacing `s`, taken from the live ladder when it has one so a
+    shifted grid keeps exactly the spacing it was built with."""
+    if grids and len(grids) >= 2:
+        step = round(float(grids[1]) - float(grids[0]), 4)
+        if step > 0:
+            return step
+    levels = max(1, int(levels or 1))
+    return price * spread * 2 / levels
+
+def _shift_grid_down(grids, mid_idx, filled, price, spread, levels):
+    """Shift a grid DOWN to `price` without moving anything that matters.
+
+    Owner rule (2026-11-18): a shift keeps every existing level exactly where it
+    is - filled positions, their levels and the whole sell zone are never
+    re-priced - and only NEW buy levels are added below the price. Only the
+    lowest UNFILLED buy levels can be recycled, and only at MAX_GRID_LEVELS.
+
+    Returns (new_grids, new_mid_idx, index_map); index_map maps old level index
+    -> new level index so `filled` and state["positions"] can be re-keyed.
+    """
+    grids = [float(g) for g in grids]
+    filled = filled or {}
+    s = _grid_buy_step(grids, price, spread, levels)
+    add = max(1, int(mid_idx or 1))
+    new_levels = [round(price - s * n, 4) for n in range(add, 0, -1)]
+    dropped = 0
+    if len(grids) + len(new_levels) > MAX_GRID_LEVELS:
+        excess = len(grids) + len(new_levels) - MAX_GRID_LEVELS
+        keep = []
+        for i, g in enumerate(grids):
+            if excess > 0 and i < mid_idx and i not in filled:
+                excess -= 1
+                dropped += 1
+                continue
+            keep.append(g)
+        if excess > 0:
+            return grids, mid_idx, {}   # no room without touching a position
+        grids = keep
+    new_grids = new_levels + grids
+    k = len(new_levels)
+    index_map = {old: old - dropped + k for old in range(len(grids))}
+    return new_grids, mid_idx - dropped + k, index_map
+
+def _shift_grid_up(grids, mid_idx, price, spread, levels):
+    """Shift a grid UP to `price`: every existing level and the sell zone stay
+    exactly where they are and the sell zone is extended above the top level at
+    SELL_SPACING_MULT x the buy spacing. Returns (grids, mid_idx, index_map)."""
+    grids = [float(g) for g in grids]
+    s = _grid_buy_step(grids, price, spread, levels)
+    step = SELL_SPACING_MULT * s
+    room = MAX_GRID_LEVELS - len(grids)
+    if step <= 0 or room < 1:
+        return grids, mid_idx, {}
+    want = int(math.ceil((price * 1.02 - grids[-1]) / step)) if price > grids[-1] else 1
+    add = max(1, min(want, room))
+    top = grids[-1]
+    new_grids = grids + [round(top + step * (n + 1), 4) for n in range(add)]
+    return new_grids, mid_idx, {}
 
 def _init_grid_pair(pair):
     """Initialize grid state for a pair, return dict with all local vars."""
@@ -2514,12 +2582,16 @@ def _grid_sync_state(pair, gs, grids, mid_idx, filled, trailing_sell_active, tra
         state["grid_trailing_active"] = trailing_sell_active
         state["grid_trailing_high"] = trailing_high
 
-def _grid_sell_indices(filled, grid_idx, levels):
+def _grid_sell_indices(filled, grid_idx, levels, mid_idx=None):
     """Select one open tranche for an actual sell cell.
 
     With the boundary shifted up by one, the first sell cell is mid_idx + 1.
+    `mid_idx` is passed explicitly by the grid loop: a shifted grid keeps its
+    own buy/sell boundary while its length grows, so it can no longer be
+    derived from `levels`.
     """
-    mid_idx = levels // 2 + (levels % 2)
+    if mid_idx is None:
+        mid_idx = levels // 2 + (levels % 2)
     first_sell_idx = mid_idx + 1
     if grid_idx < first_sell_idx or grid_idx >= levels or not filled:
         return []
@@ -2713,49 +2785,52 @@ def run_grid(sid=None):
                 # ── Grid re-centering ──
                 if (price < grids[0] * 0.98 or price > grids[-1] * 1.02) or not filled:
                     has_positions = bool(filled)
-                    if not filled:
+                    if not has_positions:
                         log("["+pair+"] Grid re-centering: no positions at $"+str(price))
                     else:
                         log("["+pair+"] Grid re-centering: price $"+str(price)+" outside ["+str(round(grids[0],2))+","+str(round(grids[-1],2))+"]")
-                    # Phantom-fill fix: EVERY re-center rebuilds the whole grid
-                    # at the current price and remaps `filled` by REAL buy
-                    # price. A partially-lowered buy zone with a kept stale
-                    # sell zone would create a disjoint grid (a price gap that
-                    # strands positions in no-man's-land), so both branches use
-                    # the same monotonic rebuild.
-                    if has_positions and price < grids[0]:
+                    # Owner rule (2026-11-18): a shift NEVER re-prices a filled
+                    # position and NEVER moves the sell zone. With positions on
+                    # the books every existing level stays exactly where it is:
+                    # a downward shift only ADDS new buy levels below the price,
+                    # an upward shift only EXTENDS the sell zone above the top.
+                    # A brand-new grid (nothing to preserve) is built with
+                    # _make_grids, so it carries the 5x sell spacing too.
+                    if not has_positions:
                         grids = _make_grids(price, spread, levels)
                         mid_idx = len(grids) // 2
                         gs["grids"] = grids
                         gs["mid_idx"] = mid_idx
-                        trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                        state["partial_positions"] = {}
-                        filled, index_map = _grid_remap_filled(grids, filled)
-                        gs["filled"] = filled
-                        _grid_rekey_positions(state.get("positions", []), index_map)
-                        log("["+pair+"] Grid re-centered (downward jump, positions held): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
-                    else:
-                        grids = _make_grids(price, spread, levels)
-                        mid_idx = len(grids) // 2
-                        gs["grids"] = grids
-                        gs["mid_idx"] = mid_idx
+                        gs["levels"] = levels
                         trailing_sell_active = False; trailing_high = 0.0
                         trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
                         state["partial_positions"] = {}
                         gs["seeded"] = False  # Reset base buy seed guard on recenter/start
                         log("["+pair+"] Grid re-centered: "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
-                        # Remap existing filled positions by REAL price onto the
-                        # new grid BEFORE the base-buy seed, so the seed's new
-                        # entry merges on top cleanly.
-                        remapped, index_map = _grid_remap_filled(grids, filled)
-                        _grid_rekey_positions(state.get("positions", []), index_map)
                         gs["filled"] = {}
                         _execute_base_buy_if_needed(pair, gs, price)
-                        filled = _grid_merge_filled(remapped, gs["filled"])
+                        filled = gs["filled"]
+                        grids = gs["grids"]; mid_idx = gs["mid_idx"]; levels = gs["levels"]
+                    elif price < grids[0]:
+                        grids, mid_idx, index_map = _shift_grid_down(grids, mid_idx, filled, price, spread, levels)
+                        levels = len(grids) - 1
+                        gs["grids"] = grids
+                        gs["mid_idx"] = mid_idx
+                        gs["levels"] = levels
+                        trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                        state["partial_positions"] = {}
+                        if index_map:
+                            _grid_rekey_positions(state.get("positions", []), index_map)
+                            filled = {index_map[i]: pos for i, pos in filled.items() if i in index_map}
                         gs["filled"] = filled
-                        # Refresh local loop variables
-                        grids = gs["grids"]
-                        mid_idx = gs["mid_idx"]
+                        log("["+pair+"] Grid shifted down (positions and sell zone kept): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                    else:
+                        grids, mid_idx, _ = _shift_grid_up(grids, mid_idx, price, spread, levels)
+                        levels = len(grids) - 1
+                        gs["grids"] = grids
+                        gs["mid_idx"] = mid_idx
+                        gs["levels"] = levels
+                        log("["+pair+"] Grid shifted up (positions and sell zone kept, sell zone extended): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
                 # Compute crossings against the final grid, after any recentering.
                 # Downward movement defers buys until a later upward tick.
                 moving_up = previous_price is None or price >= previous_price
@@ -2834,7 +2909,7 @@ def run_grid(sid=None):
                         # still exits (previously reset to 0 without selling - the no-sell bug).
                         if trailing_sell_active and price <= trailing_high * (1 - trailing_pct / 100):
                                 _sell_cell = i if (not is_buy_zone) else (mid_idx + 1)
-                                for buy_idx in sorted(_grid_sell_indices(filled, _sell_cell, levels)):
+                                for buy_idx in sorted(_grid_sell_indices(filled, _sell_cell, levels, mid_idx)):
                                     amt = filled[buy_idx]["amount"]
                                     buy_price = filled[buy_idx]["price"]
                                     if price <= buy_price:
@@ -5191,7 +5266,7 @@ function refresh() {
           var trailActive = gp.trailing_sell_active || false;
           var html = '<div style="font-size:11px;margin-top:8px">';
           var buySpacing = gl.length >= 2 ? (gl[1] - gl[0]) : 0;
-          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + ' (2× sell gap: $' + (buySpacing * 2).toFixed(2) + ')</span>';
+          html += '<span style="color:var(--dim)">Levels: ' + gl.length + ' | Filled: ' + fc + ' | Buy ≤$' + gl[midIdx].toFixed(2) + ' | Sell >$' + gl[midIdx].toFixed(2) + ' (5× sell gap: $' + (buySpacing * 5).toFixed(2) + ')</span>';
           if (trailActive) html += ' <span style="color:#ff6b6b">⚠ Trailing</span>';
           html += '<div style="margin-top:6px;display:grid;grid-template-columns:repeat(auto-fill,minmax(100px,1fr));gap:2px;font-size:10px">';
           for (var i = 0; i < gl.length; i++) {
@@ -5371,7 +5446,7 @@ function refresh() {
         var gapColor = "var(--dim)";
         if (i > 0) {
           var isSellGap = i > midIdx;
-          var multiplier = isSellGap ? " (2x)" : " (1x)";
+          var multiplier = isSellGap ? " (5x)" : " (1x)";
           gapColor = isSellGap ? "#ff6b6b" : "#00ff9d";
           gapStr = "$" + gapVal.toFixed(2) + multiplier;
         }
@@ -5763,7 +5838,13 @@ class Handler(BaseHTTPRequestHandler):
             trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
             levels=5; spread_val=cfg.get("base_spread",0.05)
             base_price = prices[0]["value"]
-            grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
+            def bt_grids(bp):
+                st = bp*spread_val*2/levels; md = (levels+1)//2; out = []
+                for gi in range(levels+1):
+                    out.append(round((bp*(1-spread_val)+gi*st) if gi <= md
+                                     else (bp*(1-spread_val)+md*st+(gi-md)*5*st), 4))
+                return out
+            grids = bt_grids(base_price)
             mid_idx = len(grids)//2; filled = {}
             for pt in prices[1:]:
                 pr = pt["value"]
@@ -5771,7 +5852,7 @@ class Handler(BaseHTTPRequestHandler):
                 # Re-center check
                 if pr < grids[0]*0.98 or pr > grids[-1]*1.02:
                     base_price = pr
-                    grids = [round(pr*(1-spread_val)+i*(pr*spread_val*2/levels),4) for i in range(levels+1)]
+                    grids = bt_grids(pr)
                     mid_idx = len(grids)//2
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
@@ -5985,14 +6066,20 @@ class Handler(BaseHTTPRequestHandler):
             trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
             levels=5; spread_val=cfg.get("base_spread",0.05)
             base_price = prices[0]["value"]
-            grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
+            def bt_grids(bp):
+                st = bp*spread_val*2/levels; md = (levels+1)//2; out = []
+                for gi in range(levels+1):
+                    out.append(round((bp*(1-spread_val)+gi*st) if gi <= md
+                                     else (bp*(1-spread_val)+md*st+(gi-md)*5*st), 4))
+                return out
+            grids = bt_grids(base_price)
             mid_idx = len(grids)//2; filled = {}
             for pt in prices[1:]:
                 pr = pt["value"]
                 if pr <= 0: continue
                 if pr < grids[0]*0.98 or pr > grids[-1]*1.02:
                     base_price = pr
-                    grids = [round(pr*(1-spread_val)+i*(pr*spread_val*2/levels),4) for i in range(levels+1)]
+                    grids = bt_grids(pr)
                     mid_idx = len(grids)//2
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]
@@ -6200,14 +6287,20 @@ class Handler(BaseHTTPRequestHandler):
             trades = []; pnl_total = 0; wins = 0; peak_equity = 0; max_dd = 0; equity = 100
             levels=5; spread_val=cfg.get("base_spread",0.05)
             base_price = prices[0]["value"]
-            grids = [round(base_price*(1-spread_val)+i*(base_price*spread_val*2/levels),4) for i in range(levels+1)]
+            def bt_grids(bp):
+                st = bp*spread_val*2/levels; md = (levels+1)//2; out = []
+                for gi in range(levels+1):
+                    out.append(round((bp*(1-spread_val)+gi*st) if gi <= md
+                                     else (bp*(1-spread_val)+md*st+(gi-md)*5*st), 4))
+                return out
+            grids = bt_grids(base_price)
             mid_idx = len(grids)//2; filled = {}
             for pt in prices[1:]:
                 pr = pt["value"]
                 if pr <= 0: continue
                 if pr < grids[0]*0.98 or pr > grids[-1]*1.02:
                     base_price = pr
-                    grids = [round(pr*(1-spread_val)+i*(pr*spread_val*2/levels),4) for i in range(levels+1)]
+                    grids = bt_grids(pr)
                     mid_idx = len(grids)//2
                 for i,g in enumerate(grids[:-1]):
                     ng = grids[i+1]

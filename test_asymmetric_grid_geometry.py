@@ -44,16 +44,18 @@ def test_asymmetric_grid_geometry():
         spacing = round(grids[i] - grids[i-1], 4)
         assert spacing == s, f"Buy-side spacing at step {i} should be {s}, got {spacing}"
 
-    # 5. Verify sell-side spacing is exactly 2*s
+    # 5. Verify sell-side spacing is exactly SELL_SPACING_MULT (5x) the buy spacing
     # Sell side indices are i > mid_idx (4, 5)
+    from main import SELL_SPACING_MULT
+    assert SELL_SPACING_MULT == 5.0, f"SELL_SPACING_MULT must be 5.0, got {SELL_SPACING_MULT}"
     for i in range(mid_idx + 1, levels + 1):
         spacing = round(grids[i] - grids[i-1], 4)
-        assert spacing == 2 * s, f"Sell-side spacing at step {i} should be {2*s}, got {spacing}"
+        assert spacing == 5 * s, f"Sell-side spacing at step {i} should be {5*s}, got {spacing}"
 
     # Verify sell-side levels are exactly as expected:
-    # grids[4] = grids[3] + 2*s = 101.0 + 4.0 = 105.0
-    # grids[5] = grids[4] + 2*s = 105.0 + 4.0 = 109.0
-    assert grids == [95.0, 97.0, 99.0, 101.0, 105.0, 109.0], f"Grid positions mismatch! Got {grids}"
+    # grids[4] = grids[3] + 5*s = 101.0 + 10.0 = 111.0
+    # grids[5] = grids[4] + 5*s = 111.0 + 10.0 = 121.0
+    assert grids == [95.0, 97.0, 99.0, 101.0, 111.0, 121.0], f"Grid positions mismatch! Got {grids}"
 
     # 6. Verify buy-zone mapping
     # Under current rule, index <= mid_idx are buy-zone, index > mid_idx are sell-zone

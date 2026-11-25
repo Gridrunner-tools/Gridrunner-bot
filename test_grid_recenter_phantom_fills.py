@@ -13,6 +13,11 @@ Fix: every re-center rebuilds the whole (monotonic) grid, then remaps
 out-of-range positions to the nearest edge cell), and re-keys
 state['positions']['grid'] so sell / stop-loss bookkeeping stays consistent.
 
+Superseded 2026-11-18 by the owner rule that a shift never re-prices a
+filled position or the sell zone: the shift helpers below keep every
+existing level and only add buy levels below the price, so nothing has to
+be remapped.
+
 Pure-function tests only -- no HTTP server, exchange, or license required.
 """
 import sys, types
@@ -147,19 +152,64 @@ def test_rekey_positions_only_grid_strategy():
     _grid_rekey_positions(positions, {})      # no-op on empty map
 
 
-def test_grid_recenter_block_remaps_both_branches():
-    # Structure guard (mirrors test_strategy's source-inspection style):
-    # the re-centering block must remap `filled` in BOTH branches and must no
-    # longer contain the disjoint "lowered buy zone" partial rebuild.
+def test_grid_recenter_block_keeps_positions_and_sell_zone():
+    # Owner rule (2026-11-18): a shift keeps every filled position, its level
+    # and the whole sell zone exactly where they are and only adds new buy
+    # levels below the price - no full rebuild and no re-pricing.
     from pathlib import Path
     source = Path("main.py").read_text()
-    recenter = source.index("# ── Grid re-centering")
+    recenter = source.index("# \u2500\u2500 Grid re-centering")
     crossing = source.index("_grid_crossed_buy_indices(", recenter)
     block = source[recenter:crossing]
-    assert block.count("_grid_remap_filled(") == 2      # both branches
-    assert block.count("_grid_rekey_positions(") == 2   # both branches
-    assert "Grid buy zone lowered" not in block         # partial lowering removed
-    assert "new_grids = _make_grids" not in block       # no partial rebuild left
-    assert "grids = _make_grids(price, spread, levels)" in block
+    assert "_shift_grid_down(" in block                 # downward shift, not a rebuild
+    assert "_shift_grid_up(" in block                   # upward shift extends the sell zone
+    assert "_grid_remap_filled(" not in block           # nothing is re-priced
+    assert "Grid buy zone lowered" not in block
+    # A brand-new grid (no positions to preserve) still comes from _make_grids.
+    assert block.count("grids = _make_grids(price, spread, levels)") == 1
     # Authoritative grid-loop guard stays byte-identical.
     assert 'while state["running"] and state["strategy"]=="grid"' in source
+
+
+def test_shift_down_only_adds_buy_levels_and_keeps_positions():
+    from main import _make_grids, _shift_grid_down
+    grids = _make_grids(100.0, 0.05, 5)          # 95, 97, 99, 101, 111, 121
+    mid_idx = 3
+    filled = {2: {"price": 99.5, "amount": 1.0}, 3: {"price": 100.8, "amount": 1.0}}
+    new_grids, new_mid, index_map = _shift_grid_down(grids, mid_idx, filled, 92.0, 0.05, 5)
+    k = len(new_grids) - len(grids)
+    # Every old level survives untouched, in order, above the new buy levels.
+    assert k > 0
+    assert new_grids[k:] == [float(g) for g in grids]
+    assert all(float(new_grids[i]) < float(new_grids[i + 1]) for i in range(len(new_grids) - 1))
+    # The new levels are strictly below the price that caused the shift.
+    assert all(g < 92.0 for g in new_grids[:k])
+    # Each filled position keeps its own level price (only its index moves).
+    for old_idx in filled:
+        assert new_grids[index_map[old_idx]] == grids[old_idx]
+    # The sell zone is exactly where it was, and is still the sell zone.
+    assert new_grids[new_mid + 1:] == [float(g) for g in grids[mid_idx + 1:]]
+    assert new_mid == mid_idx + k
+
+
+def test_shifted_in_grid_never_comes_back_at_2x_sell_spacing():
+    from main import _make_grids, _shift_grid_down, SELL_SPACING_MULT
+    grids = _make_grids(100.0, 0.05, 5)
+    new_grids, new_mid, _ = _shift_grid_down(
+        grids, 3, {2: {"price": 99.5, "amount": 1.0}}, 90.0, 0.05, 5)
+    step = round(new_grids[1] - new_grids[0], 4)
+    assert step > 0
+    assert len(new_grids) > new_mid + 2
+    for i in range(new_mid + 2, len(new_grids)):
+        gap = round(new_grids[i] - new_grids[i - 1], 4)
+        assert gap == round(SELL_SPACING_MULT * step, 4), \
+            f"sell gap at level {i} must be {SELL_SPACING_MULT}x the buy step, got {gap}"
+
+
+def test_every_grid_builder_uses_the_5x_sell_spacing():
+    from pathlib import Path
+    source = Path("main.py").read_text()
+    assert "(i - mid_idx) * 2 * s" not in source        # the old 2x sell step is gone
+    assert "(i - mid_idx) * SELL_SPACING_MULT * s" in source
+    # The dashboard backtests build the same 5x ladder.
+    assert source.count("(gi-md)*5*st") == 3
