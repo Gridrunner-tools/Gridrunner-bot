@@ -223,22 +223,22 @@ def test_trailing_not_execute_when_not_armed():
 # Test 7: A sell cell liquidates only its mirrored buy tranche.
 # ──────────────────────────────────────────────────────────────────────────────
 def test_sell_cell_targets_only_paired_tranche():
-    # Exercise production geometry: levels=5 has sell cell 4.
+    # Exercise production geometry: levels=5 -> mid_idx = 2, first sell cell 3.
     import sys, types
     sys.modules.setdefault("requests", types.SimpleNamespace())
     from main import _grid_sell_indices
     levels = 5
-    filled = {idx: {"amount": float(idx + 1)} for idx in range(4)}
+    filled = {idx: {"amount": float(idx + 1)} for idx in range(3)}
     # Each sell-cell event selects exactly one tranche (never a cascade).
-    first = _grid_sell_indices(filled, 4, levels)
-    assert len(first) == 1 and first == [3]
+    first = _grid_sell_indices(filled, 3, levels)
+    assert len(first) == 1 and first == [2]
     del filled[first[0]]
-    second = _grid_sell_indices(filled, 4, levels)
-    assert len(second) == 1 and second == [2]
+    second = _grid_sell_indices(filled, 3, levels)
+    assert len(second) == 1 and second == [1]
     del filled[second[0]]
-    # Every buy tranche is reachable through actual sell cell 4.
+    # Every buy tranche is reachable through the actual first sell cell.
     assert all(any(buy_idx in _grid_sell_indices({buy_idx: {}}, cell, levels)
-                   for cell in (4,)) for buy_idx in range(4))
+                   for cell in (3,)) for buy_idx in range(3))
     print("PASS  test_sell_cell_targets_only_paired_tranche")
 
 # ──────────────────────────────────────────────────────────────────────────────

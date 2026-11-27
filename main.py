@@ -1486,11 +1486,152 @@ def raydium_get_quote(from_mint, to_mint, amount, slippage_bps="200"):
             time.sleep(2)
     return None
 
+# ── Realized swap fills (owner order 2026-11-27) ────────────────────────────
+# The fill recorded by the last executed swap, for the strategy loop to book.
+# A module-level slot, not a state key: strategies and tests replace `state`.
+_LAST_FILL = {}
+# The PnL ledger and the never-sell-at-loss guard book off the amounts a swap
+# ACTUALLY moved, fees included - never the mark the bot saw when it decided.
+def _realized_price(side, in_amount, out_amount):
+    """Realized fill price from the amounts a swap moved.
+
+    BUY  (USDC in, token out): in / out  -> USD per token
+    SELL (token in, USDC out): out / in  -> USD per token
+    A fee that shrinks the received amount is already inside these numbers, so
+    it is never subtracted a second time. None when an amount is unusable.
+    """
+    try:
+        amt_in = float(in_amount); amt_out = float(out_amount)
+    except (TypeError, ValueError):
+        return None
+    if amt_in <= 0 or amt_out <= 0:
+        return None
+    return (amt_in / amt_out) if str(side).upper() == "BUY" else (amt_out / amt_in)
+
+
+def _token_balance_for_mint(mint):
+    """Wallet balance for `mint` in whole tokens, summed over its token
+    accounts. None when it cannot be read (the caller then falls back to the
+    venue quote)."""
+    try:
+        wallet = cfg.get("sol_wallet", "")
+        if not wallet or not mint:
+            return None
+        payload = {"jsonrpc":"2.0","id":1,"method":"getTokenAccountsByOwner",
+                   "params":[wallet, {"mint": mint}, {"encoding":"jsonParsed"}]}
+        rpcs = list(SOL_RPCS)
+        if ALCHEMY_KEY:
+            rpcs = ["https://solana-mainnet.g.alchemy.com/v2/"+ALCHEMY_KEY] + rpcs
+        for rpc in rpcs:
+            try:
+                r = requests.post(rpc, json=payload, timeout=8)
+                accs = r.json().get("result",{}).get("value",[]) or []
+                total = 0.0
+                for acc in accs:
+                    info = ((acc.get("account",{}) or {}).get("data",{}) or {}).get("parsed",{}).get("info",{}) or {}
+                    total += float((info.get("tokenAmount",{}) or {}).get("uiAmount") or 0.0)
+                return total
+            except Exception:
+                continue
+        return None
+    except Exception:
+        return None
+
+
+def _post_swap_amounts(pre_in, pre_out, from_mint, to_mint):
+    """Amounts a confirmed swap moved, from the wallet's token-balance deltas.
+    Returns (None, None) when the balances could not be read on both sides."""
+    try:
+        if pre_in is None or pre_out is None:
+            return None, None
+        post_in  = _token_balance_for_mint(from_mint)
+        post_out = _token_balance_for_mint(to_mint)
+        if post_in is None or post_out is None:
+            return None, None
+        moved_in  = float(pre_in) - float(post_in)
+        moved_out = float(post_out) - float(pre_out)
+        if moved_in <= 0 or moved_out <= 0:
+            return None, None
+        return moved_in, moved_out
+    except Exception:
+        return None, None
+
+
+def _venue_swap_amounts(router, pre_in, pre_out, from_mint, to_mint, quote_in, quote_out):
+    """What the swap actually moved: wallet balance deltas when readable, else
+    the venue's quoted amounts (logged as quoted-not-realized)."""
+    moved_in, moved_out = _post_swap_amounts(pre_in, pre_out, from_mint, to_mint)
+    if moved_in is None:
+        log(router+" executed amounts unavailable - using the quote, price is quoted-not-realized", "WARN")
+        return quote_in, quote_out
+    return moved_in, moved_out
+
+
+def _record_realized_fill(side, from_token, to_token, in_amount, out_amount,
+                          observed_price, router, paper=False):
+    """Book one executed swap off the amounts it moved and stash it in
+    state["last_fill"] for the strategy loop. Returns the price to book.
+
+    Paper mode and any response that carries no usable amounts keep the
+    observed price - loudly, so a hot ledger shows up in the log."""
+    realized = None if paper else _realized_price(side, in_amount, out_amount)
+    if realized and realized > 0:
+        log("Realized fill ("+router+"): "+str(round(float(in_amount),6))+" "+from_token
+            +" -> "+str(round(float(out_amount),6))+" "+to_token+" @ $"+str(round(realized,6)))
+    else:
+        log("realized price unavailable — booking observed price", "WARN")
+        realized = None
+    _LAST_FILL.clear()
+    _LAST_FILL.update({
+        "side": side, "from_token": from_token, "to_token": to_token,
+        "in_amount": in_amount, "out_amount": out_amount,
+        "observed_price": observed_price, "router": router,
+        "realized_price": realized if realized else observed_price,
+        "source": "realized" if realized else "observed",
+        "time": time.time(),
+    })
+    return _LAST_FILL["realized_price"]
+
+
+def _last_realized_fill(side, max_age=300.0):
+    """The fill recorded by the swap this order just executed, else None."""
+    fill = dict(_LAST_FILL)
+    try:
+        fresh = (time.time() - float(fill.get("time", 0))) <= max_age
+    except Exception:
+        fresh = False
+    if fresh and str(fill.get("side","")).upper() == str(side).upper():
+        return fill
+    return None
+
+
+def _booked_fill(side, observed_price, observed_amount):
+    """(price, amount) to book for the swap that just executed: the realized
+    fill when the venue reported one, otherwise the observed mark/amount."""
+    fill = _last_realized_fill(side)
+    if not fill:
+        return observed_price, observed_amount
+    try:
+        price = float(fill.get("realized_price") or 0) or observed_price
+    except (TypeError, ValueError):
+        price = observed_price
+    key = "out_amount" if str(side).upper() == "BUY" else "in_amount"
+    try:
+        amt = float(fill.get(key) or 0)
+    except (TypeError, ValueError):
+        amt = 0.0
+    if amt <= 0:
+        amt = observed_amount
+    return price, amt
+
+
 def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                           amount_input, out_human, price, side, via,
                           lamports, raydium_quote, to_dec, paper=None):
     """Execute a Raydium swap using the quote from raydium_get_quote."""
     if (paper if paper is not None else state["paper_trading"]):
+        _record_realized_fill(side, from_token, to_token, amount_input, out_human,
+                              price, "Raydium", paper=True)
         trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side+via,
                  "price":price,"amount":out_human,"router":"Raydium","chain":"solana"}
         state["trades"].append(trade)
@@ -1635,6 +1776,11 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
             log("Cannot swap — no output ATA for "+to_token, "WARN")
             return False, 0.0
 
+        # Realized-fill measurement: the wallet's balances for both mints
+        # BEFORE the swap, so the amounts it moved can be derived after it.
+        pre_in_bal  = _token_balance_for_mint(from_mint)
+        pre_out_bal = _token_balance_for_mint(to_mint)
+
         # Build Raydium swap transaction payload
         swap_payload = {
             "computeUnitPriceMicroLamports": "10000",
@@ -1701,11 +1847,15 @@ def _raydium_execute_swap(from_token, to_token, from_mint, to_mint,
                     pass
             if tx_ok:
                 log("RAYDIUM SWAP CONFIRMED: "+tx_sig[:20]+"... "+from_token+"→"+to_token+via); log_trade_to_file({"event":"SWAP_OK","time":time.strftime("%H:%M:%S"),"router":"Raydium","pair":from_token+"/"+to_token,"side":side,"tx":tx_sig[:20]})
+                moved_in, moved_out = _venue_swap_amounts("Raydium", pre_in_bal, pre_out_bal,
+                                                          from_mint, to_mint, amount_input, out_human)
+                realized = _record_realized_fill(side, from_token, to_token, moved_in, moved_out,
+                                                 price, "Raydium")
                 trade = {"time":time.strftime("%H:%M:%S"),"side":"LIVE-"+side+via,
-                         "price":price,"amount":out_human,"router":"Raydium",
+                         "price":realized,"amount":moved_out,"router":"Raydium",
                          "chain":"solana","tx":tx_sig[:20]}
                 state["trades"].append(trade)
-                return True, out_human
+                return True, moved_out
             else:
                 err_msg = str(vresult.get("err","")) if vresult else "no status"
                 log("Swap TX failed: "+tx_sig[:20]+" err="+err_msg, "WARN"); log_trade_to_file({"event":"SWAP_FAIL","time":time.strftime("%H:%M:%S"),"router":"Raydium","pair":from_token+"/"+to_token,"side":side,"tx":tx_sig[:20],"error":err_msg})
@@ -1774,6 +1924,8 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None, paper=None
         return False, 0.0
 
     if (paper if paper is not None else state["paper_trading"]):
+        _record_realized_fill(side, from_token, to_token, amount_input, out_human,
+                              price, "Jupiter", paper=True)
         trade = {"time":time.strftime("%H:%M:%S"),"side":"[PAPER] "+side+via,
                  "price":price,"amount":out_human,"router":"Jupiter","chain":"solana"}
         state["trades"].append(trade)
@@ -1807,6 +1959,11 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None, paper=None
         except Exception as ke:
             log("Key decode failed: "+str(ke)[:60], "WARN")
             return False, 0.0
+
+        # Realized-fill measurement: the wallet's balances for both mints
+        # BEFORE the swap, so the amounts it moved can be derived after it.
+        pre_in_bal  = _token_balance_for_mint(from_mint)
+        pre_out_bal = _token_balance_for_mint(to_mint)
 
         # Get swap transaction from Jupiter (handles ATA creation automatically)
         swap_payload = {
@@ -1865,11 +2022,15 @@ def jupiter_swap(from_token, to_token, amount_input, price, dex=None, paper=None
                     pass
             if tx_ok:
                 log("SWAP CONFIRMED: "+tx_sig[:20]+"... "+from_token+"→"+to_token+via); log_trade_to_file({"event":"SWAP_OK","time":time.strftime("%H:%M:%S"),"router":"Jupiter","pair":from_token+"/"+to_token,"side":side,"tx":tx_sig[:20]})
+                moved_in, moved_out = _venue_swap_amounts("Jupiter", pre_in_bal, pre_out_bal,
+                                                          from_mint, to_mint, amount_input, out_human)
+                realized = _record_realized_fill(side, from_token, to_token, moved_in, moved_out,
+                                                 price, "Jupiter")
                 trade = {"time":time.strftime("%H:%M:%S"),"side":"LIVE-"+side+via,
-                         "price":price,"amount":out_human,"router":"Jupiter",
+                         "price":realized,"amount":moved_out,"router":"Jupiter",
                          "chain":"solana","tx":tx_sig[:20]}
                 state["trades"].append(trade)
-                return True, out_human
+                return True, moved_out
             else:
                 log("Swap submitted but not confirmed: "+tx_sig[:20], "WARN")
                 return False, 0.0
@@ -2175,6 +2336,7 @@ def place_order(pair, side, amount, grid_idx=None, paper=None):
         return False
     _last_order_key = order_key
     _last_order_time = now
+    _LAST_FILL.clear()  # every order books its own realized fill
 
     # Visible ORDER_ATTEMPT logging
     log(f"[ORDER_ATTEMPT] {side.upper()} {pair} amount={amount}", "WARN")
@@ -2455,7 +2617,11 @@ SELL_SPACING_MULT = 5.0
 MAX_GRID_LEVELS = 100
 
 def _make_grids(price, spread, levels):
-    mid_idx = (levels + 1) // 2
+    # The mid level is the last BUY level, so it must sit at or below the mark.
+    # `(levels + 1) // 2` put it ABOVE the mark for an odd level count - a buy
+    # level above the price and the extra cell on the buy side (off-by-one,
+    # 2026-11-27 review). `levels // 2` keeps it at/below the mark.
+    mid_idx = levels // 2
     s = price * spread * 2 / levels
     grids = []
     for i in range(levels + 1):
@@ -2544,7 +2710,7 @@ def _init_grid_pair(pair):
                     spread = min(spread * (1 + vol * 10), spread * 3)  # max 3x
         except Exception: pass
     grids = _make_grids(price, spread, levels)
-    mid_idx = len(grids) // 2
+    mid_idx = levels // 2   # same boundary _make_grids built the ladder with
     return {
         "grids": grids, "mid_idx": mid_idx, "filled": {},
         "trailing_pct": 0.5, "trailing_high": 0.0, "trailing_sell_active": False,
@@ -2591,7 +2757,7 @@ def _grid_sell_indices(filled, grid_idx, levels, mid_idx=None):
     derived from `levels`.
     """
     if mid_idx is None:
-        mid_idx = levels // 2 + (levels % 2)
+        mid_idx = levels // 2
     first_sell_idx = mid_idx + 1
     if grid_idx < first_sell_idx or grid_idx >= levels or not filled:
         return []
@@ -2716,10 +2882,11 @@ def _execute_base_buy_if_needed(pair, gs, price, paper=None):
 
             base_amt = round(size / price, 6)
             if place_order(pair, "buy", base_amt, grid_idx=cell, paper=paper):
-                gs["filled"][cell] = {"price": price, "amount": base_amt}
-                state["positions"].append({"price": price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
-                record_trade("GRID-BUY", price, base_amt, pair=pair)
-                log(f"[{pair}] BASE BUY {base_amt} @ ${price} (grid start)")
+                fill_price, base_amt = _booked_fill("BUY", price, base_amt)
+                gs["filled"][cell] = {"price": fill_price, "amount": base_amt}
+                state["positions"].append({"price": fill_price, "amount": base_amt, "grid": cell, "strategy": "Grid"})
+                record_trade("GRID-BUY", fill_price, base_amt, pair=pair)
+                log(f"[{pair}] BASE BUY {base_amt} @ ${fill_price} (grid start, booked from the realized fill)")
                 send_telegram("🟢 <b>BUY</b> "+pair+"\nLevel: "+str(cell)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(base_amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                 _grid_sync_state(pair, gs, gs["grids"], gs["mid_idx"], gs["filled"], gs["trailing_sell_active"], gs["trailing_high"])
                 gs["seeded"] = True
@@ -2798,7 +2965,7 @@ def run_grid(sid=None):
                     # _make_grids, so it carries the 5x sell spacing too.
                     if not has_positions:
                         grids = _make_grids(price, spread, levels)
-                        mid_idx = len(grids) // 2
+                        mid_idx = levels // 2   # same boundary _make_grids used
                         gs["grids"] = grids
                         gs["mid_idx"] = mid_idx
                         gs["levels"] = levels
@@ -2812,25 +2979,35 @@ def run_grid(sid=None):
                         filled = gs["filled"]
                         grids = gs["grids"]; mid_idx = gs["mid_idx"]; levels = gs["levels"]
                     elif price < grids[0]:
+                        prev_low = grids[0]
                         grids, mid_idx, index_map = _shift_grid_down(grids, mid_idx, filled, price, spread, levels)
-                        levels = len(grids) - 1
-                        gs["grids"] = grids
-                        gs["mid_idx"] = mid_idx
-                        gs["levels"] = levels
-                        trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
-                        state["partial_positions"] = {}
                         if index_map:
+                            levels = len(grids) - 1
+                            gs["grids"] = grids
+                            gs["mid_idx"] = mid_idx
+                            gs["levels"] = levels
+                            trailing_buy_active = False; trailing_low = 0.0; dip_occurred = False
+                            state["partial_positions"] = {}
                             _grid_rekey_positions(state.get("positions", []), index_map)
                             filled = {index_map[i]: pos for i, pos in filled.items() if i in index_map}
-                        gs["filled"] = filled
-                        log("["+pair+"] Grid shifted down (positions and sell zone kept): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                            gs["filled"] = filled
+                            log("["+pair+"] Grid shifted down (positions and sell zone kept): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                        else:
+                            # No room without touching a position: say so, never
+                            # claim a shift that did not happen.
+                            log("["+pair+"] grid at "+str(MAX_GRID_LEVELS)+"-level cap, no room to shift down (price $"+str(round(price,2))+" below $"+str(round(prev_low,2))+"): ladder unchanged", "WARN")
                     else:
-                        grids, mid_idx, _ = _shift_grid_up(grids, mid_idx, price, spread, levels)
-                        levels = len(grids) - 1
-                        gs["grids"] = grids
-                        gs["mid_idx"] = mid_idx
-                        gs["levels"] = levels
-                        log("["+pair+"] Grid shifted up (positions and sell zone kept, sell zone extended): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                        prev_top = grids[-1]
+                        new_grids, new_mid, _ = _shift_grid_up(grids, mid_idx, price, spread, levels)
+                        if len(new_grids) > len(grids):
+                            grids, mid_idx = new_grids, new_mid
+                            levels = len(grids) - 1
+                            gs["grids"] = grids
+                            gs["mid_idx"] = mid_idx
+                            gs["levels"] = levels
+                            log("["+pair+"] Grid shifted up (positions and sell zone kept, sell zone extended): "+str(grids)+" buy_zone=<="+str(grids[mid_idx+1]))
+                        else:
+                            log("["+pair+"] grid at "+str(MAX_GRID_LEVELS)+"-level cap, no room to shift up (price $"+str(round(price,2))+" above $"+str(round(prev_top,2))+"): ladder unchanged", "WARN")
                 # Compute crossings against the final grid, after any recentering.
                 # Downward movement defers buys until a later upward tick.
                 moving_up = previous_price is None or price >= previous_price
@@ -2864,9 +3041,10 @@ def run_grid(sid=None):
                                 if should_buy:
                                     amt = round(size*dip_mult/price,6)
                                     if place_order(pair,"buy",amt, grid_idx=i, paper=paper):
-                                        filled[i]={"price":price,"amount":amt}
-                                        state["positions"].append({"price":price,"amount":amt,"grid":i,"strategy":"Grid"})
-                                        record_trade("GRID-BUY",price,amt, pair=pair)
+                                        fill_price, amt = _booked_fill("BUY", price, amt)
+                                        filled[i]={"price":fill_price,"amount":amt}
+                                        state["positions"].append({"price":fill_price,"amount":amt,"grid":i,"strategy":"Grid"})
+                                        record_trade("GRID-BUY",fill_price,amt, pair=pair)
                                         log("["+pair+"] BUY level "+str(i)+" @ $"+str(round(price,2))+(" (low $"+str(round(trailing_low,2))+" +"+str(trailing_pct)+"% bounce)" if dip_occurred else " (no dip)"))
                                         send_telegram("🟢 <b>BUY</b> "+state["pair"]+"\nLevel: "+str(i)+"\nPrice: $"+str(round(price,2))+"\nAmount: "+str(round(amt,6))+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                         trailing_buy_active = False
@@ -2944,16 +3122,24 @@ def run_grid(sid=None):
                                         sell_amt = amt  # sell everything left
                                         if partial_key in state["partial_positions"]:
                                             del state["partial_positions"][partial_key]
-                                    if place_order(pair,"sell",sell_amt, paper=paper):
-                                        pnl=(price-buy_price)*sell_amt
+                                    # The level index is part of the duplicate key:
+                                    # two sells at DIFFERENT levels in one tick are
+                                    # not duplicates and must both go through.
+                                    if place_order(pair,"sell",sell_amt, grid_idx=buy_idx, paper=paper):
+                                        # Book off the realized fill - what the venue
+                                        # actually paid, fees included - never the mark.
+                                        sell_price, sold_amt = _booked_fill("SELL", price, sell_amt)
+                                        pnl=(sell_price-buy_price)*sold_amt
                                         state["pnl"]+=pnl
                                         state["daily_pnl"] = state.get("daily_pnl",0)+pnl
                                         if cfg.get("auto_compound", True) and pnl > 0:
                                             state["compound_profit"] += pnl
+                                        if sell_price <= buy_price:
+                                            log("["+pair+"] realized sell $"+str(round(sell_price,4))+" is at/below realized entry $"+str(round(buy_price,4))+" for level "+str(buy_idx)+" - booked a LOSS of $"+str(round(pnl,4)), "WARN")
                                         tag = "GRID-PARTIAL" if is_partial_sell else "GRID-SELL"
-                                        record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)
-                                        log("["+pair+"] SELL "+str(round(sell_amt,6))+" @ $"+str(round(price,2))+" (bought $"+str(round(buy_price,2))+" PnL $"+str(round(pnl,2))+")")
-                                        log("["+pair+"] TRADE SUMMARY: "+str(round(sell_amt,6))+" bought @ $"+str(round(buy_price,2))+" sold @ $"+str(round(price,2))+" | PnL $"+str(round(pnl,2)))
+                                        record_trade(tag,sell_price,sold_amt,round(pnl,2), pair=pair)
+                                        log("["+pair+"] SELL "+str(round(sold_amt,6))+" @ $"+str(round(sell_price,2))+" (bought $"+str(round(buy_price,2))+" PnL $"+str(round(pnl,2))+")")
+                                        log("["+pair+"] TRADE SUMMARY: "+str(round(sold_amt,6))+" bought @ $"+str(round(buy_price,2))+" sold @ $"+str(round(sell_price,2))+" | PnL $"+str(round(pnl,2)))
                                         send_telegram("🔴 <b>SELL</b> "+state["pair"]+"\nBought: $"+str(round(buy_price,2))+"\nSold: $"+str(round(price,2))+"\nPnL: $"+str(round(pnl,2))+"\nTag: "+tag+"\nMode: "+("LIVE" if not state["paper_trading"] else "PAPER"))
                                         if is_partial_sell and partial_key in state.get("partial_positions",{}):
                                             # Don't delete the position yet — still holding remainder
@@ -3031,9 +3217,10 @@ def run_grid(sid=None):
 
                             gap_amt = round(size / price, 6)
                             if place_order(pair, "buy", gap_amt, grid_idx=gap_i, paper=paper):
-                                filled[gap_i] = {"price": price, "amount": gap_amt}
-                                state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
-                                record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
+                                fill_price, gap_amt = _booked_fill("BUY", price, gap_amt)
+                                filled[gap_i] = {"price": fill_price, "amount": gap_amt}
+                                state["positions"].append({"price": fill_price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
+                                record_trade("GRID-BUY-GAP", fill_price, gap_amt, pair=pair)
                                 log(f"[{pair}] GAP-FILL-RECOVERY BUY level {gap_i} @ ${price:.2f}", "WARN")
 
                         # Reset drop-through state
@@ -3062,9 +3249,10 @@ def run_grid(sid=None):
 
                             gap_amt = round(size / price, 6)
                             if place_order(pair, "buy", gap_amt, grid_idx=gap_i, paper=paper):
-                                filled[gap_i] = {"price": price, "amount": gap_amt}
-                                state["positions"].append({"price": price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
-                                record_trade("GRID-BUY-GAP", price, gap_amt, pair=pair)
+                                fill_price, gap_amt = _booked_fill("BUY", price, gap_amt)
+                                filled[gap_i] = {"price": fill_price, "amount": gap_amt}
+                                state["positions"].append({"price": fill_price, "amount": gap_amt, "grid": gap_i, "strategy": "Grid"})
+                                record_trade("GRID-BUY-GAP", fill_price, gap_amt, pair=pair)
                                 log(f"[{pair}] 'UPWARD' GAP-FILL BUY level {gap_i} @ ${price:.2f}", "WARN")
 
                 # Save state variables in gs dict
