@@ -88,13 +88,16 @@ def test_legacy_generic_record_kept_for_unknown_side():
 # ── 5. Grid path byte-unchanged (owner: stay away from grid) ─────────────────
 
 def test_grid_pnl_convention_untouched():
-    # GRID-SELL PnL convention still present verbatim.
-    assert 'pnl=(price-buy_price)*sell_amt' in SOURCE
+    # GRID-SELL PnL is booked from the REALIZED fill (fees included), one site.
+    # Owner order 2026-11-27: the ledger and the no-loss guard price off what
+    # the swap actually executed, never the observed mark.
+    assert 'sell_price, sold_amt = _booked_fill("SELL", price, sell_amt)' in SOURCE
+    assert 'pnl=(sell_price-buy_price)*sold_amt' in SOURCE
     assert 'state["pnl"]+=pnl' in SOURCE
     assert 'state["daily_pnl"] = state.get("daily_pnl",0)+pnl' in SOURCE
-    assert 'record_trade(tag,price,sell_amt,round(pnl,2), pair=pair)' in SOURCE
-    # Exactly one set of grid PnL mutations exists (untouched, not duplicated).
-    assert SOURCE.count('pnl=(price-buy_price)*sell_amt') == 1
+    assert 'record_trade(tag,sell_price,sold_amt,round(pnl,2), pair=pair)' in SOURCE
+    # Exactly one set of grid PnL mutations exists (not duplicated).
+    assert SOURCE.count('pnl=(sell_price-buy_price)*sold_amt') == 1
 
 
 # ── 6. PR #100 multi-pair replay path untouched ───────────────────────────────

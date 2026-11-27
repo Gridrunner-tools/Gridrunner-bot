@@ -208,10 +208,11 @@ def test_autonomous_recenter_and_reengage_on_empty_positions():
     run_grid()
 
     # Verify that:
-    # 1. The grid re-centered around $101.0
-    # For levels=5, len(grids)=6, price is the average of index 2 and 3
-    center_price = (gs["grids"][2] + gs["grids"][3]) / 2
-    assert abs(center_price - 101.0) < 0.1, f"Grid should have re-centered around 101.0 but got {center_price} from {gs['grids']}"
+    # 1. The grid re-centered around $101.0: the mid level is the LAST buy level,
+    #    so the mark sits in the first cell [grids[mid_idx], grids[mid_idx+1]).
+    mid_idx = gs["mid_idx"]
+    assert gs["grids"][mid_idx] <= 101.0 < gs["grids"][mid_idx + 1], \
+        f"Grid should bracket the mark 101.0 but got {gs['grids']}"
     # 2. gs["seeded"] was reset and base buy on start was executed again
     assert gs["seeded"] is True, "Seeded flag should be set to True again"
     assert len(placed_orders) >= 1, "Should have placed at least one order (the seed buy)"
@@ -272,10 +273,10 @@ def test_profitable_pullback_into_buy_zone_still_exits():
     # Setup trailing sell active at a high price
     # We bought at $102, price rose to $105 (trailing_high = 105)
     # Then price pulled back to $103.5.
-    # $103.5 is in cell 3 (the buy zone, since <= mid_idx=3).
+    # For levels=5 the mid level is 2, so $103.5 is in cell 2 (the buy zone).
     # But it is above buy price of $102.0.
     # It satisfies trailing pullback (103.5 <= 105 * 0.995 = 104.475).
-    # With our fix, this pullback into the buy zone (cell 3) targets cell 4 (mid_idx+1)
+    # With our fix, this pullback into the buy zone targets cell 3 (mid_idx+1)
     # and successfully sells the level 4 position.
     gs["filled"] = {4: {"price": 102.0, "amount": 0.1}}
     gs["trailing_sell_active"] = True
@@ -297,7 +298,8 @@ def test_profitable_pullback_into_buy_zone_still_exits():
     # The position at index 4 should have been sold!
     assert 4 not in gs["filled"], "Position must be sold because pullback price is profitable"
     assert len(placed_orders) >= 1, "Should have placed at least one order"
-    assert placed_orders[-1] == ("sell", 0.1, None), f"Should have executed sell order for level 4, got {placed_orders}"
+    # The sell now carries its level index (duplicate guard keys on the level).
+    assert placed_orders[-1] == ("sell", 0.1, 4), f"Should have executed sell order for level 4, got {placed_orders}"
 
     # Restore originals
     main.place_order = orig_place_order
